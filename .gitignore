@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv/
+
+# Database
+*.db
+handai_data.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/
+
+# Flet
+.flet/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+*.egg-info/
+
+# Settings with secrets
+.handai_settings.json
+
+# Logs
+*.log
