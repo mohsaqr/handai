@@ -139,8 +139,8 @@ handai/
 Professor of Computer Science
 University of Eastern Finland
 
-- Website: [www.saqr.me](https://www.saqr.me)
-- Contact: Available via website
+🌐 Website: [www.saqr.me](https://www.saqr.me)
+📧 Contact: Available via website
 
 ## License
 
