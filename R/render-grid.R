@@ -1,0 +1,375 @@
+#' @title Grid Rendering
+#' @description Main grid-based rendering functions.
+#' @name render-grid
+NULL
+
+#' Plot Sonnet Network
+#'
+#' Main plotting function for Sonnet networks. Renders the network visualization
+#' using grid graphics. Accepts all node and edge aesthetic parameters.
+#'
+#' @param network A sonnet_network object, matrix, data.frame, or igraph object.
+#'   Matrices and other inputs are auto-converted.
+#' @param title Optional plot title.
+#' @param title_size Title font size.
+#' @param margins Plot margins as c(bottom, left, top, right).
+#' @param newpage Logical. Start a new graphics page? Default TRUE.
+#' @param layout Layout algorithm. Built-in: "circle", "spring", "groups", "grid",
+#'   "random", "star", "bipartite". igraph (2-letter): "kk" (Kamada-Kawai),
+#'   "fr" (Fruchterman-Reingold), "drl", "mds", "ni" (nicely), "tr" (tree), etc.
+#'   Can also pass a coordinate matrix or igraph layout function directly.
+#' @param theme Theme name: "classic", "dark", "minimal", etc.
+#' @param seed Random seed for deterministic layouts. Default 42. Set NULL for random.
+#' @param labels Node labels. Can be a character vector to set custom labels.
+#' @param threshold Minimum absolute edge weight to display. Edges with
+#'   abs(weight) < threshold are hidden. Similar to qgraph's threshold.
+#' @param maximum Maximum edge weight for width scaling. Weights above this
+#'   are capped. Similar to qgraph's maximum parameter.
+#'
+#' @param node_size Node size.
+#' @param node_shape Node shape: "circle", "square", "triangle", "diamond",
+#'   "ellipse", "heart", "star", "pie", "donut", "cross".
+#' @param node_fill Node fill color.
+#' @param node_border_color Node border color.
+#' @param node_border_width Node border width.
+#' @param node_alpha Node transparency (0-1).
+#' @param label_size Node label text size.
+#' @param label_color Node label text color.
+#' @param label_position Label position: "center", "above", "below", "left", "right".
+#' @param show_labels Logical. Show node labels?
+#' @param pie_values For pie/donut/donut_pie nodes: list or matrix of values for segments.
+#'   For donut with single value (0-1), shows that proportion filled.
+#' @param pie_colors For pie/donut/donut_pie nodes: colors for pie segments.
+#' @param pie_border_width Border width for pie chart segments.
+#' @param donut_values For donut_pie nodes: vector of values (0-1) for outer ring proportion.
+#' @param donut_border_width Border width for donut ring.
+#' @param donut_inner_ratio For donut nodes: inner radius ratio (0-1). Default 0.5.
+#' @param donut_bg_color For donut nodes: background color for unfilled portion.
+#' @param donut_show_value For donut nodes: show value in center? Default TRUE.
+#' @param donut_value_size For donut nodes: font size for center value.
+#' @param donut_value_color For donut nodes: color for center value text.
+#'
+#' @param edge_width Edge width.
+#' @param edge_width_scale Scale factor for edge widths. Values > 1 make edges thicker.
+#' @param edge_color Edge color.
+#' @param edge_alpha Edge transparency (0-1).
+#' @param edge_style Line style: "solid", "dashed", "dotted".
+#' @param curvature Edge curvature amount.
+#' @param arrow_size Size of arrow heads.
+#' @param show_arrows Logical. Show arrows?
+#' @param positive_color Color for positive edge weights.
+#' @param negative_color Color for negative edge weights.
+#' @param edge_labels Edge labels. Can be TRUE to show weights, or a vector.
+#' @param edge_label_size Edge label text size.
+#' @param edge_label_color Edge label text color.
+#' @param edge_label_position Position along edge (0 = source, 0.5 = middle, 1 = target).
+#' @param edge_label_offset Perpendicular offset from edge line.
+#'
+#' @return Invisible NULL. Called for side effect of drawing.
+#' @export
+#'
+#' @examples
+#' adj <- matrix(c(0, 1, 1, 1, 0, 1, 1, 1, 0), nrow = 3)
+#' # With sonnet()
+#' sonnet(adj) |> soplot()
+#'
+#' # Direct matrix input with all options
+#' adj |> soplot(
+#'   layout = "circle",
+#'   node_fill = "steelblue",
+#'   node_size = 0.08,
+#'   edge_width = 2
+#' )
+soplot <- function(network, title = NULL, title_size = 14,
+                      margins = c(0.05, 0.05, 0.1, 0.05),
+                      newpage = TRUE,
+                      # Layout and theme
+                      layout = NULL,
+                      theme = NULL,
+                      seed = 42,
+                      # Node labels
+                      labels = NULL,
+                      # Edge filtering/scaling
+                      threshold = NULL,
+                      maximum = NULL,
+                      # Node aesthetics
+                      node_size = NULL,
+                      node_shape = NULL,
+                      node_fill = NULL,
+                      node_border_color = NULL,
+                      node_border_width = NULL,
+                      node_alpha = NULL,
+                      # Node labels
+                      label_size = NULL,
+                      label_color = NULL,
+                      label_position = NULL,
+                      show_labels = NULL,
+                      # Pie/donut chart nodes
+                      pie_values = NULL,
+                      pie_colors = NULL,
+                      pie_border_width = NULL,
+                      donut_values = NULL,
+                      donut_border_width = NULL,
+                      donut_inner_ratio = NULL,
+                      donut_bg_color = NULL,
+                      donut_show_value = NULL,
+                      donut_value_size = NULL,
+                      donut_value_color = NULL,
+                      # Edge aesthetics
+                      edge_width = NULL,
+                      edge_width_scale = NULL,
+                      edge_color = NULL,
+                      edge_alpha = NULL,
+                      edge_style = NULL,
+                      curvature = NULL,
+                      arrow_size = NULL,
+                      show_arrows = NULL,
+                      positive_color = NULL,
+                      negative_color = NULL,
+                      # Edge labels
+                      edge_labels = NULL,
+                      edge_label_size = NULL,
+                      edge_label_color = NULL,
+                      edge_label_position = NULL,
+                      edge_label_offset = NULL) {
+
+
+  # Set seed for deterministic layouts
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
+  # Two-letter igraph layout codes
+  igraph_codes <- c("kk", "fr", "drl", "mds", "go", "tr", "st", "gr", "rd", "ni", "ci", "lgl", "sp")
+
+  # Determine effective layout
+  effective_layout <- layout %||% "spring"
+
+  # Auto-convert matrix/data.frame/igraph to sonnet_network
+  network <- ensure_sonnet_network(network, layout = effective_layout, seed = seed)
+
+  # Apply custom node labels if provided
+  if (!is.null(labels)) {
+    net <- network$network
+    nodes_df <- net$get_nodes()
+    if (length(labels) != nrow(nodes_df)) {
+      stop("labels length (", length(labels), ") must match number of nodes (",
+           nrow(nodes_df), ")", call. = FALSE)
+    }
+    nodes_df$label <- labels
+    net$set_nodes(nodes_df)
+  }
+
+  # Apply threshold - filter out weak edges
+ if (!is.null(threshold)) {
+    net <- network$network
+    edges_df <- net$get_edges()
+    if (!is.null(edges_df) && nrow(edges_df) > 0 && !is.null(edges_df$weight)) {
+      keep <- abs(edges_df$weight) >= threshold
+      edges_df <- edges_df[keep, , drop = FALSE]
+      net$set_edges(edges_df)
+    }
+  }
+
+  # Apply layout if specified
+ if (!is.null(layout)) {
+    network <- sn_layout(network, layout)
+  }
+
+  # Apply theme if specified
+  if (!is.null(theme)) {
+    network <- sn_theme(network, theme)
+  }
+
+  # Apply node aesthetics if any specified
+  node_aes <- list(
+    size = node_size,
+    shape = node_shape,
+    fill = node_fill,
+    border_color = node_border_color,
+    border_width = node_border_width,
+    alpha = node_alpha,
+    label_size = label_size,
+    label_color = label_color,
+    label_position = label_position,
+    show_labels = show_labels,
+    pie_values = pie_values,
+    pie_colors = pie_colors,
+    pie_border_width = pie_border_width,
+    donut_values = donut_values,
+    donut_border_width = donut_border_width,
+    donut_inner_ratio = donut_inner_ratio,
+    donut_bg_color = donut_bg_color,
+    donut_show_value = donut_show_value,
+    donut_value_size = donut_value_size,
+    donut_value_color = donut_value_color
+  )
+  node_aes <- node_aes[!sapply(node_aes, is.null)]
+  if (length(node_aes) > 0) {
+    network <- do.call(sn_nodes, c(list(network = network), node_aes))
+  }
+
+  # Apply edge aesthetics if any specified
+  edge_aes <- list(
+    width = edge_width,
+    width_scale = edge_width_scale,
+    color = edge_color,
+    alpha = edge_alpha,
+    style = edge_style,
+    curvature = curvature,
+    arrow_size = arrow_size,
+    show_arrows = show_arrows,
+    positive_color = positive_color,
+    negative_color = negative_color,
+    maximum = maximum,
+    labels = edge_labels,
+    label_size = edge_label_size,
+    label_color = edge_label_color,
+    label_position = edge_label_position,
+    label_offset = edge_label_offset
+  )
+  edge_aes <- edge_aes[!sapply(edge_aes, is.null)]
+  if (length(edge_aes) > 0) {
+    network <- do.call(sn_edges, c(list(network = network), edge_aes))
+  }
+
+  net <- network$network
+  th <- net$get_theme()
+
+  if (newpage) {
+    grid::grid.newpage()
+  }
+
+  # Draw background
+  bg_color <- if (!is.null(th)) th$get("background") else "white"
+  grid::grid.rect(gp = grid::gpar(fill = bg_color, col = NA))
+
+  # Create viewport with margins
+  vp <- grid::viewport(
+    x = grid::unit(0.5, "npc"),
+    y = grid::unit(0.5, "npc"),
+    width = grid::unit(1 - margins[2] - margins[4], "npc"),
+    height = grid::unit(1 - margins[1] - margins[3], "npc")
+  )
+  grid::pushViewport(vp)
+
+  # Render edges first (behind nodes)
+  edge_grobs <- render_edges_grid(net)
+  grid::grid.draw(edge_grobs)
+
+  # Render edge labels
+  edge_label_grobs <- render_edge_labels_grid(net)
+  grid::grid.draw(edge_label_grobs)
+
+  # Render nodes
+  node_grobs <- render_nodes_grid(net)
+  grid::grid.draw(node_grobs)
+
+  # Render node labels
+  label_grobs <- render_node_labels_grid(net)
+  grid::grid.draw(label_grobs)
+
+  grid::popViewport()
+
+  # Draw title if provided
+  if (!is.null(title)) {
+    title_col <- if (!is.null(th)) th$get("title_color") else "black"
+    grid::grid.text(
+      title,
+      x = grid::unit(0.5, "npc"),
+      y = grid::unit(1 - margins[3]/2, "npc"),
+      gp = grid::gpar(fontsize = title_size, col = title_col, fontface = "bold")
+    )
+  }
+
+  # Store all plot parameters in the network object
+  plot_params <- list(
+    title = title, title_size = title_size, margins = margins,
+    layout = effective_layout, theme = theme, seed = seed,
+    labels = labels, threshold = threshold, maximum = maximum,
+    node_size = node_size, node_shape = node_shape, node_fill = node_fill,
+    node_border_color = node_border_color, node_border_width = node_border_width,
+    node_alpha = node_alpha, label_size = label_size, label_color = label_color,
+    label_position = label_position, show_labels = show_labels,
+    pie_values = pie_values, pie_colors = pie_colors, pie_border_width = pie_border_width,
+    donut_values = donut_values, donut_border_width = donut_border_width,
+    donut_inner_ratio = donut_inner_ratio, donut_bg_color = donut_bg_color,
+    donut_show_value = donut_show_value, donut_value_size = donut_value_size,
+    donut_value_color = donut_value_color, edge_width = edge_width,
+    edge_width_scale = edge_width_scale, edge_color = edge_color,
+    edge_alpha = edge_alpha, edge_style = edge_style,
+    curvature = curvature, arrow_size = arrow_size, show_arrows = show_arrows,
+    positive_color = positive_color, negative_color = negative_color,
+    edge_labels = edge_labels, edge_label_size = edge_label_size,
+    edge_label_color = edge_label_color, edge_label_position = edge_label_position,
+    edge_label_offset = edge_label_offset
+  )
+  # Remove NULL values
+  plot_params <- plot_params[!sapply(plot_params, is.null)]
+  net$set_plot_params(plot_params)
+
+  # Store layout coordinates
+  net$set_layout_info(list(
+    name = effective_layout,
+    seed = seed,
+    coords = net$get_layout()
+  ))
+
+  # Re-create wrapper with updated data
+  invisible(as_sonnet_network(net))
+}
+
+#' Create Grid Grob Tree
+#'
+#' Create a complete grid grob tree for the network (without drawing).
+#'
+#' @param network A sonnet_network object.
+#' @param title Optional plot title.
+#' @return A grid gTree object.
+#' @keywords internal
+create_grid_grob <- function(network, title = NULL) {
+  if (!inherits(network, "sonnet_network")) {
+    stop("network must be a sonnet_network object", call. = FALSE)
+  }
+
+  net <- network$network
+  theme <- net$get_theme()
+
+  # Background
+  bg_color <- if (!is.null(theme)) theme$get("background") else "white"
+  bg_grob <- grid::rectGrob(gp = grid::gpar(fill = bg_color, col = NA))
+
+  # Edge grobs
+  edge_grobs <- render_edges_grid(net)
+
+  # Node grobs
+  node_grobs <- render_nodes_grid(net)
+
+  # Label grobs
+  label_grobs <- render_node_labels_grid(net)
+
+  # Edge label grobs
+  edge_label_grobs <- render_edge_labels_grid(net)
+
+  # Combine all
+  children <- grid::gList(bg_grob, edge_grobs, edge_label_grobs,
+                          node_grobs, label_grobs)
+
+  # Add title if provided
+  if (!is.null(title)) {
+    title_col <- if (!is.null(theme)) theme$get("title_color") else "black"
+    title_grob <- grid::textGrob(
+      title,
+      x = grid::unit(0.5, "npc"),
+      y = grid::unit(0.95, "npc"),
+      gp = grid::gpar(fontsize = 14, col = title_col, fontface = "bold")
+    )
+    children <- grid::gList(children, title_grob)
+  }
+
+  grid::gTree(children = children, name = "sonnet_plot")
+}
+
+#' @rdname soplot
+#' @export
+sn_render <- soplot

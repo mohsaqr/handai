@@ -1,0 +1,18 @@
+# Test outputs
+*.png
+*.pdf
+*.rds
+Rplots.pdf
+
+# R/RStudio
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Mac
+.DS_Store
+
+# Build artifacts
+*.tar.gz
