@@ -23,13 +23,18 @@ splot(
   label_position = "center",
   pie_values = NULL,
   pie_colors = NULL,
+  pie_border_width = NULL,
   donut_values = NULL,
   donut_colors = NULL,
+  donut_border_width = NULL,
   donut_inner_ratio = 0.5,
   donut_bg_color = "gray90",
   donut_show_value = TRUE,
   donut_value_size = 0.8,
   donut_value_color = "black",
+  donut2_values = NULL,
+  donut2_colors = NULL,
+  donut2_inner_ratio = 0.4,
   edge_color = NULL,
   edge_width = NULL,
   edge_alpha = 0.8,
@@ -140,10 +145,14 @@ corresponds to a node and contains values for pie segments.}
 
 \item{pie_colors}{List of color vectors for pie segments.}
 
+\item{pie_border_width}{Border width for pie slice dividers. NULL uses node_border_width.}
+
 \item{donut_values}{List of values for donut chart nodes. Single value (0-1)
 for progress donut, or vector for segmented donut.}
 
 \item{donut_colors}{List of color vectors for donut segments.}
+
+\item{donut_border_width}{Border width for donut rings. NULL uses node_border_width.}
 
 \item{donut_inner_ratio}{Inner radius ratio for donut (0-1). Default 0.5.}
 
@@ -154,6 +163,12 @@ for progress donut, or vector for segmented donut.}
 \item{donut_value_size}{Font size for donut center value.}
 
 \item{donut_value_color}{Color for donut center value.}
+
+\item{donut2_values}{List of values for inner donut ring (for double donut).}
+
+\item{donut2_colors}{List of color vectors for inner donut ring segments.}
+
+\item{donut2_inner_ratio}{Inner radius ratio for inner donut ring. Default 0.4.}
 
 \item{edge_color}{Edge color(s). If NULL, uses positive_color/negative_color based on weight.}
 

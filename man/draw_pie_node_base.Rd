@@ -10,8 +10,10 @@ draw_pie_node_base(
   size,
   values,
   colors = NULL,
+  default_color = NULL,
   border.col = "black",
-  border.width = 1
+  border.width = 1,
+  pie_border.width = NULL
 )
 }
 \arguments{
@@ -23,9 +25,13 @@ draw_pie_node_base(
 
 \item{colors}{Vector of colors for each segment.}
 
+\item{default_color}{Fallback color when colors is NULL and values length is 1.}
+
 \item{border.col}{Border color.}
 
 \item{border.width}{Border line width.}
+
+\item{pie_border.width}{Border width for pie slice dividers (NULL = use border.width).}
 }
 \description{
 Renders a node as a pie chart with multiple colored segments.

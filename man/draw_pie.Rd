@@ -15,11 +15,14 @@ draw_pie(
   values = NULL,
   colors = NULL,
   pie_border_width = NULL,
+  default_color = NULL,
   ...
 )
 }
 \arguments{
 \item{pie_border_width}{Border width for pie segments (optional, defaults to border_width * 0.5).}
+
+\item{default_color}{Fallback color when colors is NULL and there's a single segment.}
 }
 \description{
 Draw a pie chart node with multiple segments.

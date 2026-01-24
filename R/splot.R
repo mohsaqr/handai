@@ -41,14 +41,19 @@ NULL
 #' @param pie_values List of numeric vectors for pie chart nodes. Each element
 #'   corresponds to a node and contains values for pie segments.
 #' @param pie_colors List of color vectors for pie segments.
+#' @param pie_border_width Border width for pie slice dividers. NULL uses node_border_width.
 #' @param donut_values List of values for donut chart nodes. Single value (0-1)
 #'   for progress donut, or vector for segmented donut.
 #' @param donut_colors List of color vectors for donut segments.
+#' @param donut_border_width Border width for donut rings. NULL uses node_border_width.
 #' @param donut_inner_ratio Inner radius ratio for donut (0-1). Default 0.5.
 #' @param donut_bg_color Background color for unfilled donut portion.
 #' @param donut_show_value Logical: show value in donut center? Default TRUE.
 #' @param donut_value_size Font size for donut center value.
 #' @param donut_value_color Color for donut center value.
+#' @param donut2_values List of values for inner donut ring (for double donut).
+#' @param donut2_colors List of color vectors for inner donut ring segments.
+#' @param donut2_inner_ratio Inner radius ratio for inner donut ring. Default 0.4.
 #'
 #' @section Edge Aesthetics:
 #' @param edge_color Edge color(s). If NULL, uses positive_color/negative_color based on weight.
@@ -179,13 +184,18 @@ splot <- function(
     # Pie/Donut
     pie_values = NULL,
     pie_colors = NULL,
+    pie_border_width = NULL,
     donut_values = NULL,
     donut_colors = NULL,
+    donut_border_width = NULL,
     donut_inner_ratio = 0.5,
     donut_bg_color = "gray90",
     donut_show_value = TRUE,
     donut_value_size = 0.8,
     donut_value_color = "black",
+    donut2_values = NULL,
+    donut2_colors = NULL,
+    donut2_inner_ratio = 0.4,
 
     # Edge aesthetics
     edge_color = NULL,
@@ -608,13 +618,18 @@ splot <- function(
     node_border_width = border_widths,
     pie_values = pie_values,
     pie_colors = pie_colors,
+    pie_border_width = pie_border_width,
     donut_values = donut_values,
     donut_colors = donut_colors,
+    donut_border_width = donut_border_width,
     donut_inner_ratio = donut_inner_ratio,
     donut_bg_color = donut_bg_color,
     donut_show_value = donut_show_value,
     donut_value_size = donut_value_size,
     donut_value_color = donut_value_color,
+    donut2_values = donut2_values,
+    donut2_colors = donut2_colors,
+    donut2_inner_ratio = donut2_inner_ratio,
     labels = node_labels,
     label_size = label_cex,
     label_color = label_colors,
@@ -849,8 +864,10 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
 #' @keywords internal
 render_nodes_splot <- function(layout, node_size, node_size2, node_shape, node_fill,
                                node_border_color, node_border_width, pie_values, pie_colors,
-                               donut_values, donut_colors, donut_inner_ratio, donut_bg_color,
+                               pie_border_width, donut_values, donut_colors, donut_border_width,
+                               donut_inner_ratio, donut_bg_color,
                                donut_show_value, donut_value_size, donut_value_color,
+                               donut2_values, donut2_colors, donut2_inner_ratio,
                                labels, label_size, label_color, label_position,
                                usePCH = FALSE) {
 
@@ -864,42 +881,78 @@ render_nodes_splot <- function(layout, node_size, node_size2, node_shape, node_f
     x <- layout[i, 1]
     y <- layout[i, 2]
 
-    # Check for pie/donut
+    # Check for pie/donut/donut2
     has_pie <- !is.null(pie_values) && length(pie_values) >= i && !is.null(pie_values[[i]]) && length(pie_values[[i]]) > 0
     has_donut <- !is.null(donut_values) && length(donut_values) >= i && !is.null(donut_values[[i]])
+    has_donut2 <- !is.null(donut2_values) && length(donut2_values) >= i && !is.null(donut2_values[[i]])
 
-    if (has_donut && has_pie) {
-      # Donut with inner pie
-      donut_val <- if (length(donut_values[[i]]) == 1) donut_values[[i]] else 1
-      donut_col <- if (!is.null(donut_colors) && length(donut_colors) >= i) donut_colors[[i]][1] else node_fill[i]
-      pie_vals <- pie_values[[i]]
-      pie_cols <- if (!is.null(pie_colors) && length(pie_colors) >= i) pie_colors[[i]] else NULL
+    if (has_donut2 || (has_donut && has_pie)) {
+      # Double donut with optional inner pie
+      # Or single donut with pie - both use the layered drawing approach
+      if (has_donut2) {
+        # Double donut case
+        donut_vals <- if (has_donut) donut_values[[i]] else NULL
+        donut_cols <- if (!is.null(donut_colors) && length(donut_colors) >= i) donut_colors[[i]] else NULL
+        donut2_vals <- donut2_values[[i]]
+        donut2_cols <- if (!is.null(donut2_colors) && length(donut2_colors) >= i) donut2_colors[[i]] else NULL
+        pie_vals <- if (has_pie) pie_values[[i]] else NULL
+        pie_cols <- if (!is.null(pie_colors) && length(pie_colors) >= i) pie_colors[[i]] else NULL
 
-      draw_donut_pie_node_base(
-        x, y, node_size[i],
-        donut_value = donut_val,
-        donut_color = donut_col,
-        pie_values = pie_vals,
-        pie_colors = pie_cols,
-        inner_ratio = donut_inner_ratio,
-        bg_color = donut_bg_color,
-        border.col = node_border_color[i],
-        border.width = node_border_width[i]
-      )
+        draw_double_donut_pie_node_base(
+          x, y, node_size[i],
+          donut_values = donut_vals,
+          donut_colors = donut_cols,
+          donut2_values = donut2_vals,
+          donut2_colors = donut2_cols,
+          pie_values = pie_vals,
+          pie_colors = pie_cols,
+          pie_default_color = node_fill[i],
+          outer_inner_ratio = donut_inner_ratio,
+          inner_inner_ratio = donut2_inner_ratio,
+          bg_color = donut_bg_color,
+          border.col = node_border_color[i],
+          border.width = node_border_width[i],
+          pie_border.width = pie_border_width,
+          donut_border.width = donut_border_width
+        )
+      } else {
+        # Single donut with pie
+        donut_val <- if (length(donut_values[[i]]) == 1) donut_values[[i]] else 1
+        donut_col <- if (!is.null(donut_colors) && length(donut_colors) >= i) donut_colors[[i]][1] else node_fill[i]
+        pie_vals <- pie_values[[i]]
+        pie_cols <- if (!is.null(pie_colors) && length(pie_colors) >= i) pie_colors[[i]] else NULL
+
+        draw_donut_pie_node_base(
+          x, y, node_size[i],
+          donut_value = donut_val,
+          donut_color = donut_col,
+          pie_values = pie_vals,
+          pie_colors = pie_cols,
+          pie_default_color = node_fill[i],
+          inner_ratio = donut_inner_ratio,
+          bg_color = donut_bg_color,
+          border.col = node_border_color[i],
+          border.width = node_border_width[i],
+          pie_border.width = pie_border_width,
+          donut_border.width = donut_border_width
+        )
+      }
 
     } else if (has_donut) {
       # Donut only
       donut_vals <- donut_values[[i]]
-      donut_cols <- if (!is.null(donut_colors) && length(donut_colors) >= i) donut_colors[[i]] else node_fill[i]
+      donut_cols <- if (!is.null(donut_colors) && length(donut_colors) >= i) donut_colors[[i]] else NULL
 
       draw_donut_node_base(
         x, y, node_size[i],
         values = donut_vals,
         colors = donut_cols,
+        default_color = node_fill[i],
         inner_ratio = donut_inner_ratio,
         bg_color = donut_bg_color,
         border.col = node_border_color[i],
         border.width = node_border_width[i],
+        donut_border.width = donut_border_width,
         show_value = donut_show_value,
         value_cex = donut_value_size,
         value_col = donut_value_color
@@ -914,8 +967,10 @@ render_nodes_splot <- function(layout, node_size, node_size2, node_shape, node_f
         x, y, node_size[i],
         values = pie_vals,
         colors = pie_cols,
+        default_color = node_fill[i],
         border.col = node_border_color[i],
-        border.width = node_border_width[i]
+        border.width = node_border_width[i],
+        pie_border.width = pie_border_width
       )
 
     } else {

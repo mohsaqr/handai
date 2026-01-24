@@ -12,10 +12,13 @@ draw_donut_pie_node_base(
   donut_color = "#4A90D9",
   pie_values = NULL,
   pie_colors = NULL,
+  pie_default_color = NULL,
   inner_ratio = 0.5,
   bg_color = "gray90",
   border.col = "black",
-  border.width = 1
+  border.width = 1,
+  pie_border.width = NULL,
+  donut_border.width = NULL
 )
 }
 \arguments{
@@ -31,6 +34,8 @@ draw_donut_pie_node_base(
 
 \item{pie_colors}{Vector of colors for pie segments.}
 
+\item{pie_default_color}{Default color for pie when pie_colors is NULL.}
+
 \item{inner_ratio}{Ratio of inner to outer radius.}
 
 \item{bg_color}{Background color.}
@@ -38,6 +43,10 @@ draw_donut_pie_node_base(
 \item{border.col}{Border color.}
 
 \item{border.width}{Border line width.}
+
+\item{pie_border.width}{Border width for pie slice dividers (NULL = use border.width * 0.5).}
+
+\item{donut_border.width}{Border width for donut ring (NULL = use border.width).}
 }
 \description{
 Renders a node with outer donut ring and inner pie chart.

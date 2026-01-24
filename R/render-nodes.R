@@ -126,6 +126,66 @@ render_nodes_grid <- function(network) {
         extra_args$donut_border_width <- aes$donut_border_width
       }
     }
+    # Double donut + pie shape parameters
+    if (shapes[i] == "double_donut_pie") {
+      # Outer donut values
+      if (!is.null(aes$donut_values)) {
+        if (is.list(aes$donut_values)) {
+          extra_args$donut_values <- aes$donut_values[[i]]
+        } else if (length(aes$donut_values) >= i) {
+          extra_args$donut_values <- aes$donut_values[i]
+        }
+      }
+      if (!is.null(aes$donut_colors)) {
+        if (is.list(aes$donut_colors)) {
+          extra_args$donut_colors <- aes$donut_colors[[i]]
+        } else {
+          extra_args$donut_colors <- aes$donut_colors
+        }
+      }
+      # Inner donut values
+      if (!is.null(aes$donut2_values)) {
+        if (is.list(aes$donut2_values)) {
+          extra_args$donut2_values <- aes$donut2_values[[i]]
+        } else if (length(aes$donut2_values) >= i) {
+          extra_args$donut2_values <- aes$donut2_values[i]
+        }
+      }
+      if (!is.null(aes$donut2_colors)) {
+        if (is.list(aes$donut2_colors)) {
+          extra_args$donut2_colors <- aes$donut2_colors[[i]]
+        } else {
+          extra_args$donut2_colors <- aes$donut2_colors
+        }
+      }
+      # Pie values (inner segments)
+      if (!is.null(aes$pie_values)) {
+        if (is.list(aes$pie_values)) {
+          extra_args$pie_values <- aes$pie_values[[i]]
+        } else if (is.matrix(aes$pie_values)) {
+          extra_args$pie_values <- aes$pie_values[i, ]
+        }
+      }
+      if (!is.null(aes$pie_colors)) {
+        extra_args$pie_colors <- aes$pie_colors
+      }
+      if (!is.null(aes$donut_inner_ratio)) {
+        extra_args$outer_inner_ratio <- aes$donut_inner_ratio
+      }
+      if (!is.null(aes$donut2_inner_ratio)) {
+        extra_args$inner_inner_ratio <- aes$donut2_inner_ratio
+      }
+      if (!is.null(aes$donut_bg_color)) {
+        extra_args$bg_color <- aes$donut_bg_color
+      }
+      # Border width parameters
+      if (!is.null(aes$pie_border_width)) {
+        extra_args$pie_border_width <- aes$pie_border_width
+      }
+      if (!is.null(aes$donut_border_width)) {
+        extra_args$donut_border_width <- aes$donut_border_width
+      }
+    }
 
     grobs[[i]] <- do.call(shape_fn, c(list(
       x = nodes$x[i],

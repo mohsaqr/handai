@@ -20,12 +20,16 @@ sn_nodes(
   pie_colors = NULL,
   pie_border_width = NULL,
   donut_values = NULL,
+  donut_colors = NULL,
   donut_border_width = NULL,
   donut_inner_ratio = NULL,
   donut_bg_color = NULL,
   donut_show_value = NULL,
   donut_value_size = NULL,
   donut_value_color = NULL,
+  donut2_values = NULL,
+  donut2_colors = NULL,
+  donut2_inner_ratio = NULL,
   node_names = NULL
 )
 }
@@ -63,6 +67,8 @@ For donut with single value (0-1), shows that proportion filled.}
 
 \item{donut_values}{For donut_pie shape: vector of values (0-1) for the outer ring proportion.}
 
+\item{donut_colors}{For donut shape: colors for donut segments.}
+
 \item{donut_border_width}{Border width for donut chart nodes.}
 
 \item{donut_inner_ratio}{For donut shape: inner radius ratio (0-1). Default 0.5.}
@@ -74,6 +80,12 @@ For donut with single value (0-1), shows that proportion filled.}
 \item{donut_value_size}{For donut shape: font size for center value.}
 
 \item{donut_value_color}{For donut shape: color for center value text.}
+
+\item{donut2_values}{For double donut: list of values for inner donut ring.}
+
+\item{donut2_colors}{For double donut: colors for inner donut ring segments.}
+
+\item{donut2_inner_ratio}{For double donut: inner radius ratio for inner donut ring. Default 0.4.}
 
 \item{node_names}{Alternative names for legend (separate from display labels).}
 }

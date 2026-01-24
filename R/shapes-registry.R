@@ -25,6 +25,7 @@ register_builtin_shapes <- function() {
   register_shape("pie", draw_pie)
   register_shape("donut", draw_donut)
   register_shape("donut_pie", draw_donut_pie)
+  register_shape("double_donut_pie", draw_double_donut_pie)
   register_shape("cross", draw_cross)
   register_shape("plus", draw_cross)  # Alias
 

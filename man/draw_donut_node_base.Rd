@@ -10,10 +10,12 @@ draw_donut_node_base(
   size,
   values,
   colors = NULL,
+  default_color = NULL,
   inner_ratio = 0.5,
   bg_color = "gray90",
   border.col = "black",
   border.width = 1,
+  donut_border.width = NULL,
   show_value = TRUE,
   value_cex = 0.8,
   value_col = "black"
@@ -28,6 +30,8 @@ draw_donut_node_base(
 
 \item{colors}{Vector of colors for segments.}
 
+\item{default_color}{Fallback color when colors is NULL and values length is 1.}
+
 \item{inner_ratio}{Ratio of inner to outer radius (0-1).}
 
 \item{bg_color}{Background color for unfilled portion.}
@@ -35,6 +39,8 @@ draw_donut_node_base(
 \item{border.col}{Border color.}
 
 \item{border.width}{Border line width.}
+
+\item{donut_border.width}{Border width for donut ring (NULL = use border.width).}
 
 \item{show_value}{Logical: show value in center?}
 

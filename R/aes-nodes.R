@@ -25,12 +25,16 @@ NULL
 #' @param pie_colors For pie/donut/donut_pie shape: colors for pie segments.
 #' @param pie_border_width Border width for pie chart nodes.
 #' @param donut_values For donut_pie shape: vector of values (0-1) for the outer ring proportion.
+#' @param donut_colors For donut shape: colors for donut segments.
 #' @param donut_border_width Border width for donut chart nodes.
 #' @param donut_inner_ratio For donut shape: inner radius ratio (0-1). Default 0.5.
 #' @param donut_bg_color For donut shape: background color for unfilled portion.
 #' @param donut_show_value For donut shape: show value in center? Default TRUE.
 #' @param donut_value_size For donut shape: font size for center value.
 #' @param donut_value_color For donut shape: color for center value text.
+#' @param donut2_values For double donut: list of values for inner donut ring.
+#' @param donut2_colors For double donut: colors for inner donut ring segments.
+#' @param donut2_inner_ratio For double donut: inner radius ratio for inner donut ring. Default 0.4.
 #' @param node_names Alternative names for legend (separate from display labels).
 #' @return Modified sonnet_network object.
 #' @export
@@ -58,12 +62,16 @@ sn_nodes <- function(network,
                      pie_colors = NULL,
                      pie_border_width = NULL,
                      donut_values = NULL,
+                     donut_colors = NULL,
                      donut_border_width = NULL,
                      donut_inner_ratio = NULL,
                      donut_bg_color = NULL,
                      donut_show_value = NULL,
                      donut_value_size = NULL,
                      donut_value_color = NULL,
+                     donut2_values = NULL,
+                     donut2_colors = NULL,
+                     donut2_inner_ratio = NULL,
                      node_names = NULL) {
 
   # Auto-convert matrix/data.frame/igraph to sonnet_network
@@ -141,6 +149,10 @@ sn_nodes <- function(network,
     aes$donut_values <- donut_values
   }
 
+  if (!is.null(donut_colors)) {
+    aes$donut_colors <- donut_colors
+  }
+
   if (!is.null(donut_border_width)) {
     aes$donut_border_width <- donut_border_width
   }
@@ -163,6 +175,18 @@ sn_nodes <- function(network,
 
   if (!is.null(donut_value_color)) {
     aes$donut_value_color <- donut_value_color
+  }
+
+  if (!is.null(donut2_values)) {
+    aes$donut2_values <- donut2_values
+  }
+
+  if (!is.null(donut2_colors)) {
+    aes$donut2_colors <- donut2_colors
+  }
+
+  if (!is.null(donut2_inner_ratio)) {
+    aes$donut2_inner_ratio <- donut2_inner_ratio
   }
 
   if (!is.null(node_names)) {
