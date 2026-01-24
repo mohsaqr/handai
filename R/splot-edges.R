@@ -286,25 +286,23 @@ draw_edge_label_base <- function(x, y, label, cex = 0.8, col = "gray30",
 #' Get Label Position on Edge
 #'
 #' Calculates the position for an edge label (matches qgraph-style curves).
+#' For curved edges, the label is offset perpendicular to the edge to avoid
+#' overlapping with the edge line.
 #'
 #' @param x1,y1 Start point.
 #' @param x2,y2 End point.
 #' @param position Position along edge (0-1).
 #' @param curve Curvature amount.
 #' @param curvePivot Curve pivot position.
+#' @param label_offset Additional perpendicular offset for the label (in user coords).
+#'   Positive values offset in the same direction as the curve bulge.
+#'   Default 0.03 provides good separation from the edge line.
 #' @return List with x, y coordinates.
 #' @keywords internal
 get_edge_label_position <- function(x1, y1, x2, y2, position = 0.5,
-                                    curve = 0, curvePivot = 0.5) {
-  if (abs(curve) < 1e-6) {
-    # Straight edge
-    return(list(
-      x = x1 + position * (x2 - x1),
-      y = y1 + position * (y2 - y1)
-    ))
-  }
-
-  # Curved edge - match qgraph-style curve calculation
+                                    curve = 0, curvePivot = 0.5,
+                                    label_offset = 0.03) {
+  # Edge vector and length
   dx <- x2 - x1
   dy <- y2 - y1
   len <- sqrt(dx^2 + dy^2)
@@ -313,10 +311,23 @@ get_edge_label_position <- function(x1, y1, x2, y2, position = 0.5,
     return(list(x = x1, y = y1))
   }
 
-  # Same perpendicular as draw_curved_edge_base (counterclockwise rotation)
+  # Perpendicular unit vector (counterclockwise rotation)
   px <- -dy / len
   py <- dx / len
 
+  if (abs(curve) < 1e-6) {
+    # Straight edge - position along line with perpendicular offset
+    base_x <- x1 + position * dx
+    base_y <- y1 + position * dy
+
+    # Offset perpendicular to edge (default: above the line)
+    return(list(
+      x = base_x + label_offset * px,
+      y = base_y + label_offset * py
+    ))
+  }
+
+  # Curved edge - match qgraph-style curve calculation
   # Same curve offset as draw_curved_edge_base
   curve_offset <- curve * len * 0.3
 
@@ -325,7 +336,7 @@ get_edge_label_position <- function(x1, y1, x2, y2, position = 0.5,
   bx <- x1 + t * dx
   by <- y1 + t * dy
 
-  # Parabolic offset
+  # Parabolic offset for curve position
   offset_factor <- 4 * t * (1 - t)
 
   if (curvePivot != 0.5) {
@@ -336,9 +347,18 @@ get_edge_label_position <- function(x1, y1, x2, y2, position = 0.5,
     }
   }
 
+  # Position on the curve
+  curve_x <- bx + curve_offset * offset_factor * px
+  curve_y <- by + curve_offset * offset_factor * py
+
+  # Add additional offset in the direction of the curve bulge
+  # This moves the label to the convex side of the curve
+  curve_direction <- sign(curve)
+  if (curve_direction == 0) curve_direction <- 1
+
   list(
-    x = bx + curve_offset * offset_factor * px,
-    y = by + curve_offset * offset_factor * py
+    x = curve_x + label_offset * curve_direction * px,
+    y = curve_y + label_offset * curve_direction * py
   )
 }
 

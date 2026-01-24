@@ -100,9 +100,14 @@ if (curve_i > 0) {
 
 **Solution**: Added `res` parameter to control DPI for raster outputs (PNG, JPEG, TIFF). Default is now 600 DPI for publication-quality output. The parameter is passed to `grDevices::png()`, `grDevices::jpeg()`, and `grDevices::tiff()` functions.
 
-### 3. MEDIUM PRIORITY: Edge Label Positioning
+### 3. ~~MEDIUM PRIORITY: Edge Label Positioning~~ DONE
 
-Edge labels on curved edges should follow the curve better. Currently they're positioned at the curve midpoint but may overlap with the edge line.
+**Problem**: Edge labels on curved edges were positioned directly on the curve, causing overlap with the edge line.
+
+**Solution**: Added perpendicular offset to `get_edge_label_position()` in `splot-edges.R`. Labels are now offset away from the edge line:
+- For curved edges: offset in the direction of the curve bulge (convex side)
+- For straight edges: offset perpendicular to the edge
+- Default offset of 0.03 user coordinates provides good separation
 
 ### 4. MEDIUM PRIORITY: Legend Support
 
