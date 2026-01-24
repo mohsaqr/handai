@@ -15,21 +15,26 @@ NULL
 #'   - An igraph object
 #'   - A sonnet_network object
 #' @param layout Layout algorithm: "circle", "spring", "groups", or a matrix
-#'   of x,y coordinates, or an igraph layout function.
+#'   of x,y coordinates, or an igraph layout function. Also supports igraph
+#'   two-letter codes: "kk", "fr", "drl", "mds", "ni", etc.
 #' @param directed Logical. Force directed interpretation. NULL for auto-detect.
+#' @param seed Random seed for deterministic layouts. Default 42.
+#' @param theme Theme name: "classic", "dark", "minimal", "colorblind", etc.
 #'
 #' @section Node Aesthetics:
-#' @param vsize Node size(s). Single value or vector.
+#' @param vsize Node size(s). Single value or vector. Default 3.
 #' @param vsize2 Secondary node size for ellipse/rectangle height.
 #' @param shape Node shape(s): "circle", "square", "triangle", "diamond",
 #'   "pentagon", "hexagon", "star", "heart", "ellipse", "cross".
 #' @param color Node fill color(s).
 #' @param border.color Node border color(s).
 #' @param border.width Node border width(s).
+#' @param alpha Node transparency (0-1). Default 1.
 #' @param labels Node labels: TRUE (use node names/indices), FALSE (none),
 #'   or character vector.
 #' @param label.cex Label character expansion factor.
 #' @param label.color Label text color.
+#' @param label.position Label position: "center", "above", "below", "left", "right".
 #'
 #' @section Pie/Donut Nodes:
 #' @param pie List of numeric vectors for pie chart nodes. Each element
@@ -38,45 +43,62 @@ NULL
 #' @param donut List of values for donut chart nodes. Single value (0-1)
 #'   for progress donut, or vector for segmented donut.
 #' @param donutColor List of color vectors for donut segments.
+#' @param donut.inner Inner radius ratio for donut (0-1). Default 0.5.
+#' @param donut.bg Background color for unfilled donut portion.
+#' @param donut.show.value Logical: show value in donut center? Default TRUE.
+#' @param donut.value.cex Font size for donut center value.
+#' @param donut.value.color Color for donut center value.
 #'
 #' @section Edge Aesthetics:
 #' @param edge.color Edge color(s). If NULL, uses posCol/negCol based on weight.
 #' @param edge.width Edge width(s). If NULL, scales by weight.
+#' @param edge.alpha Edge transparency (0-1). Default 0.8.
 #' @param edge.labels Edge labels: TRUE (show weights), FALSE (none),
 #'   or character vector.
 #' @param edge.label.cex Edge label size.
+#' @param edge.label.color Edge label text color.
 #' @param edge.label.bg Edge label background color.
 #' @param edge.label.position Position along edge (0-1).
+#' @param edge.label.font Font face: 1=plain, 2=bold, 3=italic.
 #' @param lty Line type(s): 1=solid, 2=dashed, 3=dotted, etc.
 #' @param curve Edge curvature. 0 for straight, positive/negative for curves.
 #' @param curveScale Logical: auto-curve reciprocal edges?
+#' @param curveShape Spline tension (-1 to 1). Default 0.
 #' @param curvePivot Position along edge for curve control point (0-1).
+#' @param curves Curve mode: FALSE, "mutual" (curve reciprocals), "force" (curve all).
 #' @param asize Arrow head size.
 #' @param arrows Logical or vector: show arrows on directed edges?
 #' @param bidirectional Logical or vector: show arrows at both ends?
 #' @param loopRotation Angle(s) in radians for self-loop direction.
 #'
 #' @section Weight Handling:
-#' @param minimum Minimum absolute weight to display.
+#' @param minimum Minimum absolute weight to display (threshold).
 #' @param maximum Maximum weight for scaling. NULL for auto.
 #' @param posCol Color for positive weights.
 #' @param negCol Color for negative weights.
 #'
 #' @section Plot Settings:
 #' @param title Plot title.
+#' @param title.cex Title font size.
 #' @param mar Margins as c(bottom, left, top, right).
 #' @param background Background color.
 #' @param rescale Logical: rescale layout to [-1, 1]?
 #' @param aspect Logical: maintain aspect ratio?
+#' @param usePCH Logical: use points() for simple circles (faster). Default FALSE.
+#'
+#' @section Legend:
 #' @param legend Logical: show legend?
-#' @param groups Group assignments for node coloring.
+#' @param legend.position Position: "topright", "topleft", "bottomright", "bottomleft".
+#' @param legend.cex Legend text size.
+#' @param groups Group assignments for node coloring/legend.
+#' @param nodeNames Alternative names for legend (separate from labels).
 #'
 #' @section Output:
-#' @param filetype Output format: "default" (screen), "png", "pdf", "svg".
+#' @param filetype Output format: "default" (screen), "png", "pdf", "svg", "jpeg", "tiff".
 #' @param filename Output filename (without extension).
 #' @param width Output width in inches.
 #' @param height Output height in inches.
-#' @param ... Additional arguments (currently unused).
+#' @param ... Additional arguments passed to layout functions.
 #'
 #' @return Invisibly returns the sonnet_network object.
 #'
@@ -107,72 +129,112 @@ NULL
 #' splot(adj, layout = "circle", labels = c("A", "B", "C", "D"))
 #'
 splot <- function(
-  x,
-  layout = "spring",
-  directed = NULL,
+    x,
+    layout = "spring",
+    directed = NULL,
+    seed = 42,
+    theme = NULL,
 
-  # Node aesthetics
-  vsize = NULL,
-  vsize2 = NULL,
-  shape = "circle",
-  color = NULL,
-  border.color = NULL,
-  border.width = 1,
-  labels = TRUE,
-  label.cex = NULL,
-  label.color = "black",
+    # Node aesthetics
+    vsize = NULL,
+    vsize2 = NULL,
+    shape = "circle",
+    color = NULL,
+    border.color = NULL,
+    border.width = 1,
+    alpha = 1,
+    labels = TRUE,
+    label.cex = NULL,
+    label.color = "black",
+    label.position = "center",
 
-  # Pie/Donut
-  pie = NULL,
-  pieColor = NULL,
-  donut = NULL,
-  donutColor = NULL,
+    # Pie/Donut
+    pie = NULL,
+    pieColor = NULL,
+    donut = NULL,
+    donutColor = NULL,
+    donut.inner = 0.5,
+    donut.bg = "gray90",
+    donut.show.value = TRUE,
+    donut.value.cex = 0.8,
+    donut.value.color = "black",
 
-  # Edge aesthetics
-  edge.color = NULL,
-  edge.width = NULL,
-  edge.labels = FALSE,
-  edge.label.cex = 0.8,
-  edge.label.bg = "white",
-  edge.label.position = 0.5,
-  lty = 1,
-  curve = 0,
-  curveScale = TRUE,
-  curvePivot = 0.5,
-  asize = 1,
-  arrows = TRUE,
-  bidirectional = FALSE,
-  loopRotation = NULL,
+    # Edge aesthetics
+    edge.color = NULL,
+    edge.width = NULL,
+    edge.alpha = 0.8,
+    edge.labels = FALSE,
+    edge.label.cex = 0.8,
+    edge.label.color = "gray30",
+    edge.label.bg = "white",
+    edge.label.position = 0.5,
+    edge.label.font = 1,
+    lty = 1,
+    curve = 0,
+    curveScale = TRUE,
+    curveShape = 0,
+    curvePivot = 0.5,
+    curves = FALSE,
+    asize = 1,
+    arrows = TRUE,
+    bidirectional = FALSE,
+    loopRotation = NULL,
 
-  # Weight handling
-  minimum = 0,
-  maximum = NULL,
-  posCol = "#2E7D32",
-  negCol = "#C62828",
+    # Weight handling
+    minimum = 0,
+    maximum = NULL,
+    posCol = "#2E7D32",
+    negCol = "#C62828",
 
-  # Plot settings
-  title = NULL,
-  mar = c(0.1, 0.1, 0.1, 0.1),
-  background = "white",
-  rescale = TRUE,
-  aspect = TRUE,
-  legend = FALSE,
-  groups = NULL,
+    # Plot settings
+    title = NULL,
+    title.cex = 1.2,
+    mar = c(0.1, 0.1, 0.1, 0.1),
+    background = "white",
+    rescale = TRUE,
+    aspect = TRUE,
+    usePCH = FALSE,
 
-  # Output
-  filetype = "default",
-  filename = "splot",
-  width = 7,
-  height = 7,
-  ...
+    # Legend
+    legend = FALSE,
+    legend.position = "topright",
+    legend.cex = 0.8,
+    groups = NULL,
+    nodeNames = NULL,
+
+    # Output
+    filetype = "default",
+    filename = "splot",
+    width = 7,
+    height = 7,
+    ...
 ) {
 
   # ============================================
   # 1. INPUT PROCESSING
   # ============================================
 
+  # Set seed for deterministic layouts
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
   # Convert to sonnet_network if needed
-  network <- ensure_sonnet_network(x, layout = layout)
+  network <- ensure_sonnet_network(x, layout = layout, seed = seed, ...)
+
+  # Apply theme if specified
+  if (!is.null(theme)) {
+    th <- get_theme(theme)
+    if (!is.null(th)) {
+      # Extract theme colors
+      if (is.null(color)) color <- th$get("node_fill")
+      if (is.null(border.color)) border.color <- th$get("node_border_color")
+      if (is.null(background)) background <- th$get("background")
+      if (label.color == "black") label.color <- th$get("label_color")
+      if (posCol == "#2E7D32") posCol <- th$get("edge_positive_color")
+      if (negCol == "#C62828") negCol <- th$get("edge_negative_color")
+    }
+  }
 
   nodes <- network$network$get_nodes()
   edges <- network$network$get_edges()
@@ -220,9 +282,13 @@ splot <- function(
   # Node colors
   node_colors <- resolve_node_colors(color, n_nodes, nodes, groups)
 
+  # Apply alpha to node colors
+  if (alpha < 1) {
+    node_colors <- sapply(node_colors, function(c) adjust_alpha(c, alpha))
+  }
+
   # Border colors
   if (is.null(border.color)) {
-    # Default: slightly darker than fill
     border.color <- sapply(node_colors, function(c) {
       tryCatch(adjust_brightness(c, -0.3), error = function(e) "black")
     })
@@ -237,15 +303,17 @@ splot <- function(
 
   # Label sizes
   if (is.null(label.cex)) {
-    # Auto-size based on node size
     label.cex <- pmin(1, vsize_usr * 8)
   }
   label_cex <- recycle_to_length(label.cex, n_nodes)
   label_colors <- recycle_to_length(label.color, n_nodes)
 
-  # Edge parameters (only if edges exist)
+  # ============================================
+  # 4. EDGE PROCESSING
+  # ============================================
+
   if (n_edges > 0) {
-    # Filter by minimum weight
+    # Filter by minimum weight (threshold)
     edges <- filter_edges_by_weight(edges, minimum)
     n_edges <- nrow(edges)
   }
@@ -254,15 +322,60 @@ splot <- function(
     # Edge colors
     edge_colors <- resolve_edge_colors(edges, edge.color, posCol, negCol)
 
+    # Apply edge alpha
+    if (edge.alpha < 1) {
+      edge_colors <- sapply(edge_colors, function(c) adjust_alpha(c, edge.alpha))
+    }
+
     # Edge widths
     edge_widths <- resolve_edge_widths(edges, edge.width, maximum, minimum)
 
     # Line types
     ltys <- recycle_to_length(lty, n_edges)
 
-    # Curvatures
-    curves <- resolve_curvatures(curve, edges, curveScale)
+    # Handle curves mode
+    curves_vec <- recycle_to_length(curve, n_edges)
+
+    if (!identical(curves, FALSE)) {
+      # Identify reciprocal pairs
+      is_reciprocal <- rep(FALSE, n_edges)
+      for (i in seq_len(n_edges)) {
+        from_i <- edges$from[i]
+        to_i <- edges$to[i]
+        if (from_i == to_i) next
+        for (j in seq_len(n_edges)) {
+          if (j != i && edges$from[j] == to_i && edges$to[j] == from_i) {
+            is_reciprocal[i] <- TRUE
+            break
+          }
+        }
+      }
+
+      if (identical(curves, "mutual") || identical(curves, "force")) {
+        # Curve reciprocal edges
+        for (i in seq_len(n_edges)) {
+          if (is_reciprocal[i] && curves_vec[i] == 0) {
+            curves_vec[i] <- 0.2
+          }
+        }
+      }
+
+      if (identical(curves, "force")) {
+        # Also curve non-reciprocal edges slightly
+        for (i in seq_len(n_edges)) {
+          if (!is_reciprocal[i] && edges$from[i] != edges$to[i] && curves_vec[i] == 0) {
+            sign <- if ((edges$from[i] + edges$to[i]) %% 2 == 0) 1 else -1
+            curves_vec[i] <- sign * 0.1
+          }
+        }
+      }
+    } else if (curveScale) {
+      # Auto-curve reciprocal edges
+      curves_vec <- resolve_curvatures(curves_vec, edges, curveScale)
+    }
+
     curve_pivots <- recycle_to_length(curvePivot, n_edges)
+    curve_shapes <- recycle_to_length(curveShape, n_edges)
 
     # Arrows
     if (is.logical(arrows) && length(arrows) == 1) {
@@ -282,11 +395,11 @@ splot <- function(
     loop_rotations <- resolve_loop_rotation(loopRotation, edges, layout_mat)
 
     # Edge labels
-    edge_labels <- resolve_edge_labels(edge.labels, edges, n_edges)
+    edge_labels_vec <- resolve_edge_labels(edge.labels, edges, n_edges)
   }
 
   # ============================================
-  # 4. DEVICE SETUP
+  # 5. DEVICE SETUP
   # ============================================
 
   # Handle file output
@@ -300,6 +413,12 @@ splot <- function(
       grDevices::pdf(full_filename, width = width, height = height)
     } else if (filetype == "svg") {
       grDevices::svg(full_filename, width = width, height = height)
+    } else if (filetype == "jpeg" || filetype == "jpg") {
+      grDevices::jpeg(full_filename, width = width, height = height,
+                      units = "in", res = 300)
+    } else if (filetype == "tiff") {
+      grDevices::tiff(full_filename, width = width, height = height,
+                      units = "in", res = 300)
     } else {
       stop("Unknown filetype: ", filetype, call. = FALSE)
     }
@@ -312,7 +431,8 @@ splot <- function(
   on.exit(graphics::par(old_par), add = TRUE)
 
   # Margins
-  graphics::par(mar = c(mar[1], mar[2], mar[3] + if (!is.null(title)) 1 else 0, mar[4]))
+  title_space <- if (!is.null(title)) 0.5 else 0
+  graphics::par(mar = c(mar[1], mar[2], mar[3] + title_space, mar[4]))
 
   # Calculate plot limits
   x_range <- range(layout_mat[, 1], na.rm = TRUE)
@@ -339,23 +459,23 @@ splot <- function(
   # Background
   if (!is.null(background) && background != "transparent") {
     graphics::rect(
-      xleft = xlim[1], ybottom = ylim[1],
-      xright = xlim[2], ytop = ylim[2],
+      xleft = xlim[1] - 1, ybottom = ylim[1] - 1,
+      xright = xlim[2] + 1, ytop = ylim[2] + 1,
       col = background, border = NA
     )
   }
 
   # Title
   if (!is.null(title)) {
-    graphics::title(main = title)
+    graphics::title(main = title, cex.main = title.cex)
   }
 
   # ============================================
-  # 5. RENDER EDGES
+  # 6. RENDER EDGES
   # ============================================
 
   if (n_edges > 0) {
-    render_edges_base(
+    render_edges_splot(
       edges = edges,
       layout = layout_mat,
       node_sizes = vsize_usr,
@@ -363,24 +483,27 @@ splot <- function(
       edge.color = edge_colors,
       edge.width = edge_widths,
       lty = ltys,
-      curve = curves,
+      curve = curves_vec,
+      curveShape = curve_shapes,
       curvePivot = curve_pivots,
       arrows = show_arrows,
       asize = arrow_sizes,
       bidirectional = bidirectionals,
       loopRotation = loop_rotations,
-      edge.labels = edge_labels,
+      edge.labels = edge_labels_vec,
       edge.label.cex = edge.label.cex,
+      edge.label.color = edge.label.color,
       edge.label.bg = edge.label.bg,
-      edge.label.position = edge.label.position
+      edge.label.position = edge.label.position,
+      edge.label.font = edge.label.font
     )
   }
 
   # ============================================
-  # 6. RENDER NODES
+  # 7. RENDER NODES
   # ============================================
 
-  render_nodes_base(
+  render_nodes_splot(
     layout = layout_mat,
     vsize = vsize_usr,
     vsize2 = vsize2_usr,
@@ -392,33 +515,321 @@ splot <- function(
     pieColor = pieColor,
     donut = donut,
     donutColor = donutColor,
+    donut.inner = donut.inner,
+    donut.bg = donut.bg,
+    donut.show.value = donut.show.value,
+    donut.value.cex = donut.value.cex,
+    donut.value.color = donut.value.color,
     labels = node_labels,
     label.cex = label_cex,
-    label.color = label_colors
+    label.color = label_colors,
+    label.position = label.position,
+    usePCH = usePCH
   )
 
   # ============================================
-  # 7. LEGEND (if requested)
+  # 8. LEGEND
   # ============================================
 
-  if (legend && !is.null(groups)) {
-    unique_groups <- unique(groups)
-    n_groups <- length(unique_groups)
-    palette <- grDevices::rainbow(n_groups, s = 0.7, v = 0.9)
-
-    graphics::legend(
-      "topright",
-      legend = unique_groups,
-      fill = palette,
-      border = "black",
-      bty = "n",
-      cex = 0.8
+  if (legend) {
+    render_legend_splot(
+      groups = groups,
+      nodeNames = nodeNames,
+      nodes = nodes,
+      node_colors = node_colors,
+      position = legend.position,
+      cex = legend.cex
     )
   }
 
   # ============================================
-  # 8. RETURN
+  # 9. RETURN
   # ============================================
 
   invisible(network)
+}
+
+
+#' Render Edges for splot
+#' @keywords internal
+render_edges_splot <- function(edges, layout, node_sizes, shapes,
+                               edge.color, edge.width, lty, curve,
+                               curveShape, curvePivot, arrows, asize,
+                               bidirectional, loopRotation, edge.labels,
+                               edge.label.cex, edge.label.color, edge.label.bg,
+                               edge.label.position, edge.label.font) {
+
+  m <- nrow(edges)
+  if (m == 0) return(invisible())
+
+  n <- nrow(layout)
+
+  # Get render order (weakest to strongest)
+  order_idx <- get_edge_order(edges)
+
+  # Storage for label positions
+  label_positions <- vector("list", m)
+
+  for (i in order_idx) {
+    from_idx <- edges$from[i]
+    to_idx <- edges$to[i]
+
+    x1 <- layout[from_idx, 1]
+    y1 <- layout[from_idx, 2]
+    x2 <- layout[to_idx, 1]
+    y2 <- layout[to_idx, 2]
+
+    # Self-loop
+    if (from_idx == to_idx) {
+      draw_self_loop_base(
+        x1, y1, node_sizes[from_idx],
+        col = edge.color[i],
+        lwd = edge.width[i],
+        lty = lty[i],
+        rotation = loopRotation[i],
+        arrow = arrows[i],
+        asize = asize[i]
+      )
+
+      # Label position for self-loop
+      loop_dist <- node_sizes[from_idx] * 2.5
+      label_positions[[i]] <- list(
+        x = x1 + loop_dist * cos(loopRotation[i]),
+        y = y1 + loop_dist * sin(loopRotation[i])
+      )
+      next
+    }
+
+    # Calculate edge endpoints
+    angle_to <- splot_angle(x1, y1, x2, y2)
+    angle_from <- splot_angle(x2, y2, x1, y1)
+
+    start <- cent_to_edge(x1, y1, angle_to, node_sizes[from_idx], NULL, shapes[from_idx])
+    end <- cent_to_edge(x2, y2, angle_from, node_sizes[to_idx], NULL, shapes[to_idx])
+
+    # Draw edge
+    if (abs(curve[i]) > 1e-6) {
+      draw_curved_edge_base(
+        start$x, start$y, end$x, end$y,
+        curve = curve[i],
+        curvePivot = curvePivot[i],
+        col = edge.color[i],
+        lwd = edge.width[i],
+        lty = lty[i],
+        arrow = arrows[i],
+        asize = asize[i],
+        bidirectional = bidirectional[i]
+      )
+    } else {
+      draw_straight_edge_base(
+        start$x, start$y, end$x, end$y,
+        col = edge.color[i],
+        lwd = edge.width[i],
+        lty = lty[i],
+        arrow = arrows[i],
+        asize = asize[i],
+        bidirectional = bidirectional[i]
+      )
+    }
+
+    # Store label position
+    label_positions[[i]] <- get_edge_label_position(
+      start$x, start$y, end$x, end$y,
+      position = edge.label.position,
+      curve = curve[i],
+      curvePivot = curvePivot[i]
+    )
+  }
+
+  # Draw edge labels
+  if (!is.null(edge.labels)) {
+    for (i in seq_len(m)) {
+      if (!is.null(edge.labels[i]) && !is.na(edge.labels[i]) && edge.labels[i] != "") {
+        pos <- label_positions[[i]]
+        draw_edge_label_base(
+          pos$x, pos$y,
+          label = edge.labels[i],
+          cex = edge.label.cex,
+          col = edge.label.color,
+          bg = edge.label.bg,
+          font = edge.label.font
+        )
+      }
+    }
+  }
+}
+
+
+#' Render Nodes for splot
+#' @keywords internal
+render_nodes_splot <- function(layout, vsize, vsize2, shape, color,
+                               border.color, border.width, pie, pieColor,
+                               donut, donutColor, donut.inner, donut.bg,
+                               donut.show.value, donut.value.cex, donut.value.color,
+                               labels, label.cex, label.color, label.position,
+                               usePCH = FALSE) {
+
+  n <- nrow(layout)
+  if (n == 0) return(invisible())
+
+  # Render order: largest to smallest
+  order_idx <- get_node_order(vsize)
+
+  for (i in order_idx) {
+    x <- layout[i, 1]
+    y <- layout[i, 2]
+
+    # Check for pie/donut
+    has_pie <- !is.null(pie) && length(pie) >= i && !is.null(pie[[i]]) && length(pie[[i]]) > 0
+    has_donut <- !is.null(donut) && length(donut) >= i && !is.null(donut[[i]])
+
+    if (has_donut && has_pie) {
+      # Donut with inner pie
+      donut_val <- if (length(donut[[i]]) == 1) donut[[i]] else 1
+      donut_col <- if (!is.null(donutColor) && length(donutColor) >= i) donutColor[[i]][1] else color[i]
+      pie_vals <- pie[[i]]
+      pie_cols <- if (!is.null(pieColor) && length(pieColor) >= i) pieColor[[i]] else NULL
+
+      draw_donut_pie_node_base(
+        x, y, vsize[i],
+        donut_value = donut_val,
+        donut_color = donut_col,
+        pie_values = pie_vals,
+        pie_colors = pie_cols,
+        inner_ratio = donut.inner,
+        bg_color = donut.bg,
+        border.col = border.color[i],
+        border.width = border.width[i]
+      )
+
+    } else if (has_donut) {
+      # Donut only
+      donut_vals <- donut[[i]]
+      donut_cols <- if (!is.null(donutColor) && length(donutColor) >= i) donutColor[[i]] else color[i]
+
+      draw_donut_node_base(
+        x, y, vsize[i],
+        values = donut_vals,
+        colors = donut_cols,
+        inner_ratio = donut.inner,
+        bg_color = donut.bg,
+        border.col = border.color[i],
+        border.width = border.width[i],
+        show_value = donut.show.value,
+        value_cex = donut.value.cex,
+        value_col = donut.value.color
+      )
+
+    } else if (has_pie) {
+      # Pie only
+      pie_vals <- pie[[i]]
+      pie_cols <- if (!is.null(pieColor) && length(pieColor) >= i) pieColor[[i]] else NULL
+
+      draw_pie_node_base(
+        x, y, vsize[i],
+        values = pie_vals,
+        colors = pie_cols,
+        border.col = border.color[i],
+        border.width = border.width[i]
+      )
+
+    } else {
+      # Standard node
+      if (usePCH && shape[i] == "circle") {
+        # Fast point-based rendering
+        graphics::points(x, y, pch = 21, cex = vsize[i] * 20,
+                         bg = color[i], col = border.color[i], lwd = border.width[i])
+      } else {
+        draw_node_base(
+          x, y, vsize[i], vsize2[i],
+          shape = shape[i],
+          col = color[i],
+          border.col = border.color[i],
+          border.width = border.width[i]
+        )
+      }
+    }
+  }
+
+  # Render labels
+  if (!is.null(labels)) {
+    for (i in seq_len(n)) {
+      if (!is.null(labels[i]) && !is.na(labels[i]) && labels[i] != "") {
+        lx <- layout[i, 1]
+        ly <- layout[i, 2]
+
+        # Adjust position based on label.position
+        offset <- vsize[i] * 1.2
+        pos <- NULL
+
+        if (label.position == "above") {
+          ly <- ly + offset
+        } else if (label.position == "below") {
+          ly <- ly - offset
+        } else if (label.position == "left") {
+          lx <- lx - offset
+        } else if (label.position == "right") {
+          lx <- lx + offset
+        }
+        # "center" - no offset
+
+        draw_node_label_base(
+          lx, ly,
+          label = labels[i],
+          cex = label.cex[i],
+          col = label.color[i]
+        )
+      }
+    }
+  }
+}
+
+
+#' Render Legend for splot
+#' @keywords internal
+render_legend_splot <- function(groups, nodeNames, nodes, node_colors,
+                                position = "topright", cex = 0.8) {
+
+  n <- length(node_colors)
+
+  # Determine legend entries
+  if (!is.null(groups)) {
+    unique_groups <- unique(groups)
+    n_groups <- length(unique_groups)
+
+    # Get color for each group (first node of that group)
+    legend_colors <- sapply(unique_groups, function(g) {
+      idx <- which(groups == g)[1]
+      node_colors[idx]
+    })
+
+    legend_labels <- if (!is.null(nodeNames)) {
+      # Use nodeNames if provided
+      sapply(unique_groups, function(g) {
+        idx <- which(groups == g)[1]
+        if (length(nodeNames) >= idx) nodeNames[idx] else as.character(g)
+      })
+    } else {
+      as.character(unique_groups)
+    }
+
+  } else if (!is.null(nodeNames)) {
+    legend_labels <- nodeNames
+    legend_colors <- node_colors
+
+  } else {
+    # No legend data
+    return(invisible())
+  }
+
+  # Draw legend
+  graphics::legend(
+    position,
+    legend = legend_labels,
+    fill = legend_colors,
+    border = "gray50",
+    bty = "o",
+    bg = "white",
+    cex = cex
+  )
 }

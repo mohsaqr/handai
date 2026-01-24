@@ -108,19 +108,20 @@ curve_control_point <- function(x1, y1, x2, y2, curvature, pivot = 0.5, shape = 
 #' @param angle Angle of incoming edge (radians).
 #' @param size Arrow size.
 #' @param width Arrow width ratio (default 0.5).
+#' @param x_scale,y_scale Aspect ratio correction factors.
 #' @return List with arrow polygon coordinates and midpoint for line connection.
 #' @keywords internal
-arrow_points <- function(x, y, angle, size, width = 0.5) {
+arrow_points <- function(x, y, angle, size, width = 0.5, x_scale = 1, y_scale = 1) {
 
   # Arrow points relative to tip
   left_angle <- angle + pi - atan(width)
   right_angle <- angle + pi + atan(width)
   back_len <- size / cos(atan(width))
 
-  left_x <- x + back_len * cos(left_angle)
-  left_y <- y + back_len * sin(left_angle)
-  right_x <- x + back_len * cos(right_angle)
-  right_y <- y + back_len * sin(right_angle)
+  left_x <- x + back_len * cos(left_angle) * x_scale
+  left_y <- y + back_len * sin(left_angle) * y_scale
+  right_x <- x + back_len * cos(right_angle) * x_scale
+  right_y <- y + back_len * sin(right_angle) * y_scale
 
   # Midpoint of the arrow base (where line should connect)
   mid_x <- (left_x + right_x) / 2
@@ -161,16 +162,19 @@ offset_point <- function(x, y, toward_x, toward_y, offset) {
 #' @param other_x,other_y Other endpoint in npc.
 #' @param node_size Node radius in npc units.
 #' @param shape Node shape.
+#' @param x_scale,y_scale Aspect ratio correction factors.
 #' @return List with x, y coordinates in npc.
 #' @keywords internal
 edge_endpoint <- function(node_x, node_y, other_x, other_y, node_size,
-                          shape = "circle") {
-  # Calculate angle from node center to other point
-  angle <- point_angle(node_x, node_y, other_x, other_y)
+                          shape = "circle", x_scale = 1, y_scale = 1) {
+  # Calculate angle from node center to other point, accounting for aspect ratio
+  dx <- (other_x - node_x) / x_scale
+  dy <- (other_y - node_y) / y_scale
+  angle <- atan2(dy, dx)
 
-  # Point on node border (matches circleGrob which uses plain NPC units)
+  # Point on node border with aspect correction
   list(
-    x = node_x + node_size * cos(angle),
-    y = node_y + node_size * sin(angle)
+    x = node_x + node_size * cos(angle) * x_scale,
+    y = node_y + node_size * sin(angle) * y_scale
   )
 }

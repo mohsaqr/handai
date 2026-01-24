@@ -64,9 +64,10 @@ draw_straight_edge_base <- function(x1, y1, x2, y2, col = "gray50", lwd = 1,
   }
 }
 
-#' Draw Curved Edge with xspline
+#' Draw Curved Edge with xspline (qgraph-style)
 #'
 #' Renders a curved edge using xspline() with optional arrow.
+#' Uses qgraph-style curve calculation for smooth, natural-looking curves.
 #'
 #' @param x1,y1 Start point coordinates.
 #' @param x2,y2 End point coordinates.
@@ -89,14 +90,61 @@ draw_curved_edge_base <- function(x1, y1, x2, y2, curve = 0.2, curvePivot = 0.5,
     return(invisible())
   }
 
-  # Calculate control point
-  mid <- perp_mid(x1, y1, x2, y2, curve, curvePivot)
+  # Edge vector and length
+  dx <- x2 - x1
+  dy <- y2 - y1
+  len <- sqrt(dx^2 + dy^2)
 
-  # Generate xspline
+  if (len < 1e-10) {
+    return(invisible())
+  }
+
+  # Perpendicular unit vector (rotated 90 degrees counterclockwise)
+  px <- -dy / len
+  py <- dx / len
+
+  # qgraph-style: curve offset is absolute, not proportional to length
+  # This gives consistent-looking curves regardless of edge length
+  curve_offset <- curve * 0.5  # Scale factor for visual consistency
+
+  # Create smooth curve using multiple control points (qgraph approach)
+  # Use 5 points for smoother curve: start, 1/4, mid, 3/4, end
+  t_vals <- c(0, 0.25, 0.5, 0.75, 1)
+  n_pts <- length(t_vals)
+
+  ctrl_x <- numeric(n_pts)
+  ctrl_y <- numeric(n_pts)
+
+  for (i in seq_along(t_vals)) {
+    t <- t_vals[i]
+    # Base point along edge
+    bx <- x1 + t * dx
+    by <- y1 + t * dy
+
+    # Parabolic offset - maximum at curvePivot, zero at ends
+    # This creates a smooth symmetric curve
+    offset_factor <- 4 * t * (1 - t)  # Parabola peaking at t=0.5
+
+    # Adjust for pivot position (shift the peak)
+    if (curvePivot != 0.5) {
+      # Skewed parabola
+      if (t <= curvePivot) {
+        offset_factor <- (t / curvePivot)^2 * 4 * curvePivot * (1 - curvePivot)
+      } else {
+        offset_factor <- ((1 - t) / (1 - curvePivot))^2 * 4 * curvePivot * (1 - curvePivot)
+      }
+    }
+
+    ctrl_x[i] <- bx + curve_offset * offset_factor * px
+    ctrl_y[i] <- by + curve_offset * offset_factor * py
+  }
+
+  # Generate smooth xspline through control points
+  # shape = 1 for smooth interpolation, 0 for corners at endpoints
   spl <- graphics::xspline(
-    x = c(x1, mid$x, x2),
-    y = c(y1, mid$y, y2),
-    shape = c(0, 1, 0),
+    x = ctrl_x,
+    y = ctrl_y,
+    shape = c(0, 1, 1, 1, 0),
     open = TRUE,
     draw = FALSE
   )
@@ -110,16 +158,20 @@ draw_curved_edge_base <- function(x1, y1, x2, y2, curve = 0.2, curvePivot = 0.5,
     lty = lty
   )
 
-  # Draw arrow at target
+  # Draw arrow at target - use last segment of spline for angle
   if (arrow && asize > 0) {
     n <- length(spl$x)
-    angle <- splot_angle(spl$x[n-1], spl$y[n-1], spl$x[n], spl$y[n])
+    # Use points closer to end for better angle estimation
+    idx <- max(1, n - 3)
+    angle <- splot_angle(spl$x[idx], spl$y[idx], spl$x[n], spl$y[n])
     draw_arrow_base(x2, y2, angle, asize, col = col)
   }
 
   # Draw arrow at source if bidirectional
   if (bidirectional && asize > 0) {
-    angle_back <- splot_angle(spl$x[2], spl$y[2], spl$x[1], spl$y[1])
+    # Use points closer to start for angle
+    idx <- min(length(spl$x), 4)
+    angle_back <- splot_angle(spl$x[idx], spl$y[idx], spl$x[1], spl$y[1])
     draw_arrow_base(x1, y1, angle_back, asize, col = col)
   }
 }
@@ -231,7 +283,7 @@ draw_edge_label_base <- function(x, y, label, cex = 0.8, col = "gray30",
 
 #' Get Label Position on Edge
 #'
-#' Calculates the position for an edge label.
+#' Calculates the position for an edge label (matches qgraph-style curves).
 #'
 #' @param x1,y1 Start point.
 #' @param x2,y2 End point.
@@ -250,15 +302,42 @@ get_edge_label_position <- function(x1, y1, x2, y2, position = 0.5,
     ))
   }
 
-  # Curved edge - calculate point on curve
-  mid <- perp_mid(x1, y1, x2, y2, curve, curvePivot)
+  # Curved edge - match qgraph-style curve calculation
+  dx <- x2 - x1
+  dy <- y2 - y1
+  len <- sqrt(dx^2 + dy^2)
 
-  # Quadratic Bezier at position t
+  if (len < 1e-10) {
+    return(list(x = x1, y = y1))
+  }
+
+  # Perpendicular unit vector
+  px <- -dy / len
+  py <- dx / len
+
+  # Same curve offset as draw_curved_edge_base
+  curve_offset <- curve * 0.5
+
+  # Base point along edge
   t <- position
-  x <- (1 - t)^2 * x1 + 2 * (1 - t) * t * mid$x + t^2 * x2
-  y <- (1 - t)^2 * y1 + 2 * (1 - t) * t * mid$y + t^2 * y2
+  bx <- x1 + t * dx
+  by <- y1 + t * dy
 
-  list(x = x, y = y)
+  # Parabolic offset
+  offset_factor <- 4 * t * (1 - t)
+
+  if (curvePivot != 0.5) {
+    if (t <= curvePivot) {
+      offset_factor <- (t / curvePivot)^2 * 4 * curvePivot * (1 - curvePivot)
+    } else {
+      offset_factor <- ((1 - t) / (1 - curvePivot))^2 * 4 * curvePivot * (1 - curvePivot)
+    }
+  }
+
+  list(
+    x = bx + curve_offset * offset_factor * px,
+    y = by + curve_offset * offset_factor * py
+  )
 }
 
 #' Render All Edges

@@ -133,6 +133,13 @@ render_edges_grid <- function(network) {
     nrow(nodes)
   )
 
+  # Get aspect ratio correction for proper edge endpoints
+  vp_width <- grid::convertWidth(grid::unit(1, "npc"), "inches", valueOnly = TRUE)
+  vp_height <- grid::convertHeight(grid::unit(1, "npc"), "inches", valueOnly = TRUE)
+  min_dim <- min(vp_width, vp_height)
+  x_scale <- min_dim / vp_width
+  y_scale <- min_dim / vp_height
+
   # Create edge grobs
   grobs <- list()
 
@@ -168,9 +175,11 @@ render_edges_grid <- function(network) {
       next
     }
 
-    # Calculate endpoints (offset by node radius)
-    start_pt <- edge_endpoint(x1, y1, x2, y2, node_sizes[from_idx])
-    end_pt <- edge_endpoint(x2, y2, x1, y1, node_sizes[to_idx])
+    # Calculate endpoints (offset by node radius, with aspect correction)
+    start_pt <- edge_endpoint(x1, y1, x2, y2, node_sizes[from_idx],
+                              x_scale = x_scale, y_scale = y_scale)
+    end_pt <- edge_endpoint(x2, y2, x1, y1, node_sizes[to_idx],
+                            x_scale = x_scale, y_scale = y_scale)
 
     if (curvatures[i] != 0) {
       # Curved edge
@@ -178,14 +187,16 @@ render_edges_grid <- function(network) {
         start_pt$x, start_pt$y, end_pt$x, end_pt$y,
         curvatures[i], edge_col, widths[i], lty,
         show_arrows, arrow_size, bidirectionals[i],
-        curve_shapes[i], curve_pivots[i]
+        curve_shapes[i], curve_pivots[i],
+        x_scale = x_scale, y_scale = y_scale
       )
     } else {
       # Straight edge
       grobs[[length(grobs) + 1]] <- draw_straight_edge(
         start_pt$x, start_pt$y, end_pt$x, end_pt$y,
         edge_col, widths[i], lty, show_arrows, arrow_size,
-        bidirectionals[i]
+        bidirectionals[i],
+        x_scale = x_scale, y_scale = y_scale
       )
     }
   }
@@ -196,9 +207,14 @@ render_edges_grid <- function(network) {
 #' Draw Straight Edge
 #' @keywords internal
 draw_straight_edge <- function(x1, y1, x2, y2, color, width, lty,
-                                show_arrow, arrow_size, bidirectional = FALSE) {
+                                show_arrow, arrow_size, bidirectional = FALSE,
+                                x_scale = 1, y_scale = 1) {
   grobs <- list()
-  angle <- point_angle(x1, y1, x2, y2)
+
+  # Calculate angle with aspect correction
+  dx <- (x2 - x1) / x_scale
+  dy <- (y2 - y1) / y_scale
+  angle <- atan2(dy, dx)
 
   # Draw line from start to end (arrow overlays the end)
   grobs[[1]] <- grid::segmentsGrob(
@@ -211,7 +227,8 @@ draw_straight_edge <- function(x1, y1, x2, y2, color, width, lty,
 
   # Draw arrow at target (tip at endpoint)
   if (show_arrow && arrow_size > 0) {
-    arrow_pts <- arrow_points(x2, y2, angle, arrow_size)
+    arrow_pts <- arrow_points(x2, y2, angle, arrow_size,
+                              x_scale = x_scale, y_scale = y_scale)
     grobs[[2]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts$x, "npc"),
       y = grid::unit(arrow_pts$y, "npc"),
@@ -221,8 +238,11 @@ draw_straight_edge <- function(x1, y1, x2, y2, color, width, lty,
 
   # Draw arrow at source if bidirectional (tip at start point)
   if (bidirectional && arrow_size > 0) {
-    angle_back <- point_angle(x2, y2, x1, y1)
-    arrow_pts_back <- arrow_points(x1, y1, angle_back, arrow_size)
+    dx_back <- (x1 - x2) / x_scale
+    dy_back <- (y1 - y2) / y_scale
+    angle_back <- atan2(dy_back, dx_back)
+    arrow_pts_back <- arrow_points(x1, y1, angle_back, arrow_size,
+                                   x_scale = x_scale, y_scale = y_scale)
     grobs[[length(grobs) + 1]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts_back$x, "npc"),
       y = grid::unit(arrow_pts_back$y, "npc"),
@@ -237,7 +257,8 @@ draw_straight_edge <- function(x1, y1, x2, y2, color, width, lty,
 #' @keywords internal
 draw_curved_edge <- function(x1, y1, x2, y2, curvature, color, width, lty,
                               show_arrow, arrow_size, bidirectional = FALSE,
-                              curve_shape = 0, curve_pivot = 0.5) {
+                              curve_shape = 0, curve_pivot = 0.5,
+                              x_scale = 1, y_scale = 1) {
   grobs <- list()
 
   # Calculate control point with shape and pivot adjustments
@@ -257,8 +278,12 @@ draw_curved_edge <- function(x1, y1, x2, y2, curvature, color, width, lty,
 
   # Draw arrow at target (tip at curve end, angle follows curve direction)
   if (show_arrow && arrow_size > 0) {
-    angle <- point_angle(pts$x[n-1], pts$y[n-1], pts$x[n], pts$y[n])
-    arrow_pts <- arrow_points(x2, y2, angle, arrow_size)
+    # Calculate angle with aspect correction
+    dx <- (pts$x[n] - pts$x[n-1]) / x_scale
+    dy <- (pts$y[n] - pts$y[n-1]) / y_scale
+    angle <- atan2(dy, dx)
+    arrow_pts <- arrow_points(x2, y2, angle, arrow_size,
+                              x_scale = x_scale, y_scale = y_scale)
     grobs[[2]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts$x, "npc"),
       y = grid::unit(arrow_pts$y, "npc"),
@@ -268,8 +293,11 @@ draw_curved_edge <- function(x1, y1, x2, y2, curvature, color, width, lty,
 
   # Draw arrow at source if bidirectional
   if (bidirectional && arrow_size > 0) {
-    angle_back <- point_angle(pts$x[2], pts$y[2], pts$x[1], pts$y[1])
-    arrow_pts_back <- arrow_points(x1, y1, angle_back, arrow_size)
+    dx_back <- (pts$x[1] - pts$x[2]) / x_scale
+    dy_back <- (pts$y[1] - pts$y[2]) / y_scale
+    angle_back <- atan2(dy_back, dx_back)
+    arrow_pts_back <- arrow_points(x1, y1, angle_back, arrow_size,
+                                   x_scale = x_scale, y_scale = y_scale)
     grobs[[length(grobs) + 1]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts_back$x, "npc"),
       y = grid::unit(arrow_pts_back$y, "npc"),
