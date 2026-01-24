@@ -73,6 +73,7 @@ draw_node_base <- function(x, y, size, size2 = NULL, shape = "circle",
 #' Draw Pie Chart Node
 #'
 #' Renders a node as a pie chart with multiple colored segments.
+#' The pie is drawn slightly inside the node boundary to leave room for arrows.
 #'
 #' @param x,y Node center coordinates.
 #' @param size Node radius.
@@ -90,6 +91,19 @@ draw_pie_node_base <- function(x, y, size, values, colors = NULL,
   if (is.null(values) || length(values) == 0) {
     return(invisible())
   }
+
+  # Draw outer boundary circle first (arrows will touch this)
+  angles <- seq(0, 2 * pi, length.out = 100)
+  graphics::polygon(
+    x = x + size * cos(angles),
+    y = y + size * sin(angles),
+    col = "white",
+    border = border.col,
+    lwd = border.width
+ )
+
+  # Pie is drawn inside the boundary
+  pie_size <- size * 0.92
 
   # Normalize to proportions
   props <- values / sum(values)
@@ -120,8 +134,8 @@ draw_pie_node_base <- function(x, y, size, values, colors = NULL,
     # Create slice polygon
     angles <- seq(start_angle, end_angle, length.out = max(3, ceiling(n_points * props[i])))
 
-    xs <- c(x, x + size * cos(angles), x)
-    ys <- c(y, y + size * sin(angles), y)
+    xs <- c(x, x + pie_size * cos(angles), x)
+    ys <- c(y, y + pie_size * sin(angles), y)
 
     graphics::polygon(
       x = xs, y = ys,
@@ -140,23 +154,14 @@ draw_pie_node_base <- function(x, y, size, values, colors = NULL,
       end_angle <- start_angle - 2 * pi * props[i]
       # Draw radial line at slice boundary
       graphics::lines(
-        x = c(x, x + size * cos(start_angle)),
-        y = c(y, y + size * sin(start_angle)),
+        x = c(x, x + pie_size * cos(start_angle)),
+        y = c(y, y + pie_size * sin(start_angle)),
         col = border.col,
         lwd = slice_border_width
       )
       start_angle <- end_angle
     }
   }
-
-  # Draw border circle
-  angles <- seq(0, 2 * pi, length.out = 100)
-  graphics::lines(
-    x = x + size * cos(angles),
-    y = y + size * sin(angles),
-    col = border.col,
-    lwd = border.width
-  )
 }
 
 #' Draw Donut Chart Node
@@ -186,10 +191,23 @@ draw_donut_node_base <- function(x, y, size, values, colors = NULL,
                                  value_col = "black") {
   # Use separate donut border width if provided
   ring_border_width <- if (!is.null(donut_border.width)) donut_border.width else border.width
-  outer_r <- size
-  inner_r <- size * inner_ratio
 
   n_points <- 100
+
+  # Draw outer boundary circle first (arrows will touch this)
+  angles <- seq(0, 2 * pi, length.out = n_points)
+  graphics::polygon(
+    x = x + size * cos(angles),
+    y = y + size * sin(angles),
+    col = "white",
+    border = border.col,
+    lwd = border.width
+  )
+
+  # Donut content is drawn inside the boundary
+  content_size <- size * 0.92
+  outer_r <- content_size
+  inner_r <- content_size * inner_ratio
 
   # Helper to draw ring segment
   draw_ring_segment <- function(start_ang, end_ang, outer_r, inner_r, col) {
@@ -318,9 +336,22 @@ draw_donut_pie_node_base <- function(x, y, size, donut_value = 1,
   # Use separate border widths if provided
   ring_border_width <- if (!is.null(donut_border.width)) donut_border.width else border.width
   pie_slice_border <- if (!is.null(pie_border.width)) pie_border.width else border.width * 0.5
-  outer_r <- size
-  inner_r <- size * inner_ratio
   n_points <- 100
+
+  # Draw outer boundary circle first (arrows will touch this)
+  angles <- seq(0, 2 * pi, length.out = n_points)
+  graphics::polygon(
+    x = x + size * cos(angles),
+    y = y + size * sin(angles),
+    col = "white",
+    border = border.col,
+    lwd = border.width
+  )
+
+  # Content is drawn inside the boundary
+  content_size <- size * 0.92
+  outer_r <- content_size
+  inner_r <- content_size * inner_ratio
 
   # Helper to draw ring segment
   draw_ring_segment <- function(start_ang, end_ang, outer_r, inner_r, col) {
@@ -452,12 +483,25 @@ draw_double_donut_pie_node_base <- function(x, y, size,
   # Use separate border widths if provided
   ring_border_width <- if (!is.null(donut_border.width)) donut_border.width else border.width
   pie_slice_border <- if (!is.null(pie_border.width)) pie_border.width else border.width * 0.5
-
-  # Define radii for the three layers
-  outer_r <- size                        # Outermost edge
-  mid_r <- size * outer_inner_ratio      # Between outer and inner donut
-  inner_r <- size * inner_inner_ratio    # Inner edge of inner donut / outer edge of pie
   n_points <- 100
+
+  # Draw outer boundary circle first (arrows will touch this)
+  angles <- seq(0, 2 * pi, length.out = n_points)
+  graphics::polygon(
+    x = x + size * cos(angles),
+    y = y + size * sin(angles),
+    col = "white",
+    border = border.col,
+    lwd = border.width
+  )
+
+  # Content is drawn inside the boundary
+  content_size <- size * 0.92
+
+  # Define radii for the three layers (scaled down)
+  outer_r <- content_size                        # Outermost edge of content
+  mid_r <- content_size * outer_inner_ratio      # Between outer and inner donut
+  inner_r <- content_size * inner_inner_ratio    # Inner edge of inner donut / outer edge of pie
 
   # Helper to draw ring segment
   draw_ring_segment <- function(start_ang, end_ang, r_outer, r_inner, col) {
