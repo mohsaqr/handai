@@ -90,6 +90,8 @@ NULL
 #' @param legend Logical: show legend?
 #' @param legend.position Position: "topright", "topleft", "bottomright", "bottomleft".
 #' @param legend.cex Legend text size.
+#' @param legend.edge.colors Logical: show positive/negative edge colors in legend?
+#' @param legend.node.sizes Logical: show node size scale in legend?
 #' @param groups Group assignments for node coloring/legend.
 #' @param nodeNames Alternative names for legend (separate from labels).
 #'
@@ -200,6 +202,8 @@ splot <- function(
     legend = FALSE,
     legend.position = "topright",
     legend.cex = 0.8,
+    legend.edge.colors = TRUE,
+    legend.node.sizes = FALSE,
     groups = NULL,
     nodeNames = NULL,
 
@@ -538,13 +542,28 @@ splot <- function(
   # ============================================
 
   if (legend) {
+    # Determine if we have positive/negative weighted edges
+    has_pos_edges <- FALSE
+    has_neg_edges <- FALSE
+    if (n_edges > 0 && "weight" %in% names(edges)) {
+      has_pos_edges <- any(edges$weight > 0, na.rm = TRUE)
+      has_neg_edges <- any(edges$weight < 0, na.rm = TRUE)
+    }
+
     render_legend_splot(
       groups = groups,
       nodeNames = nodeNames,
       nodes = nodes,
       node_colors = node_colors,
       position = legend.position,
-      cex = legend.cex
+      cex = legend.cex,
+      show_edge_colors = legend.edge.colors,
+      posCol = posCol,
+      negCol = negCol,
+      has_pos_edges = has_pos_edges,
+      has_neg_edges = has_neg_edges,
+      show_node_sizes = legend.node.sizes,
+      vsize = vsize_usr
     )
   }
 
@@ -827,25 +846,54 @@ render_nodes_splot <- function(layout, vsize, vsize2, shape, color,
 
 
 #' Render Legend for splot
+#'
+#' Renders a comprehensive legend showing node groups, edge weight colors,
+#' and optionally node sizes.
+#'
+#' @param groups Group assignments for nodes.
+#' @param nodeNames Names for legend entries.
+#' @param nodes Node data frame.
+#' @param node_colors Vector of node colors.
+#' @param position Legend position.
+#' @param cex Text size.
+#' @param show_edge_colors Logical: show positive/negative edge color legend?
+#' @param posCol Positive edge color.
+#' @param negCol Negative edge color.
+#' @param has_pos_edges Logical: are there positive weighted edges?
+#' @param has_neg_edges Logical: are there negative weighted edges?
+#' @param show_node_sizes Logical: show node size legend?
+#' @param vsize Vector of node sizes.
 #' @keywords internal
 render_legend_splot <- function(groups, nodeNames, nodes, node_colors,
-                                position = "topright", cex = 0.8) {
+                                position = "topright", cex = 0.8,
+                                show_edge_colors = FALSE,
+                                posCol = "#2E7D32", negCol = "#C62828",
+                                has_pos_edges = FALSE, has_neg_edges = FALSE,
+                                show_node_sizes = FALSE, vsize = NULL) {
 
   n <- length(node_colors)
 
-  # Determine legend entries
+  # Collect all legend components
+  legend_labels <- character(0)
+  legend_colors <- character(0)
+  legend_pch <- integer(0)
+  legend_lty <- integer(0)
+  legend_lwd <- numeric(0)
+  legend_pt_cex <- numeric(0)
+
+  # =========================================
+  # 1. NODE GROUPS (filled squares)
+  # =========================================
   if (!is.null(groups)) {
     unique_groups <- unique(groups)
-    n_groups <- length(unique_groups)
 
     # Get color for each group (first node of that group)
-    legend_colors <- sapply(unique_groups, function(g) {
+    group_colors <- sapply(unique_groups, function(g) {
       idx <- which(groups == g)[1]
       node_colors[idx]
     })
 
-    legend_labels <- if (!is.null(nodeNames)) {
-      # Use nodeNames if provided
+    group_labels <- if (!is.null(nodeNames)) {
       sapply(unique_groups, function(g) {
         idx <- which(groups == g)[1]
         if (length(nodeNames) >= idx) nodeNames[idx] else as.character(g)
@@ -854,23 +902,110 @@ render_legend_splot <- function(groups, nodeNames, nodes, node_colors,
       as.character(unique_groups)
     }
 
-  } else if (!is.null(nodeNames)) {
-    legend_labels <- nodeNames
-    legend_colors <- node_colors
+    legend_labels <- c(legend_labels, group_labels)
+    legend_colors <- c(legend_colors, group_colors)
+    legend_pch <- c(legend_pch, rep(22, length(unique_groups)))  # filled square
+    legend_lty <- c(legend_lty, rep(NA, length(unique_groups)))
+    legend_lwd <- c(legend_lwd, rep(NA, length(unique_groups)))
+    legend_pt_cex <- c(legend_pt_cex, rep(2, length(unique_groups)))
+  }
 
-  } else {
-    # No legend data
+  # =========================================
+  # 2. EDGE COLORS (lines)
+  # =========================================
+  if (show_edge_colors && (has_pos_edges || has_neg_edges)) {
+    # Add separator if we have groups
+    if (length(legend_labels) > 0) {
+      legend_labels <- c(legend_labels, "")
+      legend_colors <- c(legend_colors, NA)
+      legend_pch <- c(legend_pch, NA)
+      legend_lty <- c(legend_lty, 0)
+      legend_lwd <- c(legend_lwd, NA)
+      legend_pt_cex <- c(legend_pt_cex, NA)
+    }
+
+    if (has_pos_edges) {
+      legend_labels <- c(legend_labels, "Positive")
+      legend_colors <- c(legend_colors, posCol)
+      legend_pch <- c(legend_pch, NA)
+      legend_lty <- c(legend_lty, 1)
+      legend_lwd <- c(legend_lwd, 2)
+      legend_pt_cex <- c(legend_pt_cex, NA)
+    }
+
+    if (has_neg_edges) {
+      legend_labels <- c(legend_labels, "Negative")
+      legend_colors <- c(legend_colors, negCol)
+      legend_pch <- c(legend_pch, NA)
+      legend_lty <- c(legend_lty, 1)
+      legend_lwd <- c(legend_lwd, 2)
+      legend_pt_cex <- c(legend_pt_cex, NA)
+    }
+  }
+
+  # =========================================
+  # 3. NODE SIZES (circles of different sizes)
+  # =========================================
+  if (show_node_sizes && !is.null(vsize) && length(unique(vsize)) > 1) {
+    # Add separator
+    if (length(legend_labels) > 0) {
+      legend_labels <- c(legend_labels, "")
+      legend_colors <- c(legend_colors, NA)
+      legend_pch <- c(legend_pch, NA)
+      legend_lty <- c(legend_lty, 0)
+      legend_lwd <- c(legend_lwd, NA)
+      legend_pt_cex <- c(legend_pt_cex, NA)
+    }
+
+    # Show min, median, max sizes
+    size_range <- range(vsize)
+    size_med <- median(vsize)
+    size_vals <- c(size_range[1], size_med, size_range[2])
+    size_labels <- c(
+      paste0("Small (", round(size_range[1], 1), ")"),
+      paste0("Medium (", round(size_med, 1), ")"),
+      paste0("Large (", round(size_range[2], 1), ")")
+    )
+
+    # Scale for legend display
+    scale_factor <- 15  # Adjust for visual appearance
+    size_cex <- size_vals * scale_factor
+
+    legend_labels <- c(legend_labels, size_labels)
+    legend_colors <- c(legend_colors, rep("gray50", 3))
+    legend_pch <- c(legend_pch, rep(21, 3))  # filled circle
+    legend_lty <- c(legend_lty, rep(NA, 3))
+    legend_lwd <- c(legend_lwd, rep(NA, 3))
+    legend_pt_cex <- c(legend_pt_cex, size_cex)
+  }
+
+  # =========================================
+  # Draw legend if we have entries
+  # =========================================
+  if (length(legend_labels) == 0) {
     return(invisible())
   }
 
-  # Draw legend
+  # Replace NA colors with transparent for proper rendering
+  legend_colors[is.na(legend_colors)] <- "transparent"
+
+  # Determine which elements to show
+  has_points <- any(!is.na(legend_pch) & legend_pch > 0)
+  has_lines <- any(!is.na(legend_lty) & legend_lty > 0)
+
+  # Build legend
   graphics::legend(
     position,
     legend = legend_labels,
-    fill = legend_colors,
-    border = "gray50",
+    col = legend_colors,
+    pch = if (has_points) legend_pch else NULL,
+    lty = if (has_lines) legend_lty else NULL,
+    lwd = if (has_lines) legend_lwd else NULL,
+    pt.cex = if (has_points) legend_pt_cex else NULL,
+    pt.bg = if (has_points) legend_colors else NULL,
     bty = "o",
     bg = "white",
-    cex = cex
+    cex = cex,
+    seg.len = 1.5
   )
 }

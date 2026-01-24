@@ -109,12 +109,18 @@ if (curve_i > 0) {
 - For straight edges: offset perpendicular to the edge
 - Default offset of 0.03 user coordinates provides good separation
 
-### 4. MEDIUM PRIORITY: Legend Support
+### 4. ~~MEDIUM PRIORITY: Legend Support~~ DONE
 
-Add legend for:
-- Node colors (groups)
-- Edge colors (positive/negative weights)
-- Node sizes
+**Problem**: Legend only supported node groups, missing edge colors and node sizes.
+
+**Solution**: Enhanced `render_legend_splot()` to support three legend components:
+1. **Node groups**: Filled squares showing group colors with labels
+2. **Edge colors**: Lines showing positive/negative weight colors (controlled by `legend.edge.colors` parameter, default TRUE)
+3. **Node sizes**: Circles showing small/medium/large scale (controlled by `legend.node.sizes` parameter, default FALSE)
+
+New parameters added to `splot()`:
+- `legend.edge.colors`: Show positive/negative edge color legend (default TRUE)
+- `legend.node.sizes`: Show node size scale legend (default FALSE)
 
 ### 5. LOW PRIORITY: Performance Optimization
 
