@@ -16,7 +16,7 @@ arrow_points(x, y, angle, size, width = 0.5)
 \item{width}{Arrow width ratio (default 0.5).}
 }
 \value{
-Data frame with x, y coordinates of arrow vertices.
+List with arrow polygon coordinates and midpoint for line connection.
 }
 \description{
 Calculate Arrow Head Points

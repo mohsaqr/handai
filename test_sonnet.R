@@ -1,15 +1,37 @@
-
-if ("package:Sonnet" %in% search()) {
-  detach("package:Sonnet", unload = TRUE)
-  cat("✓ Sonnet package detached\n")
-}
-
-cat("\n--- Installing Sonnet package ---\n")
-devtools::install(quiet = TRUE)
-cat("✓ Sonnet package installed\n")
-
-# --- 3. Load the package ---
 library(Sonnet)
+
+# Test reciprocal edge separation
+# This asymmetric matrix has edges going both directions between nodes
+mat_directed <- matrix(c(
+  0.37, 0.08, 0.14, 0.06, 0.33, 0.10, 0.24, 0.22, 0.08,
+  0.40, 0.00, 0.23, 0.14, 0.47, 0.12, 0.16, 0.09, 0.07,
+  0.14, 0.00, 0.00, 0.27, 0.07, 0.06, 0.29, 0.06, 0.12,
+  0.00, 0.00, 0.00, 0.00, 0.48, 0.32, 0.06, 0.00, 0.00,
+  0.00, 0.00, 0.50, 0.00, 0.08, 0.13, 0.12, 0.00, 0.00,
+  0.00, 0.00, 0.00, 0.19, 0.32, 0.00, 0.19, 0.27, 0.06,
+  0.00, 0.00, 0.00, 0.17, 0.00, 0.08, 0.19, 0.38, 0.06,
+  0.15, 0.00, 0.00, 0.00, 0.00, 0.07, 0.11, 0.08, 0.09,
+  0.00, 0.00, 0.00, 0.00, 0.00, 0.07, 0.12, 0.00, 0.00
+), nrow = 9, byrow = TRUE)
+
+labels <- c("plan", "synthesis", "adapt", "cohesion", "consensus",
+            "coregulate", "discuss", "emotion", "monitor")
+
+# Test: Reciprocal edges should automatically be curved apart
+soplot(mat_directed,
+  title = "Reciprocal Edges Auto-Separated",
+  layout = "circle",
+  labels = labels,
+  node_size = 0.06,
+  node_fill = "#87CEEB",
+  label_position = "center",
+  edge_color = "#191970",
+  edge_width = 2,
+  threshold = 0.05,
+  arrow_size = 0.012
+)
+
+# Original test below
 
 mat <- matrix(c(
   0.37, 0.08, 0.14, 0.06, 0.33, 0.10, 0.24, 0.22, 0.08,

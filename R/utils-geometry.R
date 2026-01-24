@@ -108,21 +108,30 @@ curve_control_point <- function(x1, y1, x2, y2, curvature, pivot = 0.5, shape = 
 #' @param angle Angle of incoming edge (radians).
 #' @param size Arrow size.
 #' @param width Arrow width ratio (default 0.5).
-#' @return Data frame with x, y coordinates of arrow vertices.
+#' @return List with arrow polygon coordinates and midpoint for line connection.
 #' @keywords internal
 arrow_points <- function(x, y, angle, size, width = 0.5) {
+
   # Arrow points relative to tip
   left_angle <- angle + pi - atan(width)
   right_angle <- angle + pi + atan(width)
   back_len <- size / cos(atan(width))
 
-  data.frame(
-    x = c(x,
-          x + back_len * cos(left_angle),
-          x + back_len * cos(right_angle)),
-    y = c(y,
-          y + back_len * sin(left_angle),
-          y + back_len * sin(right_angle))
+  left_x <- x + back_len * cos(left_angle)
+  left_y <- y + back_len * sin(left_angle)
+  right_x <- x + back_len * cos(right_angle)
+  right_y <- y + back_len * sin(right_angle)
+
+  # Midpoint of the arrow base (where line should connect)
+  mid_x <- (left_x + right_x) / 2
+  mid_y <- (left_y + right_y) / 2
+
+  list(
+    x = c(x, left_x, right_x),
+    y = c(y, left_y, right_y),
+    mid_x = mid_x,
+    mid_y = mid_y,
+    back_len = back_len
   )
 }
 
@@ -145,20 +154,33 @@ offset_point <- function(x, y, toward_x, toward_y, offset) {
 
 #' Calculate Edge Endpoint on Node Border
 #'
-#' @param node_x,node_y Node center.
-#' @param other_x,other_y Other endpoint.
-#' @param node_size Node radius.
+#' Calculates the point where an edge should meet the node border,
+#' using the same aspect ratio correction as self-loops.
+#'
+#' @param node_x,node_y Node center in npc.
+#' @param other_x,other_y Other endpoint in npc.
+#' @param node_size Node radius in npc units.
 #' @param shape Node shape.
-#' @return List with x, y coordinates.
+#' @return List with x, y coordinates in npc.
 #' @keywords internal
 edge_endpoint <- function(node_x, node_y, other_x, other_y, node_size,
                           shape = "circle") {
-  angle <- point_angle(node_x, node_y, other_x, other_y)
+  # Get aspect ratio correction (same as self-loops)
+  vp_width <- grid::convertWidth(grid::unit(1, "npc"), "inches", valueOnly = TRUE)
+  vp_height <- grid::convertHeight(grid::unit(1, "npc"), "inches", valueOnly = TRUE)
+  min_dim <- min(vp_width, vp_height)
+  x_scale <- min_dim / vp_width
+  y_scale <- min_dim / vp_height
 
-  # For most shapes, approximate with circle
-  # Could be refined for specific shapes
+  # Calculate angle from node center to other point
+  # Use scaled coordinates for proper aspect ratio
+  dx <- (other_x - node_x) * vp_width
+  dy <- (other_y - node_y) * vp_height
+  angle <- atan2(dy, dx)
+
+  # Point on node border using same scaling as self-loops
   list(
-    x = node_x + node_size * cos(angle),
-    y = node_y + node_size * sin(angle)
+    x = node_x + (node_size * x_scale) * cos(angle),
+    y = node_y + (node_size * y_scale) * sin(angle)
   )
 }

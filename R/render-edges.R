@@ -61,6 +61,30 @@ render_edges_grid <- function(network) {
     m
   )
 
+  # Auto-separate reciprocal edges (A→B and B→A pairs)
+  # Curve them in opposite directions so they don't overlap
+  reciprocal_offset <- 0.15  # Separation curvature
+  for (i in seq_len(m)) {
+    from_i <- edges$from[i]
+    to_i <- edges$to[i]
+    if (from_i == to_i) next  # Skip self-loops
+
+    # Check for reverse edge
+    for (j in seq_len(m)) {
+      if (j == i) next
+      if (edges$from[j] == to_i && edges$to[j] == from_i) {
+        # Found reciprocal pair - curve them in opposite directions
+        # Lower index curves positive, higher index curves negative
+        if (i < j) {
+          curvatures[i] <- reciprocal_offset
+        } else {
+          curvatures[i] <- -reciprocal_offset
+        }
+        break
+      }
+    }
+  }
+
   # Arrow settings
   show_arrows <- if (!is.null(aes$show_arrows)) aes$show_arrows else network$is_directed
   arrow_size <- if (!is.null(aes$arrow_size)) aes$arrow_size else 0.015
@@ -160,7 +184,7 @@ draw_straight_edge <- function(x1, y1, x2, y2, color, width, lty,
   grobs <- list()
   angle <- point_angle(x1, y1, x2, y2)
 
-  # Draw line (no pullback - arrow will overlay the end)
+  # Draw line from start to end (arrow overlays the end)
   grobs[[1]] <- grid::segmentsGrob(
     x0 = grid::unit(x1, "npc"),
     y0 = grid::unit(y1, "npc"),
@@ -169,10 +193,9 @@ draw_straight_edge <- function(x1, y1, x2, y2, color, width, lty,
     gp = grid::gpar(col = color, lwd = width, lty = lty)
   )
 
-  # Draw arrow at target if needed
-  if (show_arrow) {
+  # Draw arrow at target (tip at endpoint)
+  if (show_arrow && arrow_size > 0) {
     arrow_pts <- arrow_points(x2, y2, angle, arrow_size)
-
     grobs[[2]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts$x, "npc"),
       y = grid::unit(arrow_pts$y, "npc"),
@@ -180,11 +203,10 @@ draw_straight_edge <- function(x1, y1, x2, y2, color, width, lty,
     )
   }
 
-  # Draw arrow at source if bidirectional
-  if (bidirectional) {
+  # Draw arrow at source if bidirectional (tip at start point)
+  if (bidirectional && arrow_size > 0) {
     angle_back <- point_angle(x2, y2, x1, y1)
     arrow_pts_back <- arrow_points(x1, y1, angle_back, arrow_size)
-
     grobs[[length(grobs) + 1]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts_back$x, "npc"),
       y = grid::unit(arrow_pts_back$y, "npc"),
@@ -210,19 +232,17 @@ draw_curved_edge <- function(x1, y1, x2, y2, curvature, color, width, lty,
   pts <- bezier_points(x1, y1, ctrl$x, ctrl$y, x2, y2, n = 50)
   n <- nrow(pts)
 
-  # Draw curve as line segments (no truncation - arrows overlay ends)
+  # Draw curve (arrows overlay the ends)
   grobs[[1]] <- grid::linesGrob(
     x = grid::unit(pts$x, "npc"),
     y = grid::unit(pts$y, "npc"),
     gp = grid::gpar(col = color, lwd = width, lty = lty)
   )
 
-  # Draw arrow at target if needed
-  if (show_arrow) {
-    # Arrow angle based on last segment of curve
+  # Draw arrow at target (tip at curve end, angle follows curve direction)
+  if (show_arrow && arrow_size > 0) {
     angle <- point_angle(pts$x[n-1], pts$y[n-1], pts$x[n], pts$y[n])
     arrow_pts <- arrow_points(x2, y2, angle, arrow_size)
-
     grobs[[2]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts$x, "npc"),
       y = grid::unit(arrow_pts$y, "npc"),
@@ -231,11 +251,9 @@ draw_curved_edge <- function(x1, y1, x2, y2, curvature, color, width, lty,
   }
 
   # Draw arrow at source if bidirectional
-  if (bidirectional) {
-    # Arrow angle based on first segment of curve (pointing back)
+  if (bidirectional && arrow_size > 0) {
     angle_back <- point_angle(pts$x[2], pts$y[2], pts$x[1], pts$y[1])
     arrow_pts_back <- arrow_points(x1, y1, angle_back, arrow_size)
-
     grobs[[length(grobs) + 1]] <- grid::polygonGrob(
       x = grid::unit(arrow_pts_back$x, "npc"),
       y = grid::unit(arrow_pts_back$y, "npc"),
