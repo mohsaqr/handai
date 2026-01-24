@@ -84,21 +84,15 @@ if (curve_i > 0) {
 
 ## What Needs To Be Done
 
-### 1. HIGH PRIORITY: Inward Curve Direction Fix
+### 1. ~~HIGH PRIORITY: Inward Curve Direction Fix~~ DONE
 
-**Problem**: When `curves="force"` is used, single (non-reciprocal) edges should curve inward toward the network center. Currently, the direction is inconsistent.
+**Problem**: When `curves="force"` is used, single (non-reciprocal) edges should curve inward toward the network center. Previously, the direction was inconsistent.
 
-**Current Logic** (in `render_edges_base()`):
-- Calculate network center as mean of layout coordinates
-- Use cross product to determine which side of edge the center is on
-- Adjust curve sign accordingly
-
-**Issue**: The logic works for some edges but not all. The perpendicular vector calculation and/or cross product sign may need adjustment depending on edge orientation.
-
-**Suggested Fix**: Look at qgraph's `PerpMid()` function and how they handle aspect ratio correction. May need to:
-1. Account for plot aspect ratio in perpendicular calculation
-2. Use `atan2` with aspect-corrected coordinates
-3. Test with various layout types (circle, spring) to ensure consistency
+**Solution**: The issue was that `render_edges_splot()` in `splot.R` was not applying the inward curve logic that existed in `render_edges_base()`. Fixed by adding the same logic to `render_edges_splot()`:
+1. Calculate network center as mean of all node positions
+2. For each edge with positive curve value, use cross product to determine which side of the edge the center is on
+3. Adjust curve sign: positive (bend left) if center is to the left, negative (bend right) if center is to the right
+4. Negative curves (reciprocal edges curving outward) keep their original sign
 
 ### 2. HIGH PRIORITY: Resolution/DPI
 

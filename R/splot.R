@@ -570,6 +570,10 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
 
   n <- nrow(layout)
 
+  # Calculate network center for inward curve direction
+  center_x <- mean(layout[, 1])
+  center_y <- mean(layout[, 2])
+
   # Get render order (weakest to strongest)
   order_idx <- get_edge_order(edges)
 
@@ -613,11 +617,42 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
     start <- cent_to_edge(x1, y1, angle_to, node_sizes[from_idx], NULL, shapes[from_idx])
     end <- cent_to_edge(x2, y2, angle_from, node_sizes[to_idx], NULL, shapes[to_idx])
 
+    # Determine curve direction for inward bending
+    # Positive curve values should bend toward the network center
+    # Negative curve values (reciprocal edges) keep their direction (bend outward)
+    curve_i <- curve[i]
+    if (curve_i > 1e-6) {
+      # Calculate midpoint of edge
+      mid_x <- (start$x + end$x) / 2
+      mid_y <- (start$y + end$y) / 2
+
+      # Edge direction vector
+      dx <- end$x - start$x
+      dy <- end$y - start$y
+
+      # Vector from midpoint to network center
+      to_center_x <- center_x - mid_x
+      to_center_y <- center_y - mid_y
+
+      # Cross product determines which side of the edge the center is on
+      # Positive cross = center is to the left (counterclockwise from edge direction)
+      # Negative cross = center is to the right (clockwise from edge direction)
+      cross <- dx * to_center_y - dy * to_center_x
+
+      # Adjust curve sign to bend toward center
+      if (cross > 0) {
+        curve_i <- abs(curve_i)   # Positive = bend left toward center
+      } else {
+        curve_i <- -abs(curve_i)  # Negative = bend right toward center
+      }
+    }
+    # Negative curves (reciprocal edges curving outward) keep their sign
+
     # Draw edge
-    if (abs(curve[i]) > 1e-6) {
+    if (abs(curve_i) > 1e-6) {
       draw_curved_edge_base(
         start$x, start$y, end$x, end$y,
-        curve = curve[i],
+        curve = curve_i,
         curvePivot = curvePivot[i],
         col = edge.color[i],
         lwd = edge.width[i],
@@ -638,11 +673,11 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
       )
     }
 
-    # Store label position
+    # Store label position (use adjusted curve for correct position)
     label_positions[[i]] <- get_edge_label_position(
       start$x, start$y, end$x, end$y,
       position = edge.label.position,
-      curve = curve[i],
+      curve = curve_i,
       curvePivot = curvePivot[i]
     )
   }
