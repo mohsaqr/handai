@@ -73,6 +73,29 @@ NULL
 #' @param bidirectional Logical or vector: show arrows at both ends?
 #' @param loop_rotation Angle(s) in radians for self-loop direction.
 #'
+#' @section Edge CI Underlays:
+#' @param edge_ci Numeric vector of CI widths (0-1 scale). Larger values = more uncertainty.
+#' @param edge_ci_scale Width multiplier for underlay thickness. Default 2.
+#' @param edge_ci_alpha Transparency for underlay (0-1). Default 0.15.
+#' @param edge_ci_color Underlay color. NA (default) uses main edge color.
+#' @param edge_ci_style Line type for underlay: 1=solid, 2=dashed, 3=dotted. Default 2.
+#' @param edge_ci_arrows Logical: show arrows on underlay? Default FALSE.
+#'
+#' @section Edge Label Templates:
+#' @param edge_label_style Preset style: "none", "estimate", "full", "range", "stars".
+#' @param edge_label_template Template with placeholders: {est}, {range}, {low}, {up}, {p}, {stars}.
+#'   Overrides edge_label_style if provided.
+#' @param edge_label_digits Decimal places for estimates. Default 2.
+#' @param edge_label_oneline Logical: single line format? Default TRUE.
+#' @param edge_label_ci_format CI format: "bracket" for [low, up] or "dash" for low-up.
+#' @param edge_ci_lower Numeric vector of lower CI bounds for labels.
+#' @param edge_ci_upper Numeric vector of upper CI bounds for labels.
+#' @param edge_label_p Numeric vector of p-values for edges.
+#' @param edge_label_p_digits Decimal places for p-values. Default 3.
+#' @param edge_label_p_prefix Prefix for p-values. Default "p=".
+#' @param edge_label_stars Stars for labels: character vector, TRUE (compute from p),
+#'   or numeric (treated as p-values).
+#'
 #' @section Weight Handling:
 #' @param threshold Minimum absolute weight to display.
 #' @param maximum Maximum weight for scaling. NULL for auto.
@@ -184,6 +207,27 @@ splot <- function(
     show_arrows = TRUE,
     bidirectional = FALSE,
     loop_rotation = NULL,
+
+    # Edge CI Underlays
+    edge_ci = NULL,
+    edge_ci_scale = 2.0,
+    edge_ci_alpha = 0.15,
+    edge_ci_color = NA,
+    edge_ci_style = 2,
+    edge_ci_arrows = FALSE,
+
+    # Edge Label Templates
+    edge_label_style = "none",
+    edge_label_template = NULL,
+    edge_label_digits = 2,
+    edge_label_oneline = TRUE,
+    edge_label_ci_format = "bracket",
+    edge_ci_lower = NULL,
+    edge_ci_upper = NULL,
+    edge_label_p = NULL,
+    edge_label_p_digits = 3,
+    edge_label_p_prefix = "p=",
+    edge_label_stars = NULL,
 
     # Weight handling
     threshold = 0,
@@ -406,8 +450,40 @@ splot <- function(
     # Loop rotation
     loop_rotations <- resolve_loop_rotation(loop_rotation, edges, layout_mat)
 
-    # Edge labels
-    edge_labels_vec <- resolve_edge_labels(edge_labels, edges, n_edges)
+    # Edge labels - check for template system first
+    if (!is.null(edge_label_template) || edge_label_style != "none") {
+      # Use template-based labels
+      edge_weights <- if ("weight" %in% names(edges)) edges$weight else NULL
+      edge_labels_vec <- build_edge_labels_from_template(
+        template = edge_label_template,
+        style = edge_label_style,
+        weights = edge_weights,
+        ci_lower = edge_ci_lower,
+        ci_upper = edge_ci_upper,
+        p_values = edge_label_p,
+        stars = edge_label_stars,
+        digits = edge_label_digits,
+        p_digits = edge_label_p_digits,
+        p_prefix = edge_label_p_prefix,
+        ci_format = edge_label_ci_format,
+        oneline = edge_label_oneline,
+        n = n_edges
+      )
+    } else {
+      # Use standard edge labels
+      edge_labels_vec <- resolve_edge_labels(edge_labels, edges, n_edges)
+    }
+
+    # CI underlay parameters
+    edge_ci_vec <- if (!is.null(edge_ci)) recycle_to_length(edge_ci, n_edges) else NULL
+    edge_ci_colors <- if (!is.null(edge_ci_vec)) {
+      if (is.na(edge_ci_color)) {
+        # Use main edge colors
+        edge_colors
+      } else {
+        recycle_to_length(edge_ci_color, n_edges)
+      }
+    } else NULL
   }
 
   # ============================================
@@ -507,7 +583,14 @@ splot <- function(
       edge_label_color = edge_label_color,
       edge_label_bg = edge_label_bg,
       edge_label_position = edge_label_position,
-      edge_label_fontface = edge_label_fontface
+      edge_label_fontface = edge_label_fontface,
+      # CI underlay parameters
+      edge_ci = edge_ci_vec,
+      edge_ci_scale = edge_ci_scale,
+      edge_ci_alpha = edge_ci_alpha,
+      edge_ci_color = edge_ci_colors,
+      edge_ci_style = edge_ci_style,
+      edge_ci_arrows = edge_ci_arrows
     )
   }
 
@@ -584,7 +667,10 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
                                curve_shape, curve_pivot, show_arrows, arrow_size,
                                bidirectional, loop_rotation, edge_labels,
                                edge_label_size, edge_label_color, edge_label_bg,
-                               edge_label_position, edge_label_fontface) {
+                               edge_label_position, edge_label_fontface,
+                               edge_ci = NULL, edge_ci_scale = 2.0,
+                               edge_ci_alpha = 0.15, edge_ci_color = NULL,
+                               edge_ci_style = 2, edge_ci_arrows = FALSE) {
 
   m <- nrow(edges)
   if (m == 0) return(invisible())
@@ -601,6 +687,22 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
   # Storage for label positions
   label_positions <- vector("list", m)
 
+  # Helper function to calculate curve direction
+  calc_curve_direction <- function(curve_val, start_x, start_y, end_x, end_y) {
+    if (curve_val > 1e-6) {
+      mid_x <- (start_x + end_x) / 2
+      mid_y <- (start_y + end_y) / 2
+      dx <- end_x - start_x
+      dy <- end_y - start_y
+      to_center_x <- center_x - mid_x
+      to_center_y <- center_y - mid_y
+      cross <- dx * to_center_y - dy * to_center_x
+      if (cross > 0) abs(curve_val) else -abs(curve_val)
+    } else {
+      curve_val
+    }
+  }
+
   for (i in order_idx) {
     from_idx <- edges$from[i]
     to_idx <- edges$to[i]
@@ -612,6 +714,24 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
 
     # Self-loop
     if (from_idx == to_idx) {
+      # PASS 1: Draw CI underlay for self-loop (if edge_ci provided)
+      if (!is.null(edge_ci) && !is.na(edge_ci[i]) && edge_ci[i] > 0) {
+        underlay_width <- edge_width[i] * (1 + edge_ci[i] * edge_ci_scale)
+        underlay_col <- if (!is.null(edge_ci_color)) edge_ci_color[i] else edge_color[i]
+        underlay_col <- adjust_alpha(underlay_col, edge_ci_alpha)
+
+        draw_self_loop_base(
+          x1, y1, node_sizes[from_idx],
+          col = underlay_col,
+          lwd = underlay_width,
+          lty = edge_ci_style,
+          rotation = loop_rotation[i],
+          arrow = edge_ci_arrows,
+          asize = arrow_size[i]
+        )
+      }
+
+      # PASS 2: Draw main self-loop
       draw_self_loop_base(
         x1, y1, node_sizes[from_idx],
         col = edge_color[i],
@@ -639,37 +759,40 @@ render_edges_splot <- function(edges, layout, node_sizes, shapes,
     end <- cent_to_edge(x2, y2, angle_from, node_sizes[to_idx], NULL, shapes[to_idx])
 
     # Determine curve direction for inward bending
-    # Positive curve values should bend toward the network center
-    # Negative curve values (reciprocal edges) keep their direction (bend outward)
-    curve_i <- curvature[i]
-    if (curve_i > 1e-6) {
-      # Calculate midpoint of edge
-      mid_x <- (start$x + end$x) / 2
-      mid_y <- (start$y + end$y) / 2
+    curve_i <- calc_curve_direction(curvature[i], start$x, start$y, end$x, end$y)
 
-      # Edge direction vector
-      dx <- end$x - start$x
-      dy <- end$y - start$y
+    # PASS 1: Draw CI underlay (if edge_ci provided)
+    if (!is.null(edge_ci) && !is.na(edge_ci[i]) && edge_ci[i] > 0) {
+      underlay_width <- edge_width[i] * (1 + edge_ci[i] * edge_ci_scale)
+      underlay_col <- if (!is.null(edge_ci_color)) edge_ci_color[i] else edge_color[i]
+      underlay_col <- adjust_alpha(underlay_col, edge_ci_alpha)
 
-      # Vector from midpoint to network center
-      to_center_x <- center_x - mid_x
-      to_center_y <- center_y - mid_y
-
-      # Cross product determines which side of the edge the center is on
-      # Positive cross = center is to the left (counterclockwise from edge direction)
-      # Negative cross = center is to the right (clockwise from edge direction)
-      cross <- dx * to_center_y - dy * to_center_x
-
-      # Adjust curve sign to bend toward center
-      if (cross > 0) {
-        curve_i <- abs(curve_i)   # Positive = bend left toward center
+      if (abs(curve_i) > 1e-6) {
+        draw_curved_edge_base(
+          start$x, start$y, end$x, end$y,
+          curve = curve_i,
+          curvePivot = curve_pivot[i],
+          col = underlay_col,
+          lwd = underlay_width,
+          lty = edge_ci_style,
+          arrow = edge_ci_arrows,
+          asize = arrow_size[i],
+          bidirectional = FALSE
+        )
       } else {
-        curve_i <- -abs(curve_i)  # Negative = bend right toward center
+        draw_straight_edge_base(
+          start$x, start$y, end$x, end$y,
+          col = underlay_col,
+          lwd = underlay_width,
+          lty = edge_ci_style,
+          arrow = edge_ci_arrows,
+          asize = arrow_size[i],
+          bidirectional = FALSE
+        )
       }
     }
-    # Negative curves (reciprocal edges curving outward) keep their sign
 
-    # Draw edge
+    # PASS 2: Draw main edge
     if (abs(curve_i) > 1e-6) {
       draw_curved_edge_base(
         start$x, start$y, end$x, end$y,

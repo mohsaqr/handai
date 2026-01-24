@@ -146,6 +146,16 @@ render_edges_grid <- function(network) {
   x_scale <- min_dim / vp_width
   y_scale <- min_dim / vp_height
 
+  # CI underlay parameters
+  edge_ci <- if (!is.null(aes$ci)) recycle_to_length(aes$ci, m) else NULL
+  edge_ci_scale <- if (!is.null(aes$ci_scale)) aes$ci_scale else 2.0
+  edge_ci_alpha <- if (!is.null(aes$ci_alpha)) aes$ci_alpha else 0.15
+  edge_ci_color <- if (!is.null(aes$ci_color) && !is.na(aes$ci_color)) {
+    recycle_to_length(aes$ci_color, m)
+  } else NULL
+  edge_ci_style <- if (!is.null(aes$ci_style)) aes$ci_style else 2
+  edge_ci_arrows <- if (!is.null(aes$ci_arrows)) aes$ci_arrows else FALSE
+
   # Create edge grobs
   grobs <- list()
 
@@ -173,7 +183,20 @@ render_edges_grid <- function(network) {
 
     # Handle self-loops
     if (from_idx == to_idx) {
-      # Draw a small loop
+      # PASS 1: Draw CI underlay for self-loop (if edge_ci provided)
+      if (!is.null(edge_ci) && !is.na(edge_ci[i]) && edge_ci[i] > 0) {
+        underlay_width <- widths[i] * (1 + edge_ci[i] * edge_ci_scale)
+        underlay_col <- if (!is.null(edge_ci_color)) edge_ci_color[i] else colors[i]
+        underlay_col <- adjust_alpha(underlay_col, edge_ci_alpha)
+        underlay_lty <- edge_ci_style
+
+        grobs[[length(grobs) + 1]] <- draw_self_loop(
+          x1, y1, node_sizes[from_idx], underlay_col, underlay_width, underlay_lty,
+          rotation = loop_rotations[i]
+        )
+      }
+
+      # PASS 2: Draw main self-loop
       grobs[[length(grobs) + 1]] <- draw_self_loop(
         x1, y1, node_sizes[from_idx], edge_col, widths[i], lty,
         rotation = loop_rotations[i]
@@ -187,6 +210,32 @@ render_edges_grid <- function(network) {
     end_pt <- edge_endpoint(x2, y2, x1, y1, node_sizes[to_idx],
                             x_scale = x_scale, y_scale = y_scale)
 
+    # PASS 1: Draw CI underlay (if edge_ci provided)
+    if (!is.null(edge_ci) && !is.na(edge_ci[i]) && edge_ci[i] > 0) {
+      underlay_width <- widths[i] * (1 + edge_ci[i] * edge_ci_scale)
+      underlay_col <- if (!is.null(edge_ci_color)) edge_ci_color[i] else colors[i]
+      underlay_col <- adjust_alpha(underlay_col, edge_ci_alpha)
+      underlay_lty <- edge_ci_style
+
+      if (curvatures[i] != 0) {
+        grobs[[length(grobs) + 1]] <- draw_curved_edge(
+          start_pt$x, start_pt$y, end_pt$x, end_pt$y,
+          curvatures[i], underlay_col, underlay_width, underlay_lty,
+          edge_ci_arrows, arrow_size, FALSE,
+          curve_shapes[i], curve_pivots[i],
+          x_scale = x_scale, y_scale = y_scale
+        )
+      } else {
+        grobs[[length(grobs) + 1]] <- draw_straight_edge(
+          start_pt$x, start_pt$y, end_pt$x, end_pt$y,
+          underlay_col, underlay_width, underlay_lty, edge_ci_arrows, arrow_size,
+          FALSE,
+          x_scale = x_scale, y_scale = y_scale
+        )
+      }
+    }
+
+    # PASS 2: Draw main edge
     if (curvatures[i] != 0) {
       # Curved edge
       grobs[[length(grobs) + 1]] <- draw_curved_edge(
@@ -406,10 +455,40 @@ render_edge_labels_grid <- function(network) {
   theme <- network$get_theme()
 
   if (is.null(edges) || nrow(edges) == 0) return(grid::gList())
-  if (is.null(aes$labels)) return(grid::gList())
 
   m <- nrow(edges)
-  labels <- recycle_to_length(aes$labels, m)
+
+  # Check for template-based labels first
+  has_template <- !is.null(aes$label_template) ||
+                  (!is.null(aes$label_style) && aes$label_style != "none")
+
+  if (has_template) {
+    # Use template-based labels
+    edge_weights <- if ("weight" %in% names(edges)) edges$weight else NULL
+    labels <- build_edge_labels_from_template(
+      template = aes$label_template,
+      style = if (!is.null(aes$label_style)) aes$label_style else "none",
+      weights = edge_weights,
+      ci_lower = aes$ci_lower,
+      ci_upper = aes$ci_upper,
+      p_values = aes$label_p,
+      stars = aes$label_stars,
+      digits = if (!is.null(aes$label_digits)) aes$label_digits else 2,
+      p_digits = if (!is.null(aes$label_p_digits)) aes$label_p_digits else 3,
+      p_prefix = if (!is.null(aes$label_p_prefix)) aes$label_p_prefix else "p=",
+      ci_format = if (!is.null(aes$label_ci_format)) aes$label_ci_format else "bracket",
+      oneline = TRUE,
+      n = m
+    )
+  } else if (!is.null(aes$labels)) {
+    # Use standard labels
+    labels <- recycle_to_length(aes$labels, m)
+  } else {
+    return(grid::gList())
+  }
+
+  if (is.null(labels)) return(grid::gList())
+
   label_size <- if (!is.null(aes$label_size)) aes$label_size else 8
   label_color <- if (!is.null(aes$label_color)) aes$label_color else "gray30"
 

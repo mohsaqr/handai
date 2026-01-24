@@ -32,7 +32,23 @@ sn_edges(
   loop_rotation = NULL,
   curve_shape = NULL,
   curve_pivot = NULL,
-  curves = NULL
+  curves = NULL,
+  ci = NULL,
+  ci_scale = NULL,
+  ci_alpha = NULL,
+  ci_color = NULL,
+  ci_style = NULL,
+  ci_arrows = NULL,
+  ci_lower = NULL,
+  ci_upper = NULL,
+  label_style = NULL,
+  label_template = NULL,
+  label_digits = NULL,
+  label_ci_format = NULL,
+  label_p = NULL,
+  label_p_digits = NULL,
+  label_p_prefix = NULL,
+  label_stars = NULL
 )
 }
 \arguments{
@@ -96,6 +112,39 @@ values < 1 make them thinner. Applied after all other width calculations.}
 
 \item{curves}{Curve mode: FALSE (straight edges), "mutual" (only curve reciprocal pairs),
 or "force" (curve all edges). Default FALSE.}
+
+\item{ci}{Numeric vector of CI widths (0-1 scale). Larger values = more uncertainty.}
+
+\item{ci_scale}{Width multiplier for CI underlay thickness. Default 2.}
+
+\item{ci_alpha}{Transparency for CI underlay (0-1). Default 0.15.}
+
+\item{ci_color}{CI underlay color. NA (default) uses main edge color.}
+
+\item{ci_style}{Line type for CI underlay: 1=solid, 2=dashed, 3=dotted. Default 2.}
+
+\item{ci_arrows}{Logical: show arrows on CI underlay? Default FALSE.}
+
+\item{ci_lower}{Numeric vector of lower CI bounds for labels.}
+
+\item{ci_upper}{Numeric vector of upper CI bounds for labels.}
+
+\item{label_style}{Preset style: "none", "estimate", "full", "range", "stars".}
+
+\item{label_template}{Template with placeholders: {est}, {range}, {low}, {up}, {p}, {stars}.}
+
+\item{label_digits}{Decimal places for estimates in template. Default 2.}
+
+\item{label_ci_format}{CI format: "bracket" for \link{low, up} or "dash" for low-up.}
+
+\item{label_p}{Numeric vector of p-values for edges.}
+
+\item{label_p_digits}{Decimal places for p-values. Default 3.}
+
+\item{label_p_prefix}{Prefix for p-values. Default "p=".}
+
+\item{label_stars}{Stars for labels: character vector, TRUE (compute from p),
+or numeric (treated as p-values).}
 }
 \value{
 Modified sonnet_network object.

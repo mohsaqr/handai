@@ -49,6 +49,23 @@ splot(
   show_arrows = TRUE,
   bidirectional = FALSE,
   loop_rotation = NULL,
+  edge_ci = NULL,
+  edge_ci_scale = 2,
+  edge_ci_alpha = 0.15,
+  edge_ci_color = NA,
+  edge_ci_style = 2,
+  edge_ci_arrows = FALSE,
+  edge_label_style = "none",
+  edge_label_template = NULL,
+  edge_label_digits = 2,
+  edge_label_oneline = TRUE,
+  edge_label_ci_format = "bracket",
+  edge_ci_lower = NULL,
+  edge_ci_upper = NULL,
+  edge_label_p = NULL,
+  edge_label_p_digits = 3,
+  edge_label_p_prefix = "p=",
+  edge_label_stars = NULL,
   threshold = 0,
   maximum = NULL,
   positive_color = "#2E7D32",
@@ -178,6 +195,42 @@ curve as ellipse (two opposing curves); FALSE = all straight; "force" = all curv
 
 \item{loop_rotation}{Angle(s) in radians for self-loop direction.}
 
+\item{edge_ci}{Numeric vector of CI widths (0-1 scale). Larger values = more uncertainty.}
+
+\item{edge_ci_scale}{Width multiplier for underlay thickness. Default 2.}
+
+\item{edge_ci_alpha}{Transparency for underlay (0-1). Default 0.15.}
+
+\item{edge_ci_color}{Underlay color. NA (default) uses main edge color.}
+
+\item{edge_ci_style}{Line type for underlay: 1=solid, 2=dashed, 3=dotted. Default 2.}
+
+\item{edge_ci_arrows}{Logical: show arrows on underlay? Default FALSE.}
+
+\item{edge_label_style}{Preset style: "none", "estimate", "full", "range", "stars".}
+
+\item{edge_label_template}{Template with placeholders: {est}, {range}, {low}, {up}, {p}, {stars}.
+Overrides edge_label_style if provided.}
+
+\item{edge_label_digits}{Decimal places for estimates. Default 2.}
+
+\item{edge_label_oneline}{Logical: single line format? Default TRUE.}
+
+\item{edge_label_ci_format}{CI format: "bracket" for \link{low, up} or "dash" for low-up.}
+
+\item{edge_ci_lower}{Numeric vector of lower CI bounds for labels.}
+
+\item{edge_ci_upper}{Numeric vector of upper CI bounds for labels.}
+
+\item{edge_label_p}{Numeric vector of p-values for edges.}
+
+\item{edge_label_p_digits}{Decimal places for p-values. Default 3.}
+
+\item{edge_label_p_prefix}{Prefix for p-values. Default "p=".}
+
+\item{edge_label_stars}{Stars for labels: character vector, TRUE (compute from p),
+or numeric (treated as p-values).}
+
 \item{threshold}{Minimum absolute weight to display.}
 
 \item{maximum}{Maximum weight for scaling. NULL for auto.}
@@ -246,6 +299,14 @@ as soplot() for consistency.
 }
 
 \section{Edge Aesthetics}{
+
+}
+
+\section{Edge CI Underlays}{
+
+}
+
+\section{Edge Label Templates}{
 
 }
 

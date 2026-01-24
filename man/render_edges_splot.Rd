@@ -24,7 +24,13 @@ render_edges_splot(
   edge_label_color,
   edge_label_bg,
   edge_label_position,
-  edge_label_fontface
+  edge_label_fontface,
+  edge_ci = NULL,
+  edge_ci_scale = 2,
+  edge_ci_alpha = 0.15,
+  edge_ci_color = NULL,
+  edge_ci_style = 2,
+  edge_ci_arrows = FALSE
 )
 }
 \description{

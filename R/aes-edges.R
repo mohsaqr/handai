@@ -40,6 +40,23 @@ NULL
 #' @param curve_pivot Pivot position along edge for curve control point (0-1, default: 0.5).
 #' @param curves Curve mode: FALSE (straight edges), "mutual" (only curve reciprocal pairs),
 #'   or "force" (curve all edges). Default FALSE.
+#' @param ci Numeric vector of CI widths (0-1 scale). Larger values = more uncertainty.
+#' @param ci_scale Width multiplier for CI underlay thickness. Default 2.
+#' @param ci_alpha Transparency for CI underlay (0-1). Default 0.15.
+#' @param ci_color CI underlay color. NA (default) uses main edge color.
+#' @param ci_style Line type for CI underlay: 1=solid, 2=dashed, 3=dotted. Default 2.
+#' @param ci_arrows Logical: show arrows on CI underlay? Default FALSE.
+#' @param ci_lower Numeric vector of lower CI bounds for labels.
+#' @param ci_upper Numeric vector of upper CI bounds for labels.
+#' @param label_style Preset style: "none", "estimate", "full", "range", "stars".
+#' @param label_template Template with placeholders: {est}, {range}, {low}, {up}, {p}, {stars}.
+#' @param label_digits Decimal places for estimates in template. Default 2.
+#' @param label_ci_format CI format: "bracket" for [low, up] or "dash" for low-up.
+#' @param label_p Numeric vector of p-values for edges.
+#' @param label_p_digits Decimal places for p-values. Default 3.
+#' @param label_p_prefix Prefix for p-values. Default "p=".
+#' @param label_stars Stars for labels: character vector, TRUE (compute from p),
+#'   or numeric (treated as p-values).
 #' @return Modified sonnet_network object.
 #' @export
 #'
@@ -78,7 +95,25 @@ sn_edges <- function(network,
                      loop_rotation = NULL,
                      curve_shape = NULL,
                      curve_pivot = NULL,
-                     curves = NULL) {
+                     curves = NULL,
+                     # CI underlay parameters
+                     ci = NULL,
+                     ci_scale = NULL,
+                     ci_alpha = NULL,
+                     ci_color = NULL,
+                     ci_style = NULL,
+                     ci_arrows = NULL,
+                     # Label template parameters
+                     ci_lower = NULL,
+                     ci_upper = NULL,
+                     label_style = NULL,
+                     label_template = NULL,
+                     label_digits = NULL,
+                     label_ci_format = NULL,
+                     label_p = NULL,
+                     label_p_digits = NULL,
+                     label_p_prefix = NULL,
+                     label_stars = NULL) {
 
   # Auto-convert matrix/data.frame/igraph to sonnet_network
   network <- ensure_sonnet_network(network)
@@ -241,6 +276,83 @@ sn_edges <- function(network,
       stop("curves must be FALSE, 'mutual', or 'force'", call. = FALSE)
     }
     aes$curves <- curves
+  }
+
+  # CI underlay parameters
+  if (!is.null(ci)) {
+    aes$ci <- resolve_aesthetic(ci, edges_df, m)
+  }
+
+  if (!is.null(ci_scale)) {
+    aes$ci_scale <- ci_scale
+  }
+
+  if (!is.null(ci_alpha)) {
+    validate_range(ci_alpha, 0, 1, "ci_alpha")
+    aes$ci_alpha <- ci_alpha
+  }
+
+  if (!is.null(ci_color)) {
+    aes$ci_color <- ci_color
+  }
+
+  if (!is.null(ci_style)) {
+    aes$ci_style <- ci_style
+  }
+
+  if (!is.null(ci_arrows)) {
+    aes$ci_arrows <- ci_arrows
+  }
+
+  # Label template parameters
+  if (!is.null(ci_lower)) {
+    aes$ci_lower <- resolve_aesthetic(ci_lower, edges_df, m)
+  }
+
+  if (!is.null(ci_upper)) {
+    aes$ci_upper <- resolve_aesthetic(ci_upper, edges_df, m)
+  }
+
+  if (!is.null(label_style)) {
+    valid_styles <- c("none", "estimate", "full", "range", "stars")
+    if (!label_style %in% valid_styles) {
+      stop("label_style must be one of: ", paste(valid_styles, collapse = ", "),
+           call. = FALSE)
+    }
+    aes$label_style <- label_style
+  }
+
+  if (!is.null(label_template)) {
+    aes$label_template <- label_template
+  }
+
+  if (!is.null(label_digits)) {
+    aes$label_digits <- label_digits
+  }
+
+  if (!is.null(label_ci_format)) {
+    valid_formats <- c("bracket", "dash")
+    if (!label_ci_format %in% valid_formats) {
+      stop("label_ci_format must be one of: ", paste(valid_formats, collapse = ", "),
+           call. = FALSE)
+    }
+    aes$label_ci_format <- label_ci_format
+  }
+
+  if (!is.null(label_p)) {
+    aes$label_p <- resolve_aesthetic(label_p, edges_df, m)
+  }
+
+  if (!is.null(label_p_digits)) {
+    aes$label_p_digits <- label_p_digits
+  }
+
+  if (!is.null(label_p_prefix)) {
+    aes$label_p_prefix <- label_p_prefix
+  }
+
+  if (!is.null(label_stars)) {
+    aes$label_stars <- label_stars
   }
 
   # Apply aesthetics

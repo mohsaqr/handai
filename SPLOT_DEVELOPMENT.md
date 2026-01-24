@@ -42,6 +42,7 @@
 | `R/splot-geometry.R` | Coordinate transforms, `cent_to_edge()` |
 | `R/splot-params.R` | Parameter vectorization helpers |
 | `R/splot-polygons.R` | Shape vertex definitions |
+| `R/splot-labels.R` | Edge label template formatting helpers |
 | `inst/examples/splot_tests.Rmd` | Test networks (7-15 nodes) |
 
 ### Features Implemented
@@ -51,7 +52,9 @@
 - Donut chart nodes
 - Curved edges with xspline()
 - Self-loops (circular arc style)
-- Edge labels
+- Edge labels (basic and template-based)
+- Edge CI underlays (uncertainty visualization)
+- Enhanced edge labels with templates ({est}, {range}, {p}, {stars})
 - Node labels
 - Weighted edge widths and colors (positive/negative)
 - Arrow heads
@@ -179,7 +182,109 @@ New parameters added to `splot()`:
 
 Now both functions use identical parameter names for the same features.
 
-### 6. LOW PRIORITY: Performance Optimization
+### 6. ~~HIGH PRIORITY: Edge CI Underlays~~ DONE
+
+**Problem**: Users need to visualize uncertainty in edge weights (e.g., confidence intervals from statistical models).
+
+**Solution**: Added CI underlay feature that draws each edge twice:
+1. **Underlay (first pass)**: thicker, dashed, semi-transparent "halo" representing uncertainty
+2. **Main edge (second pass)**: normal rendering on top
+
+New parameters for `splot()`:
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `edge_ci` | numeric | NULL | CI width values (0-1 scale, bigger = more uncertainty) |
+| `edge_ci_scale` | numeric | 2.0 | Width multiplier for underlay thickness |
+| `edge_ci_alpha` | numeric | 0.15 | Transparency for underlay (0-1) |
+| `edge_ci_color` | character | NA | Underlay color (NA = use main edge color) |
+| `edge_ci_style` | numeric | 2 | Line type: 1=solid, 2=dashed, 3=dotted |
+| `edge_ci_arrows` | logical | FALSE | Show arrows on underlay? |
+
+For `soplot()`, these are available via `sn_edges()` as: `ci`, `ci_scale`, `ci_alpha`, `ci_color`, `ci_style`, `ci_arrows`.
+
+Example:
+```r
+mat <- matrix(c(0, 0.5, 0.3, 0.8, 0, 0.6, 0.4, 0.7, 0), 3, 3, byrow=TRUE)
+ci_vals <- c(0.2, 0.5, 0.1, 0.3, 0.4, 0.2)
+
+splot(mat,
+  edge_ci = ci_vals,
+  edge_ci_scale = 2,
+  edge_ci_alpha = 0.15,
+  edge_ci_color = "red3",
+  edge_ci_style = 2
+)
+```
+
+### 7. ~~HIGH PRIORITY: Enhanced Edge Labels~~ DONE
+
+**Problem**: Edge labels needed to display statistical information like estimates, confidence intervals, p-values, and significance stars in customizable formats.
+
+**Solution**: Added a template-based label system with preset styles and custom templates.
+
+**Style Presets:**
+| Style | Template | Example Output |
+|-------|----------|----------------|
+| `"none"` | (no labels) | |
+| `"estimate"` | `"{est}"` | `0.45` |
+| `"full"` | `"{est} {range}"` | `0.45 [0.32, 0.58]` |
+| `"range"` | `"{range}"` | `[0.32, 0.58]` |
+| `"stars"` | `"{stars}"` | `**` |
+
+**Template Placeholders:**
+| Placeholder | Source | Example |
+|-------------|--------|---------|
+| `{est}` | edge weight | `0.45` |
+| `{range}` | ci_lower + ci_upper | `[0.32, 0.58]` |
+| `{low}` | ci_lower | `0.32` |
+| `{up}` | ci_upper | `0.58` |
+| `{p}` | p-value | `p=0.012` |
+| `{stars}` | significance stars | `**` |
+
+New parameters for `splot()`:
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `edge_label_style` | character | "none" | Preset: "none", "estimate", "full", "range", "stars" |
+| `edge_label_template` | character | NULL | Custom template (overrides style) |
+| `edge_label_digits` | numeric | 2 | Decimal places for estimates |
+| `edge_label_oneline` | logical | TRUE | Single line format |
+| `edge_label_ci_format` | character | "bracket" | CI format: "bracket" or "dash" |
+| `edge_ci_lower` | numeric | NULL | Lower CI bounds |
+| `edge_ci_upper` | numeric | NULL | Upper CI bounds |
+| `edge_label_p` | numeric | NULL | P-values |
+| `edge_label_p_digits` | numeric | 3 | Decimal places for p-values |
+| `edge_label_p_prefix` | character | "p=" | Prefix for p-values |
+| `edge_label_stars` | * | NULL | Stars: character, logical, or numeric p-values |
+
+Stars conversion from p-values:
+- p < 0.001 → `***`
+- p < 0.01 → `**`
+- p < 0.05 → `*`
+- otherwise → (empty)
+
+For `soplot()`, these are available via `sn_edges()` as: `label_style`, `label_template`, `label_digits`, `label_ci_format`, `ci_lower`, `ci_upper`, `label_p`, `label_p_digits`, `label_p_prefix`, `label_stars`.
+
+Example:
+```r
+mat <- matrix(c(0, 0.5, 0.3, 0.8, 0, 0.6, 0.4, 0.7, 0), 3, 3, byrow=TRUE)
+
+# Template with estimate and stars
+splot(mat,
+  edge_label_template = "{est}{stars}",
+  edge_label_p = c(0.001, 0.02, 0.5, 0.008, 0.04, 0.001),
+  edge_label_digits = 2
+)
+
+# Full labels with CI
+splot(mat,
+  edge_label_template = "{est} {range} {p}{stars}",
+  edge_ci_lower = c(0.3, 0.1, 0.5, 0.2, 0.4, 0.1),
+  edge_ci_upper = c(0.7, 0.5, 0.9, 0.6, 0.8, 0.5),
+  edge_label_p = c(0.001, 0.02, 0.5, 0.008, 0.04, 0.001)
+)
+```
+
+### 8. LOW PRIORITY: Performance Optimization
 
 For very large networks (>500 nodes), consider:
 - Batch drawing of similar elements
