@@ -1,3 +1,4 @@
 #!/bin/bash
-# Start Handai
-streamlit run handai_app.py "$@"
+# Start Handai v4.0
+cd "$(dirname "$0")"
+streamlit run app.py "$@"
