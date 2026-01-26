@@ -23,7 +23,7 @@ def render():
     register_default_tools()
 
     st.title("Generate Data")
-    st.caption("Generate new synthetic datasets using AI")
+    st.markdown("Create synthetic datasets with AI-powered generation. Describe what you need and let AI build it for you.")
 
     # Sidebar settings
     with st.sidebar:
@@ -87,13 +87,14 @@ def render():
     # Show error if config is invalid
     if not config.is_valid and config.error_message:
         if "Please describe" in config.error_message:
-            # Expected state, not an error
-            pass
+            st.info("Describe the data you want to generate to get started.")
+        elif "Please define column" in config.error_message:
+            st.info("Next: Define column names for your tabular output.")
         else:
             st.error(config.error_message)
 
     # Execute buttons
-    st.header("2. Generate")
+    st.divider()
 
     num_rows = config.config_data.get("num_rows", 100) if config.config_data else 100
 

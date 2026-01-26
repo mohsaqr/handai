@@ -21,6 +21,23 @@ from ui.state import (
 from config import VARIATION_TEMPS, TYPE_MAP
 
 
+# Output format descriptions
+OUTPUT_FORMATS = {
+    "Tabular (CSV)": {
+        "description": "Structured rows and columns - best for spreadsheets and data analysis",
+        "recommended": True
+    },
+    "JSON": {
+        "description": "Structured key-value pairs - best for APIs and programming",
+        "recommended": False
+    },
+    "Free Text": {
+        "description": "Unstructured text - best for creative content and narratives",
+        "recommended": False
+    }
+}
+
+
 class GenerateTool(BaseTool):
     """Tool for generating new synthetic datasets with AI"""
 
@@ -36,66 +53,94 @@ class GenerateTool(BaseTool):
     def render_config(self) -> ToolConfig:
         """Render generate tool configuration UI"""
 
-        st.header("1. Describe Your Dataset")
-
         # Initialize session state for dynamic fields
         if "custom_fields" not in st.session_state:
             st.session_state.custom_fields = []
-        if "gen_variables" not in st.session_state:
-            st.session_state.gen_variables = []
 
-        # Free-form description
+        # Section 1: Prompt (Primary Input - First)
+        st.subheader("What would you like to generate?")
         generation_prompt = st.text_area(
-            "What kind of data do you want to generate?",
+            "Describe your data",
             height=120,
-            placeholder="Example: Generate realistic customer profiles with names, emails, purchase history...",
+            placeholder="Example: Generate realistic customer profiles including full names, email addresses, and purchase history...",
             key="generate_prompt",
-            help="Just describe what you need - the AI will figure out the structure."
+            help="Describe the data you need. Be specific about the content and any constraints.",
+            label_visibility="collapsed"
         )
 
-        # Generation settings inline
-        col1, col2, col3 = st.columns(3)
-        with col1:
+        st.divider()
+
+        # Section 2: Output Format + Structure (Side by Side)
+        col_format, col_structure = st.columns(2)
+
+        with col_format:
+            st.markdown("**Output Format**")
+            output_format = st.radio(
+                "Output Format",
+                list(OUTPUT_FORMATS.keys()),
+                index=0,  # Tabular is default
+                key="gen_output_format",
+                help="Choose how your generated data should be structured",
+                label_visibility="collapsed"
+            )
+            # Show format description
+            format_info = OUTPUT_FORMATS[output_format]
+            st.caption(format_info['description'])
+
+        with col_structure:
+            st.markdown("**Structure**")
+            if output_format == "Free Text":
+                st.info("Free text mode - AI generates unstructured content.")
+                schema_mode = "Let AI decide"
+            else:
+                schema_mode = st.radio(
+                    "Structure",
+                    ["Let AI decide", "Define columns", "Use Template"],
+                    key="gen_schema_mode",
+                    label_visibility="collapsed"
+                )
+
+        # Structure details (conditional on schema_mode)
+        schema = {}
+        use_freeform = False
+        csv_columns = ""
+
+        if output_format == "Free Text" or schema_mode == "Let AI decide":
+            use_freeform = True
+        elif schema_mode == "Define columns":
+            if output_format == "Tabular (CSV)":
+                csv_columns = self._render_column_input()
+                if csv_columns:
+                    schema = {col.strip(): "string" for col in csv_columns.split(",")}
+            else:
+                schema = self._render_schema_builder()
+        elif schema_mode == "Use Template":
+            schema = self._render_template_selector()
+            if schema and output_format == "Tabular (CSV)":
+                csv_columns = ",".join(schema.keys())
+
+        st.divider()
+
+        # Section 3: Generation Settings
+        st.subheader("Generation Settings")
+        col_rows, col_variation = st.columns(2)
+
+        with col_rows:
             num_rows = st.number_input("Rows to Generate", 1, 10000, 100, key="gen_num_rows")
-        with col2:
+
+        with col_variation:
             variation_level = st.select_slider(
-                "Variation",
+                "Variation Level",
                 options=["Low", "Medium", "High", "Maximum"],
                 value="Medium",
-                key="gen_variation"
-            )
-        with col3:
-            output_format = st.selectbox(
-                "Output Format",
-                ["Auto-detect", "Structured JSON", "Free text"],
-                key="gen_output_format"
+                key="gen_variation",
+                help="Higher variation produces more diverse outputs"
             )
 
         gen_temperature = VARIATION_TEMPS[variation_level]
 
-        # Schema mode selection
-        schema_mode = st.radio(
-            "Schema Definition",
-            ["Free-form (AI decides structure)", "Custom Fields (I'll define)", "Use Template"],
-            horizontal=True,
-            key="gen_schema_mode"
-        )
-
-        schema = {}
-        use_freeform = False
-
-        if schema_mode == "Free-form (AI decides structure)":
-            use_freeform = True
-            st.info("The AI will determine the best structure based on your description above.")
-
-        elif schema_mode == "Custom Fields (I'll define)":
-            schema = self._render_schema_builder()
-
-        else:  # Use Template
-            schema = self._render_template_selector()
-
-        # Variables section
-        variables = self._render_variables_section()
+        # Variables disabled - pass empty dict
+        variables = {}
 
         # Validate
         if not generation_prompt or not generation_prompt.strip():
@@ -104,8 +149,26 @@ class GenerateTool(BaseTool):
                 error_message="Please describe what data you want to generate",
                 config_data={
                     "num_rows": num_rows,
+                    "output_format": output_format,
                     "schema": schema,
                     "use_freeform": use_freeform,
+                    "csv_columns": csv_columns,
+                    "variables": variables
+                }
+            )
+
+        # For tabular format with defined columns, validate columns exist
+        if output_format == "Tabular (CSV)" and not use_freeform and not csv_columns:
+            return ToolConfig(
+                is_valid=False,
+                error_message="Please define column names for tabular output",
+                config_data={
+                    "generation_prompt": generation_prompt,
+                    "num_rows": num_rows,
+                    "output_format": output_format,
+                    "schema": schema,
+                    "use_freeform": use_freeform,
+                    "csv_columns": csv_columns,
                     "variables": variables
                 }
             )
@@ -122,8 +185,10 @@ class GenerateTool(BaseTool):
                 config_data={
                     "generation_prompt": generation_prompt,
                     "num_rows": num_rows,
+                    "output_format": output_format,
                     "schema": schema,
                     "use_freeform": use_freeform,
+                    "csv_columns": csv_columns,
                     "variables": variables
                 }
             )
@@ -132,8 +197,10 @@ class GenerateTool(BaseTool):
         config_data = {
             "generation_prompt": generation_prompt,
             "num_rows": num_rows,
+            "output_format": output_format,
             "schema": schema,
             "use_freeform": use_freeform,
+            "csv_columns": csv_columns,
             "variables": variables,
             "gen_temperature": gen_temperature,
             "provider": provider,
@@ -147,6 +214,20 @@ class GenerateTool(BaseTool):
         }
 
         return ToolConfig(is_valid=True, config_data=config_data)
+
+    def _render_column_input(self) -> str:
+        """Render simple column input for tabular format"""
+        st.write("**Define Columns:**")
+        csv_columns = st.text_input(
+            "Column Names (comma-separated)",
+            placeholder="name, email, age, city, purchase_amount",
+            key="gen_csv_columns",
+            help="Enter the column headers for your tabular data"
+        )
+        if csv_columns:
+            cols = [c.strip() for c in csv_columns.split(",") if c.strip()]
+            st.info(f"Columns: `{', '.join(cols)}`")
+        return csv_columns
 
     def _render_schema_builder(self) -> Dict[str, str]:
         """Render the custom schema builder UI"""
@@ -217,45 +298,6 @@ class GenerateTool(BaseTool):
 
         return schema
 
-    def _render_variables_section(self) -> Dict[str, List[str]]:
-        """Render the variables section UI"""
-        variables = {}
-
-        with st.expander("Variables - Cycle Through Values"):
-            st.caption("Define values to cycle through for each row")
-
-            with st.form("add_var_form", clear_on_submit=True):
-                vc1, vc2, vc3 = st.columns([1, 3, 1])
-                with vc1:
-                    new_var_name = st.text_input("Variable", placeholder="topic")
-                with vc2:
-                    new_var_values = st.text_input("Values (comma-separated)", placeholder="sports, tech, health")
-                with vc3:
-                    st.write("")
-                    add_var = st.form_submit_button("Add", use_container_width=True)
-
-                if add_var and new_var_name and new_var_values:
-                    st.session_state.gen_variables.append({
-                        "name": new_var_name,
-                        "values": [v.strip() for v in new_var_values.split(",")]
-                    })
-                    st.rerun()
-
-            if st.session_state.gen_variables:
-                for idx, var in enumerate(st.session_state.gen_variables):
-                    vc1, vc2, vc3 = st.columns([1, 3, 1])
-                    with vc1:
-                        st.text(f"{{{var['name']}}}")
-                    with vc2:
-                        st.text(", ".join(var["values"]))
-                    with vc3:
-                        if st.button("Remove", key=f"del_var_{idx}"):
-                            st.session_state.gen_variables.pop(idx)
-                            st.rerun()
-                    variables[var["name"]] = var["values"]
-
-        return variables
-
     async def execute(
         self,
         config: Dict[str, Any],
@@ -324,7 +366,9 @@ class GenerateTool(BaseTool):
                 config["schema"],
                 config["variables"],
                 config["use_freeform"],
-                progress_callback
+                progress_callback,
+                output_format=config.get("output_format", "JSON"),
+                csv_columns=config.get("csv_columns", "")
             )
 
             # Update run status

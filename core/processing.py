@@ -234,6 +234,50 @@ class GenerateProcessor:
         self.session_id = session_id
         self.db = get_db()
 
+    def _parse_csv_row(self, output: str, csv_columns: str) -> Dict[str, Any]:
+        """
+        Parse a CSV row output into a dictionary.
+
+        Args:
+            output: Raw CSV output from LLM
+            csv_columns: Comma-separated column names
+
+        Returns:
+            Dictionary mapping column names to values
+        """
+        # Clean the output
+        text = output.strip()
+
+        # Remove markdown code blocks if present
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+            text = text.strip()
+
+        # Parse column names
+        if csv_columns:
+            col_list = [c.strip() for c in csv_columns.split(",")]
+        else:
+            col_list = []
+
+        # Parse the CSV row
+        try:
+            reader = csv.reader(StringIO(text))
+            for row in reader:
+                if row:  # Take the first non-empty row
+                    result = {}
+                    for i, val in enumerate(row):
+                        if i < len(col_list):
+                            result[col_list[i]] = val.strip().strip('"')
+                        else:
+                            result[f"column_{i+1}"] = val.strip().strip('"')
+                    return result
+        except Exception:
+            pass
+
+        # Fallback: return raw output
+        return {"raw_output": text}
+
     async def generate(
         self,
         count: int,
@@ -241,7 +285,9 @@ class GenerateProcessor:
         schema: Dict[str, str],
         variables: Dict[str, List[str]],
         use_freeform: bool = False,
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        output_format: str = "JSON",
+        csv_columns: str = ""
     ) -> ProcessingResult:
         """
         Generate new dataset rows.
@@ -253,6 +299,8 @@ class GenerateProcessor:
             variables: Variables to cycle through
             use_freeform: If True, let AI determine structure
             progress_callback: Optional callback for progress updates
+            output_format: Output format - "Tabular (CSV)", "JSON", or "Free Text"
+            csv_columns: Comma-separated column names for tabular format
 
         Returns:
             ProcessingResult with statistics and generated data
@@ -265,8 +313,61 @@ class GenerateProcessor:
             http_client
         )
 
-        # Build system prompt
-        if use_freeform:
+        # Build system prompt based on output format
+        is_tabular = output_format == "Tabular (CSV)"
+        is_freetext = output_format == "Free Text"
+
+        if is_tabular:
+            # Tabular/CSV format - strict prompting
+            if csv_columns:
+                columns_list = [c.strip() for c in csv_columns.split(",")]
+                columns_display = ", ".join(columns_list)
+                system_prompt = f"""You are a tabular data generator. Generate realistic data in STRICT CSV format.
+
+COLUMNS: {columns_display}
+
+CRITICAL RULES - FOLLOW EXACTLY:
+1. Output ONLY a single CSV row - NO headers, NO markdown, NO code blocks, NO explanations
+2. Use exactly {len(columns_list)} comma-separated values in this order: {columns_display}
+3. Wrap ALL text values in double quotes ""
+4. If a value contains a comma, it MUST be wrapped in double quotes
+5. Each response must be unique and realistic
+6. Do NOT output multiple rows - just ONE row per request
+7. Do NOT include column headers - just the data values
+8. Do NOT add any text before or after the CSV row
+
+EXAMPLE OUTPUT FORMAT:
+"John Smith","john@email.com","32","New York","150.00"
+
+Generate diverse, realistic data that varies naturally."""
+            else:
+                # Freeform tabular - AI decides columns
+                system_prompt = """You are a tabular data generator. Generate realistic data in STRICT CSV format.
+
+CRITICAL RULES - FOLLOW EXACTLY:
+1. Output ONLY a single CSV row - NO headers, NO markdown, NO code blocks, NO explanations
+2. Determine appropriate columns based on the user's description
+3. Wrap ALL text values in double quotes ""
+4. If a value contains a comma, it MUST be wrapped in double quotes
+5. Each response must be unique and realistic
+6. Do NOT output multiple rows - just ONE row per request
+7. Do NOT include column headers - just the data values
+8. Do NOT add any text before or after the CSV row
+9. Keep the same column structure across all rows
+
+Generate diverse, realistic data that varies naturally."""
+
+        elif is_freetext:
+            system_prompt = """You are a content generator. Based on the user's description, generate realistic, diverse content.
+
+CRITICAL RULES:
+1. Generate natural, flowing text based on the description
+2. Each response should be unique and realistic
+3. Vary the content, style, and details naturally
+4. Do not include any meta-commentary or explanations
+5. Just output the requested content directly"""
+
+        elif use_freeform:
             system_prompt = """You are a synthetic data generator. Based on the user's description, generate realistic, diverse data.
 
 CRITICAL RULES:
@@ -288,8 +389,8 @@ CRITICAL RULES:
 3. Vary the content naturally
 4. Do not include any explanation, just the JSON object"""
 
-        # Determine if JSON mode is supported
-        effective_json_mode = supports_json_mode(self.config.provider, self.config.model)
+        # Determine if JSON mode is supported (not for tabular or freetext)
+        effective_json_mode = not is_tabular and not is_freetext and supports_json_mode(self.config.provider, self.config.model)
 
         semaphore = asyncio.Semaphore(self.config.max_concurrency)
         results = []
@@ -334,9 +435,10 @@ CRITICAL RULES:
                     )
                     return row_idx, {"error": error_info.message}, round(duration, 3), False, result
 
-                # Parse JSON
-                try:
-                    parsed = json.loads(output)
+                # Parse output based on format
+                if is_tabular:
+                    # Parse CSV output
+                    parsed = self._parse_csv_row(output, csv_columns)
                     result = RunResult.create(
                         run_id=self.run_id,
                         row_index=row_idx,
@@ -347,38 +449,67 @@ CRITICAL RULES:
                         retry_attempt=attempts
                     )
                     return row_idx, parsed, round(duration, 3), True, result
-                except json.JSONDecodeError:
-                    # Try to extract JSON from response
-                    import re
-                    json_match = re.search(r'\{(?:[^{}]|\{[^{}]*\})*\}', output, re.DOTALL)
-                    if json_match:
-                        try:
-                            parsed = json.loads(json_match.group())
-                            result = RunResult.create(
-                                run_id=self.run_id,
-                                row_index=row_idx,
-                                input_data=prompt,
-                                output=json_match.group(),
-                                status=ResultStatus.SUCCESS,
-                                latency=duration,
-                                retry_attempt=attempts
-                            )
-                            return row_idx, parsed, round(duration, 3), True, result
-                        except:
-                            pass
 
+                elif is_freetext:
+                    # Free text - just return the output as-is
+                    parsed = {"text": output.strip()}
                     result = RunResult.create(
                         run_id=self.run_id,
                         row_index=row_idx,
                         input_data=prompt,
                         output=output,
-                        status=ResultStatus.ERROR,
+                        status=ResultStatus.SUCCESS,
                         latency=duration,
-                        error_type="json_parse_error",
-                        error_message="Could not parse JSON from response",
                         retry_attempt=attempts
                     )
-                    return row_idx, {"raw_output": output}, round(duration, 3), False, result
+                    return row_idx, parsed, round(duration, 3), True, result
+
+                else:
+                    # Parse JSON
+                    try:
+                        parsed = json.loads(output)
+                        result = RunResult.create(
+                            run_id=self.run_id,
+                            row_index=row_idx,
+                            input_data=prompt,
+                            output=output,
+                            status=ResultStatus.SUCCESS,
+                            latency=duration,
+                            retry_attempt=attempts
+                        )
+                        return row_idx, parsed, round(duration, 3), True, result
+                    except json.JSONDecodeError:
+                        # Try to extract JSON from response
+                        import re
+                        json_match = re.search(r'\{(?:[^{}]|\{[^{}]*\})*\}', output, re.DOTALL)
+                        if json_match:
+                            try:
+                                parsed = json.loads(json_match.group())
+                                result = RunResult.create(
+                                    run_id=self.run_id,
+                                    row_index=row_idx,
+                                    input_data=prompt,
+                                    output=json_match.group(),
+                                    status=ResultStatus.SUCCESS,
+                                    latency=duration,
+                                    retry_attempt=attempts
+                                )
+                                return row_idx, parsed, round(duration, 3), True, result
+                            except:
+                                pass
+
+                        result = RunResult.create(
+                            run_id=self.run_id,
+                            row_index=row_idx,
+                            input_data=prompt,
+                            output=output,
+                            status=ResultStatus.ERROR,
+                            latency=duration,
+                            error_type="json_parse_error",
+                            error_message="Could not parse JSON from response",
+                            retry_attempt=attempts
+                        )
+                        return row_idx, {"raw_output": output}, round(duration, 3), False, result
 
         # Create tasks
         tasks = [generate_row(i) for i in range(count)]
