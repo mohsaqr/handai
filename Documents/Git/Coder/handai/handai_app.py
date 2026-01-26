@@ -234,19 +234,23 @@ def get_client(provider: LLMProvider, api_key: str, base_url: str, http_client) 
     effective_url = base_url or config.base_url
 
     # OpenRouter requires additional headers
-    default_headers = {}
     if provider == LLMProvider.OPENROUTER:
-        default_headers = {
-            "HTTP-Referer": "https://handai.app",
-            "X-Title": "Handai Data Transformer"
-        }
+        return AsyncOpenAI(
+            api_key=effective_key,
+            base_url=effective_url,
+            max_retries=0,
+            default_headers={
+                "HTTP-Referer": "https://handai.app",
+                "X-Title": "Handai Data Transformer"
+            }
+        )
 
+    # Other providers use the custom http_client
     return AsyncOpenAI(
         api_key=effective_key,
         base_url=effective_url,
         http_client=http_client,
-        max_retries=0,
-        default_headers=default_headers if default_headers else None
+        max_retries=0
     )
 
 def fetch_local_models(base_url: str) -> List[str]:
@@ -259,6 +263,27 @@ def fetch_local_models(base_url: str) -> List[str]:
     except Exception:
         pass
     return []
+
+def fetch_openrouter_models() -> List[str]:
+    """Fetch available models from OpenRouter API."""
+    try:
+        response = httpx.get("https://openrouter.ai/api/v1/models", timeout=10.0)
+        if response.status_code == 200:
+            data = response.json()
+            # Return top 50 models sorted by ID (OpenRouter returns them sorted by popularity)
+            models = [m["id"] for m in data.get("data", [])[:50]]
+            return models if models else []
+    except Exception:
+        pass
+    # Fallback to default models if fetch fails
+    return [
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-3.5-sonnet",
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "google/gemini-2.0-flash-001",
+        "meta-llama/llama-3.3-70b-instruct",
+    ]
 
 async def call_llm_with_retry(client, system_prompt: str, user_content: str, model: str,
                               temperature: float, max_tokens: int, json_mode: bool,
@@ -395,12 +420,18 @@ with st.sidebar:
 
     # API Key
     if provider_config.requires_api_key:
+        api_key_help = None
+        if selected_provider == LLMProvider.OPENROUTER:
+            api_key_help = "Get your API key at openrouter.ai/keys"
         api_key = st.text_input(
             "API Key",
             type="password",
             key="api_key",
+            help=api_key_help,
             on_change=lambda: save_setting("api_key")
         )
+        if selected_provider == LLMProvider.OPENROUTER:
+            st.caption("🔑 Get your key at [openrouter.ai/keys](https://openrouter.ai/keys)")
     else:
         api_key = "dummy"
         st.info("No API key required for local models")
@@ -438,12 +469,28 @@ with st.sidebar:
             if st.button("🔄", key="refresh_models", help="Refresh model list"):
                 st.session_state[local_models_key] = fetch_local_models(effective_url)
                 st.rerun()
+    elif selected_provider == LLMProvider.OPENROUTER:
+        # Dynamic model fetching for OpenRouter
+        openrouter_models_key = "openrouter_models"
+
+        # Initialize or fetch models
+        if openrouter_models_key not in st.session_state:
+            st.session_state[openrouter_models_key] = fetch_openrouter_models()
+
+        available_models = st.session_state.get(openrouter_models_key, [])
+
+        # Refresh button for OpenRouter
+        col_model, col_refresh = st.columns([3, 1])
+        with col_refresh:
+            if st.button("🔄", key="refresh_openrouter_models", help="Refresh model list from OpenRouter"):
+                st.session_state[openrouter_models_key] = fetch_openrouter_models()
+                st.rerun()
     else:
         available_models = provider_config.models
         col_model = st.container()
 
     # Always allow custom model input
-    with col_model if selected_provider in [LLMProvider.LM_STUDIO, LLMProvider.OLLAMA] else st.container():
+    with col_model if selected_provider in [LLMProvider.LM_STUDIO, LLMProvider.OLLAMA, LLMProvider.OPENROUTER] else st.container():
         use_custom = st.checkbox("Use custom model name", key="use_custom_model", value=st.session_state.get("use_custom_model", False))
 
         if use_custom or not available_models:
