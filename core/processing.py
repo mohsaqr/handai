@@ -468,6 +468,9 @@ CRITICAL RULES:
                     # Parse JSON
                     try:
                         parsed = json.loads(output)
+                        # Guard against LLM returning a JSON array instead of object
+                        if isinstance(parsed, list):
+                            parsed = parsed[0] if parsed and isinstance(parsed[0], dict) else {"data": parsed}
                         result = RunResult.create(
                             run_id=self.run_id,
                             row_index=row_idx,
@@ -530,7 +533,7 @@ CRITICAL RULES:
                 log_entry = f"Row {idx}: {latency}s"
             else:
                 error_count += 1
-                log_entry = f"Row {idx}: {data.get('error', 'Parse error')}"
+                log_entry = f"Row {idx}: {data.get('error', 'Parse error') if isinstance(data, dict) else 'Parse error'}"
 
             # Call progress callback
             if progress_callback:

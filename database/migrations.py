@@ -103,7 +103,34 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         """,
         "CREATE INDEX IF NOT EXISTS idx_provider_settings_provider ON provider_settings(provider)",
     ]),
-    (3, "Add schema_versions table for tracking", [
+    (3, "Add configured_providers table", [
+        """
+        CREATE TABLE IF NOT EXISTS configured_providers (
+            id TEXT PRIMARY KEY,
+            provider_type TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            base_url TEXT,
+            api_key TEXT,
+            default_model TEXT NOT NULL,
+            is_enabled INTEGER DEFAULT 0,
+            temperature REAL DEFAULT 0.7,
+            max_tokens INTEGER DEFAULT 2048,
+            top_p REAL DEFAULT 1.0,
+            frequency_penalty REAL DEFAULT 0.0,
+            request_timeout INTEGER DEFAULT 120000,
+            max_retries INTEGER DEFAULT 3,
+            capabilities TEXT DEFAULT '[]',
+            total_requests INTEGER DEFAULT 0,
+            total_tokens INTEGER DEFAULT 0,
+            last_tested TEXT,
+            last_test_status TEXT,
+            last_test_latency REAL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+    ]),
+    (4, "Add schema_versions table for tracking", [
         """
         CREATE TABLE IF NOT EXISTS schema_versions (
             version INTEGER PRIMARY KEY,
@@ -112,6 +139,7 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )
         """,
     ]),
+    # Migration 3 (configured_providers) was inserted above; version 4 keeps original schema_versions logic
 ]
 
 

@@ -6,7 +6,7 @@ Data classes for database entities
 import json
 import uuid
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, List
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 
@@ -254,3 +254,56 @@ class ProviderSetting:
             return json.loads(self.setting_value)
         except:
             return self.setting_value
+
+
+@dataclass
+class ConfiguredProvider:
+    """A fully configured LLM provider instance"""
+    id: str
+    provider_type: str
+    display_name: str
+    base_url: Optional[str]
+    api_key: Optional[str]
+    default_model: str
+    is_enabled: bool = False
+    temperature: float = 0.7
+    max_tokens: int = 2048
+    top_p: float = 1.0
+    frequency_penalty: float = 0.0
+    request_timeout: int = 120000
+    max_retries: int = 3
+    capabilities: str = "[]"
+    total_requests: int = 0
+    total_tokens: int = 0
+    last_tested: Optional[str] = None
+    last_test_status: Optional[str] = None
+    last_test_latency: Optional[float] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def create(cls, provider_type: str, display_name: str, default_model: str,
+               base_url: str = None, api_key: str = None,
+               temperature: float = 0.7, max_tokens: int = 2048,
+               is_enabled: bool = False, capabilities: List[str] = None) -> 'ConfiguredProvider':
+        now = datetime.now().isoformat()
+        return cls(
+            id=str(uuid.uuid4())[:8],
+            provider_type=provider_type,
+            display_name=display_name,
+            base_url=base_url,
+            api_key=api_key,
+            default_model=default_model,
+            is_enabled=is_enabled,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            capabilities=json.dumps(capabilities or []),
+            created_at=now,
+            updated_at=now,
+        )
+
+    def get_capabilities(self) -> List[str]:
+        try:
+            return json.loads(self.capabilities) if self.capabilities else []
+        except:
+            return []

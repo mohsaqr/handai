@@ -197,6 +197,27 @@ async def call_llm_with_retry(
     return None, 0, last_error, attempt
 
 
+def get_client_from_configured(provider_display_name: str) -> tuple:
+    """
+    Create an AsyncOpenAI client from a configured_providers record.
+
+    Returns:
+        Tuple of (client, model, temperature, max_tokens) or None if not found.
+    """
+    from database import get_db
+    db = get_db()
+    providers = db.get_enabled_configured_providers()
+    for p in providers:
+        if p.display_name == provider_display_name or p.provider_type == provider_display_name:
+            try:
+                provider_enum = LLMProvider(p.provider_type)
+            except ValueError:
+                provider_enum = LLMProvider.CUSTOM
+            client = get_client(provider_enum, p.api_key or "dummy", p.base_url)
+            return client, p.default_model, p.temperature, p.max_tokens
+    return None
+
+
 async def call_llm_simple(
     client: AsyncOpenAI,
     system_prompt: str,

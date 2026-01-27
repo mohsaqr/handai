@@ -11,7 +11,7 @@ from contextlib import contextmanager
 import os
 
 from .models import (
-    Session, Run, RunResult, LogEntry, ProviderSetting,
+    Session, Run, RunResult, LogEntry, ProviderSetting, ConfiguredProvider,
     RunStatus, ResultStatus, LogLevel
 )
 from .migrations import run_migrations, migrate_api_keys_to_provider_settings
@@ -497,6 +497,94 @@ class HandaiDB:
                 WHERE setting_key = 'api_key' AND setting_value IS NOT NULL
             ''')
             return {row[0]: True for row in cursor.fetchall()}
+
+    # ==========================================
+    # CONFIGURED PROVIDERS
+    # ==========================================
+
+    def save_configured_provider(self, provider: ConfiguredProvider):
+        """Insert or replace a configured provider"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO configured_providers
+                (id, provider_type, display_name, base_url, api_key, default_model,
+                 is_enabled, temperature, max_tokens, top_p, frequency_penalty,
+                 request_timeout, max_retries, capabilities, total_requests, total_tokens,
+                 last_tested, last_test_status, last_test_latency, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ''', (provider.id, provider.provider_type, provider.display_name,
+                  provider.base_url, provider.api_key, provider.default_model,
+                  1 if provider.is_enabled else 0, provider.temperature, provider.max_tokens,
+                  provider.top_p, provider.frequency_penalty, provider.request_timeout,
+                  provider.max_retries, provider.capabilities, provider.total_requests,
+                  provider.total_tokens, provider.last_tested, provider.last_test_status,
+                  provider.last_test_latency, provider.created_at, provider.updated_at))
+
+    def get_configured_provider(self, provider_id: str) -> Optional[ConfiguredProvider]:
+        """Get a configured provider by ID"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM configured_providers WHERE id = ?', (provider_id,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d['is_enabled'] = bool(d.get('is_enabled', 0))
+                return ConfiguredProvider(**d)
+        return None
+
+    def get_all_configured_providers(self) -> List[ConfiguredProvider]:
+        """Get all configured providers"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM configured_providers ORDER BY display_name')
+            results = []
+            for row in cursor.fetchall():
+                d = dict(row)
+                d['is_enabled'] = bool(d.get('is_enabled', 0))
+                results.append(ConfiguredProvider(**d))
+            return results
+
+    def get_enabled_configured_providers(self) -> List[ConfiguredProvider]:
+        """Get only enabled configured providers"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM configured_providers WHERE is_enabled = 1 ORDER BY display_name')
+            results = []
+            for row in cursor.fetchall():
+                d = dict(row)
+                d['is_enabled'] = True
+                results.append(ConfiguredProvider(**d))
+            return results
+
+    def update_configured_provider(self, provider_id: str, **kwargs):
+        """Update specific fields of a configured provider"""
+        kwargs['updated_at'] = datetime.now().isoformat()
+        if 'is_enabled' in kwargs:
+            kwargs['is_enabled'] = 1 if kwargs['is_enabled'] else 0
+        sets = ", ".join(f"{k} = ?" for k in kwargs)
+        vals = list(kwargs.values()) + [provider_id]
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f'UPDATE configured_providers SET {sets} WHERE id = ?', vals)
+
+    def delete_configured_provider(self, provider_id: str):
+        """Delete a configured provider"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM configured_providers WHERE id = ?', (provider_id,))
+
+    def get_configured_provider_by_type(self, provider_type: str) -> Optional[ConfiguredProvider]:
+        """Get a configured provider by its type name"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM configured_providers WHERE provider_type = ?', (provider_type,))
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d['is_enabled'] = bool(d.get('is_enabled', 0))
+                return ConfiguredProvider(**d)
+        return None
 
 
 # Singleton instance

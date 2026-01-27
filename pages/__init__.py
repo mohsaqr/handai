@@ -10,6 +10,7 @@ from . import generate
 from . import process_documents
 from . import history
 from . import settings
+from . import models
 
 __all__ = [
     "home",
@@ -18,4 +19,5 @@ __all__ = [
     "process_documents",
     "history",
     "settings",
+    "models",
 ]

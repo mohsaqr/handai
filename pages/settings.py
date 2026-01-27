@@ -1,23 +1,17 @@
 """
 Handai Settings Page
-Centralized settings for API keys, providers, and preferences
+Performance, storage, and general preferences
 """
 
 import streamlit as st
 import json
-from typing import Dict, Any
 
-from core.providers import LLMProvider, PROVIDER_CONFIGS, get_provider_names
 from ui.state import (
-    initialize_session_state, save_setting, save_all_current_settings,
-    get_api_key_for_provider, set_api_key_for_provider,
-    get_default_model_for_provider, set_default_model_for_provider,
-    get_providers_with_api_keys
+    initialize_session_state, save_setting,
 )
 from database import get_db
 from config import (
-    DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_MAX_CONCURRENCY,
-    DEFAULT_TEST_BATCH_SIZE, DEFAULT_MAX_RETRIES
+    DEFAULT_MAX_CONCURRENCY, DEFAULT_TEST_BATCH_SIZE, DEFAULT_MAX_RETRIES
 )
 
 
@@ -27,169 +21,13 @@ def render():
     db = get_db()
 
     st.title("Settings")
+    st.caption("API keys and LLM defaults have moved to the **LLM Providers** page.")
 
-    # Tabs for different settings categories
-    tab1, tab2, tab3, tab4 = st.tabs(["API Keys", "LLM Controls", "Performance", "Storage"])
-
-    # ==========================================
-    # TAB 1: API Keys
-    # ==========================================
-    with tab1:
-        st.header("API Keys")
-        st.caption("Configure API keys for each provider. Keys are stored securely in the local database.")
-
-        # Get current status
-        providers_with_keys = get_providers_with_api_keys()
-
-        # Create a table-like layout
-        for provider in LLMProvider:
-            config = PROVIDER_CONFIGS[provider]
-
-            if not config.requires_api_key:
-                continue
-
-            with st.container(border=True):
-                col1, col2, col3 = st.columns([2, 3, 1])
-
-                with col1:
-                    st.write(f"**{provider.value}**")
-                    st.caption(config.description[:50] + "..." if len(config.description) > 50 else config.description)
-
-                with col2:
-                    current_key = get_api_key_for_provider(provider.value)
-                    new_key = st.text_input(
-                        "API Key",
-                        value=current_key,
-                        type="password",
-                        key=f"api_key_{provider.value}",
-                        label_visibility="collapsed",
-                        placeholder="Enter API key..."
-                    )
-
-                with col3:
-                    if current_key:
-                        st.success("Saved")
-                    else:
-                        st.caption("Not set")
-
-                    if new_key != current_key:
-                        if st.button("Save", key=f"save_key_{provider.value}"):
-                            set_api_key_for_provider(provider.value, new_key)
-                            st.toast(f"API key saved for {provider.value}")
-                            st.rerun()
-
-        # Local providers note
-        st.divider()
-        st.subheader("Local Providers")
-        st.info("LM Studio, Ollama, and Custom endpoints don't require API keys.")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**LM Studio**")
-            lm_url = st.text_input(
-                "Base URL",
-                value=st.session_state.get("lm_studio_url", "http://localhost:1234/v1"),
-                key="lm_studio_url_input"
-            )
-            if lm_url != st.session_state.get("lm_studio_url"):
-                db.save_provider_setting("LM Studio (Local)", "base_url", lm_url)
-                st.session_state.lm_studio_url = lm_url
-
-        with col2:
-            st.write("**Ollama**")
-            ollama_url = st.text_input(
-                "Base URL",
-                value=st.session_state.get("ollama_url", "http://localhost:11434/v1"),
-                key="ollama_url_input"
-            )
-            if ollama_url != st.session_state.get("ollama_url"):
-                db.save_provider_setting("Ollama (Local)", "base_url", ollama_url)
-                st.session_state.ollama_url = ollama_url
+    # Tabs for remaining settings categories
+    tab3, tab4 = st.tabs(["Performance", "Storage"])
 
     # ==========================================
-    # TAB 2: LLM Controls
-    # ==========================================
-    with tab2:
-        st.header("Default LLM Settings")
-        st.caption("These settings are used as defaults for new processing runs.")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.subheader("Default Provider")
-            provider_names = get_provider_names()
-            saved_provider = st.session_state.get("selected_provider", "OpenAI")
-            default_idx = provider_names.index(saved_provider) if saved_provider in provider_names else 0
-
-            selected_provider = st.selectbox(
-                "Provider",
-                provider_names,
-                index=default_idx,
-                key="settings_default_provider"
-            )
-
-            if selected_provider != st.session_state.get("selected_provider"):
-                st.session_state.selected_provider = selected_provider
-                save_setting("selected_provider")
-
-            # Default model for selected provider
-            provider_enum = LLMProvider(selected_provider)
-            config = PROVIDER_CONFIGS[provider_enum]
-            available_models = config.models
-
-            if available_models:
-                saved_model = st.session_state.get("model_name", config.default_model)
-                model_idx = available_models.index(saved_model) if saved_model in available_models else 0
-
-                selected_model = st.selectbox(
-                    "Default Model",
-                    available_models,
-                    index=model_idx,
-                    key="settings_default_model"
-                )
-
-                if selected_model != st.session_state.get("model_name"):
-                    st.session_state.model_name = selected_model
-                    save_setting("model_name")
-
-        with col2:
-            st.subheader("Generation Parameters")
-
-            temperature = st.slider(
-                "Default Temperature",
-                0.0, 2.0,
-                st.session_state.get("temperature", DEFAULT_TEMPERATURE),
-                0.1,
-                key="settings_temperature",
-                help="0 = deterministic, 2 = very creative"
-            )
-            if temperature != st.session_state.get("temperature"):
-                st.session_state.temperature = temperature
-                save_setting("temperature")
-
-            max_tokens = st.number_input(
-                "Default Max Tokens",
-                1, 128000,
-                st.session_state.get("max_tokens", DEFAULT_MAX_TOKENS),
-                256,
-                key="settings_max_tokens"
-            )
-            if max_tokens != st.session_state.get("max_tokens"):
-                st.session_state.max_tokens = max_tokens
-                save_setting("max_tokens")
-
-            json_mode = st.checkbox(
-                "JSON Mode by Default",
-                st.session_state.get("json_mode", False),
-                key="settings_json_mode",
-                help="Force structured JSON output"
-            )
-            if json_mode != st.session_state.get("json_mode"):
-                st.session_state.json_mode = json_mode
-                save_setting("json_mode")
-
-    # ==========================================
-    # TAB 3: Performance
+    # TAB: Performance
     # ==========================================
     with tab3:
         st.header("Performance Settings")

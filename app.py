@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 # Import pages
-from pages import home, transform, generate, process_documents, history, settings
+from pages import home, transform, generate, process_documents, history, settings, models
 
 # Define pages for navigation with explicit URL paths
 pages = {
@@ -25,6 +25,7 @@ pages = {
         st.Page(process_documents.render, title="Process Documents", icon=":material/description:", url_path="process-documents"),
     ],
     "System": [
+        st.Page(models.render, title="LLM Providers", icon=":material/model_training:", url_path="llm-providers"),
         st.Page(history.render, title="History", icon=":material/history:", url_path="history"),
         st.Page(settings.render, title="Settings", icon=":material/settings:", url_path="settings"),
     ]

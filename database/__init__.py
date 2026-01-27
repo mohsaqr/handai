@@ -11,6 +11,7 @@ from .models import (
     Run,
     RunResult,
     LogEntry,
+    ConfiguredProvider,
 )
 from .db import HandaiDB, get_db
 
@@ -22,6 +23,7 @@ __all__ = [
     "Run",
     "RunResult",
     "LogEntry",
+    "ConfiguredProvider",
     "HandaiDB",
     "get_db",
 ]

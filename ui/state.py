@@ -205,6 +205,15 @@ def get_selected_provider() -> LLMProvider:
     try:
         return LLMProvider(provider_name)
     except ValueError:
+        # Check if it's a configured provider display name
+        from database import get_db
+        db = get_db()
+        for p in db.get_enabled_configured_providers():
+            if p.display_name == provider_name:
+                try:
+                    return LLMProvider(p.provider_type)
+                except ValueError:
+                    return LLMProvider.CUSTOM
         return LLMProvider.OPENAI
 
 
@@ -218,7 +227,14 @@ def get_selected_model() -> str:
 def get_effective_api_key() -> str:
     """Get effective API key for current provider"""
     provider_name = st.session_state.get("selected_provider", "OpenAI")
-    # First check provider-specific key
+    # First check configured_providers table
+    from database import get_db
+    db = get_db()
+    for p in db.get_enabled_configured_providers():
+        if p.display_name == provider_name or p.provider_type == provider_name:
+            if p.api_key:
+                return p.api_key
+    # Then check legacy provider_settings
     key = get_api_key_for_provider(provider_name)
     if key:
         return key
