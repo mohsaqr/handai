@@ -46,19 +46,19 @@ def render():
 
     tool_cards = [
         {
-            "url": "/transform",
+            "url": "pages/transform.py",
             "icon": ":material/transform:",
             "title": "Transform Data",
             "description": "Upload a CSV and use AI to transform, enrich, or classify each row",
         },
         {
-            "url": "/generate",
+            "url": "pages/generate.py",
             "icon": ":material/auto_awesome:",
             "title": "Generate Data",
             "description": "Describe what you need and let AI generate synthetic rows from scratch",
         },
         {
-            "url": "/process-documents",
+            "url": "pages/process_documents.py",
             "icon": ":material/description:",
             "title": "Process Documents",
             "description": "Extract structured data from PDFs, text files, and other documents",
@@ -77,19 +77,19 @@ def render():
     # System page links
     system_cards = [
         {
-            "url": "/llm-providers",
+            "url": "pages/models.py",
             "icon": ":material/smart_toy:",
             "title": "LLM Providers",
             "description": "Configure AI providers, API keys, and default models",
         },
         {
-            "url": "/history",
+            "url": "pages/history.py",
             "icon": ":material/history:",
             "title": "History",
             "description": "View past sessions and runs",
         },
         {
-            "url": "/settings",
+            "url": "pages/settings.py",
             "icon": ":material/settings:",
             "title": "Settings",
             "description": "App preferences and configuration",
