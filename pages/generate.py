@@ -11,7 +11,6 @@ from tools.generate import GenerateTool
 from tools.registry import register_default_tools
 from ui.state import initialize_session_state
 from ui.components.provider_selector import render_provider_selector
-from ui.components.model_selector import render_model_selector
 from ui.components.llm_controls import render_llm_controls, render_performance_controls
 from ui.components.progress_display import ProgressDisplay
 from ui.components.download_buttons import render_download_buttons
@@ -34,11 +33,6 @@ def render():
 
         st.divider()
 
-        # Model selection
-        model = render_model_selector(provider, base_url)
-
-        st.divider()
-
         # LLM controls (without JSON mode - generation always uses JSON)
         st.header("LLM Controls")
         max_tokens = st.number_input(
@@ -46,7 +40,8 @@ def render():
             1, 128000,
             st.session_state.get("max_tokens", 2048),
             256,
-            key="gen_max_tokens"
+            key="gen_max_tokens",
+            help="Maximum number of tokens in each AI response"
         )
         st.session_state.max_tokens = max_tokens
 
@@ -58,14 +53,16 @@ def render():
             "Max Concurrent Requests",
             1, 50,
             st.session_state.get("max_concurrency", 5),
-            key="gen_concurrency"
+            key="gen_concurrency",
+            help="Higher values = faster but more API load"
         )
         st.session_state.max_concurrency = max_concurrency
 
         auto_retry = st.checkbox(
             "Auto-retry Failed",
             st.session_state.get("auto_retry", True),
-            key="gen_auto_retry"
+            key="gen_auto_retry",
+            help="Automatically retry rows that fail or return empty"
         )
         st.session_state.auto_retry = auto_retry
 
@@ -74,7 +71,8 @@ def render():
                 "Max Retries",
                 1, 5,
                 st.session_state.get("max_retries", 3),
-                key="gen_max_retries"
+                key="gen_max_retries",
+                help="Number of retry attempts per failed row"
             )
             st.session_state.max_retries = max_retries
 

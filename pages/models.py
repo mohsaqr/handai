@@ -68,39 +68,46 @@ def _add_provider_dialog():
         except (ValueError, KeyError):
             pass
 
+    # Use selected_type in keys so defaults refresh when provider type changes
+    _k = selected_type.replace(" ", "_").replace("(", "").replace(")", "")
+
     col1, col2 = st.columns(2)
     with col1:
         display_name = st.text_input(
             "Display Name",
             value=config.name if config else selected_type,
-            key="add_prov_name"
+            key=f"add_prov_name_{_k}"
         )
     with col2:
         default_model = st.text_input(
             "Default Model",
             value=config.default_model if config else "",
-            key="add_prov_model"
+            key=f"add_prov_model_{_k}"
         )
 
     st.subheader("Connection")
     base_url = st.text_input(
         "Base URL",
         value=config.base_url or "" if config else "",
-        key="add_prov_url"
+        key=f"add_prov_url_{_k}",
+        help="API endpoint URL. Pre-filled for known providers"
     )
     api_key = st.text_input(
         "API Key",
         type="password",
-        key="add_prov_key",
-        placeholder="Enter API key..."
+        key=f"add_prov_key_{_k}",
+        placeholder="Enter API key...",
+        help="Required for cloud providers. Local providers don't need one"
     )
 
     st.subheader("Defaults")
     dc1, dc2 = st.columns(2)
     with dc1:
-        temperature = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1, key="add_prov_temp")
+        temperature = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1, key=f"add_prov_temp_{_k}",
+                                help="0 = deterministic, 2 = very creative")
     with dc2:
-        max_tokens = st.number_input("Max Tokens", 1, 128000, 2048, 256, key="add_prov_tokens")
+        max_tokens = st.number_input("Max Tokens", 1, 128000, 2048, 256, key=f"add_prov_tokens_{_k}",
+                                     help="Maximum response length per request")
 
     # Capabilities
     capabilities = []
@@ -203,7 +210,7 @@ def _seed_defaults():
             base_url=config.base_url,
             temperature=0.7,
             max_tokens=2048,
-            is_enabled=False,
+            is_enabled=is_local_provider(llm_prov),
             capabilities=caps,
         )
         db.save_configured_provider(provider)
@@ -424,7 +431,8 @@ def render():
                 st.toast("All providers already configured")
             st.rerun()
     with col_add:
-        if st.button("+ Add Provider", use_container_width=True):
+        if st.button("+ Add Provider", use_container_width=True,
+                      help="Manually configure a new LLM provider"):
             _add_provider_dialog()
 
     st.divider()
@@ -433,8 +441,11 @@ def render():
     providers = db.get_all_configured_providers()
 
     if not providers:
-        st.info("No providers configured yet. Click **Seed Defaults** to add all known providers, "
-                "or **+ Add Provider** to add one manually.")
+        # Auto-seed on first launch
+        count = _seed_defaults()
+        if count > 0:
+            st.toast(f"Auto-added {count} provider(s)")
+            st.rerun()
         return
 
     # Show enabled first, then disabled
