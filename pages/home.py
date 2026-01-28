@@ -48,32 +48,78 @@ def render():
 
     tool_cards = [
         ("transform", ":material/transform:", "Transform Data",
-         "Upload a CSV and use AI to transform, enrich, or classify each row"),
+         "Upload a CSV and use AI to transform, enrich, or classify each row.",
+         "- Enrich rows with extracted entities, topics, or classifications\n"
+         "- Add sentiment scores, summaries, or translations to every row\n"
+         "- Clean, normalize, or reformat messy data at scale\n"
+         "- Concurrent processing with auto-retry and real-time progress\n\n"
+         "*Best for: data enrichment, classification, cleaning, and bulk text analysis*"),
         ("generate", ":material/auto_awesome:", "Generate Data",
-         "Describe what you need and let AI generate synthetic rows from scratch"),
+         "Describe what you need and let AI generate synthetic rows from scratch.",
+         "- Generate realistic tabular data in CSV, JSON, or free-text format\n"
+         "- Define custom schemas with typed fields or let AI decide the structure\n"
+         "- Use variable cycling to produce diverse, controlled variations\n"
+         "- Ideal for prototyping, testing, and training data creation\n\n"
+         "*Best for: synthetic datasets, test fixtures, mock data, and augmentation*"),
         ("process-documents", ":material/description:", "Process Documents",
-         "Extract structured data from PDFs, text files, and other documents"),
+         "Extract structured data from PDFs, text files, and other documents.",
+         "- Upload PDFs, DOCX, or TXT files for AI-powered extraction\n"
+         "- Define output columns and let AI parse each document into rows\n"
+         "- Batch-process entire folders of documents in parallel\n"
+         "- Built-in CSV output formatting with master prompt enforcement\n\n"
+         "*Best for: invoice parsing, resume extraction, report digitization*"),
+        ("qualitative", ":material/psychology:", "Qualitative Coder",
+         "Code qualitative data like interviews, observations, and surveys with AI.",
+         "- Pre-configured prompt template optimized for qualitative coding\n"
+         "- Enforces strict CSV output format — no prose, just codes and values\n"
+         "- OpenAI cost estimation before running\n"
+         "- Same powerful processing engine as Transform with coding-specific defaults\n\n"
+         "*Best for: thematic analysis, interview coding, open-ended survey responses*"),
+        ("consensus", ":material/groups:", "Consensus Coder",
+         "Run multiple AI models in parallel and synthesize the best answer.",
+         "- Configure 2-3 independent worker models plus a judge model\n"
+         "- Workers process each row in parallel; judge synthesizes the best answer\n"
+         "- Inter-rater reliability analytics: Cohen's Kappa, pairwise agreement, Jaccard index\n"
+         "- Visualizations: judge alignment bar chart, consensus distribution pie chart\n\n"
+         "*Best for: high-stakes coding, reducing AI bias, validation through model triangulation*"),
     ]
 
-    cols = st.columns(len(tool_cards))
-    for col, (key, icon, title, description) in zip(cols, tool_cards):
+    # Row 1: 3 cards, Row 2: 2 cards
+    row1 = st.columns(3)
+    for col, (key, icon, title, tagline, details) in zip(row1, tool_cards[:3]):
         with col:
             with st.container(border=True):
                 page = nav_pages.get(key)
                 if page:
                     st.page_link(page, label=title, icon=icon)
-                st.caption(description)
+                st.write(tagline)
+                with st.expander("Learn more"):
+                    st.markdown(details)
+
+    row2 = st.columns(3)
+    for col, (key, icon, title, tagline, details) in zip(row2, tool_cards[3:]):
+        with col:
+            with st.container(border=True):
+                page = nav_pages.get(key)
+                if page:
+                    st.page_link(page, label=title, icon=icon)
+                st.write(tagline)
+                with st.expander("Learn more"):
+                    st.markdown(details)
 
     st.divider()
 
     # System page links
     system_cards = [
         ("llm-providers", ":material/smart_toy:", "LLM Providers",
-         "Configure AI providers, API keys, and default models"),
+         "Configure AI providers, API keys, and default models. "
+         "Supports OpenAI, Anthropic, Google Gemini, and more."),
         ("history", ":material/history:", "History",
-         "View past sessions and runs"),
+         "View past sessions and runs. "
+         "Review outputs, re-download results, and track usage."),
         ("settings", ":material/settings:", "Settings",
-         "App preferences and configuration"),
+         "App preferences and configuration. "
+         "Adjust defaults, concurrency limits, and display options."),
     ]
 
     sys_cols = st.columns(len(system_cards))

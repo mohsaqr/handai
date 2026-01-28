@@ -148,6 +148,8 @@ def register_default_tools():
     from .transform import TransformTool
     from .generate import GenerateTool
     from .process_documents import ProcessDocumentsTool
+    from .qualitative import QualitativeTool
+    from .consensus import ConsensusTool
 
     # Only register if not already registered
     if not ToolRegistry.tool_exists("transform"):
@@ -158,3 +160,9 @@ def register_default_tools():
 
     if not ToolRegistry.tool_exists("process_documents"):
         ToolRegistry.register(ProcessDocumentsTool())
+
+    if not ToolRegistry.tool_exists("qualitative"):
+        ToolRegistry.register(QualitativeTool())
+
+    if not ToolRegistry.tool_exists("consensus"):
+        ToolRegistry.register(ConsensusTool())
