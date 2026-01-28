@@ -44,64 +44,46 @@ def render():
     # Tool cards
     st.header("Available Tools")
 
+    nav_pages = st.session_state.get("_pages", {})
+
     tool_cards = [
-        {
-            "url": "pages/transform.py",
-            "icon": ":material/transform:",
-            "title": "Transform Data",
-            "description": "Upload a CSV and use AI to transform, enrich, or classify each row",
-        },
-        {
-            "url": "pages/generate.py",
-            "icon": ":material/auto_awesome:",
-            "title": "Generate Data",
-            "description": "Describe what you need and let AI generate synthetic rows from scratch",
-        },
-        {
-            "url": "pages/process_documents.py",
-            "icon": ":material/description:",
-            "title": "Process Documents",
-            "description": "Extract structured data from PDFs, text files, and other documents",
-        },
+        ("transform", ":material/transform:", "Transform Data",
+         "Upload a CSV and use AI to transform, enrich, or classify each row"),
+        ("generate", ":material/auto_awesome:", "Generate Data",
+         "Describe what you need and let AI generate synthetic rows from scratch"),
+        ("process-documents", ":material/description:", "Process Documents",
+         "Extract structured data from PDFs, text files, and other documents"),
     ]
 
     cols = st.columns(len(tool_cards))
-    for col, card in zip(cols, tool_cards):
+    for col, (key, icon, title, description) in zip(cols, tool_cards):
         with col:
             with st.container(border=True):
-                st.page_link(card["url"], label=card["title"], icon=card["icon"])
-                st.caption(card["description"])
+                page = nav_pages.get(key)
+                if page:
+                    st.page_link(page, label=title, icon=icon)
+                st.caption(description)
 
     st.divider()
 
     # System page links
     system_cards = [
-        {
-            "url": "pages/models.py",
-            "icon": ":material/smart_toy:",
-            "title": "LLM Providers",
-            "description": "Configure AI providers, API keys, and default models",
-        },
-        {
-            "url": "pages/history.py",
-            "icon": ":material/history:",
-            "title": "History",
-            "description": "View past sessions and runs",
-        },
-        {
-            "url": "pages/settings.py",
-            "icon": ":material/settings:",
-            "title": "Settings",
-            "description": "App preferences and configuration",
-        },
+        ("llm-providers", ":material/smart_toy:", "LLM Providers",
+         "Configure AI providers, API keys, and default models"),
+        ("history", ":material/history:", "History",
+         "View past sessions and runs"),
+        ("settings", ":material/settings:", "Settings",
+         "App preferences and configuration"),
     ]
 
     sys_cols = st.columns(len(system_cards))
-    for col, card in zip(sys_cols, system_cards):
+    for col, (key, icon, title, description) in zip(sys_cols, system_cards):
         with col:
             with st.container(border=True):
-                st.page_link(card["url"], label=card["title"], icon=card["icon"])
-                st.caption(card["description"])
+                page = nav_pages.get(key)
+                if page:
+                    st.page_link(page, label=title, icon=icon)
+                st.caption(description)
 
     # Recent sessions
     sessions = db.get_all_sessions(limit=5)
