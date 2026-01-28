@@ -64,7 +64,7 @@ class Session:
         """Parse and return settings as dict"""
         try:
             return json.loads(self.settings_json) if self.settings_json else {}
-        except:
+        except (json.JSONDecodeError, TypeError):
             return {}
 
 
@@ -137,21 +137,21 @@ class Run:
         """Parse and return schema as dict"""
         try:
             return json.loads(self.schema_json) if self.schema_json else {}
-        except:
+        except (json.JSONDecodeError, TypeError):
             return {}
 
     def get_variables(self) -> dict:
         """Parse and return variables as dict"""
         try:
             return json.loads(self.variables_json) if self.variables_json else {}
-        except:
+        except (json.JSONDecodeError, TypeError):
             return {}
 
     def get_run_settings(self) -> dict:
         """Parse and return run settings as dict"""
         try:
             return json.loads(self.run_settings_json) if self.run_settings_json else {}
-        except:
+        except (json.JSONDecodeError, TypeError):
             return {}
 
 
@@ -193,7 +193,7 @@ class RunResult:
         """Parse and return input data"""
         try:
             return json.loads(self.input_json) if self.input_json else None
-        except:
+        except (json.JSONDecodeError, TypeError):
             return self.input_json
 
 
@@ -225,7 +225,7 @@ class LogEntry:
         """Parse and return details as dict"""
         try:
             return json.loads(self.details_json) if self.details_json else {}
-        except:
+        except (json.JSONDecodeError, TypeError):
             return {}
 
 
@@ -252,7 +252,7 @@ class ProviderSetting:
             return None
         try:
             return json.loads(self.setting_value)
-        except:
+        except (json.JSONDecodeError, TypeError):
             return self.setting_value
 
 
@@ -305,5 +305,5 @@ class ConfiguredProvider:
     def get_capabilities(self) -> List[str]:
         try:
             return json.loads(self.capabilities) if self.capabilities else []
-        except:
+        except (json.JSONDecodeError, TypeError):
             return []

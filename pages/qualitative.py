@@ -1,13 +1,12 @@
 """
-Handai Transform Page
-Transform existing datasets with AI
+Handai Qualitative Coder Page
+Code qualitative data with AI
 """
 
 import streamlit as st
 import asyncio
-import pandas as pd
 
-from tools.transform import TransformTool
+from tools.qualitative import QualitativeTool
 from tools.registry import register_default_tools
 from ui.state import initialize_session_state
 from ui.components.provider_selector import render_provider_selector
@@ -16,42 +15,37 @@ from ui.components.progress_display import ProgressDisplay
 
 
 def render():
-    """Render the transform page"""
+    """Render the qualitative coder page"""
     initialize_session_state()
     register_default_tools()
 
-    st.title("Transform Data")
-    st.caption("Upload a dataset and transform each row using AI")
+    st.title("Qualitative Coder")
+    st.caption("Code qualitative data like interviews, observations, and surveys with AI")
 
     # Sidebar settings
     with st.sidebar:
         st.header("Settings")
 
-        # Provider selection
-        provider, api_key, base_url = render_provider_selector()
+        provider, api_key, base_url = render_provider_selector(key_prefix="qualitative")
 
         st.divider()
 
-        # LLM controls
-        temperature, max_tokens, json_mode = render_llm_controls(provider, show_header=True)
+        temperature, max_tokens, json_mode = render_llm_controls(
+            provider, key_prefix="qualitative", show_header=True
+        )
 
         st.divider()
 
-        # Performance controls
-        max_concurrency, test_batch_size, auto_retry, max_retries, realtime_progress, save_path = render_performance_controls()
+        max_concurrency, test_batch_size, auto_retry, max_retries, realtime_progress, save_path = \
+            render_performance_controls(key_prefix="qualitative")
 
-    # Main content - use the tool
-    tool = TransformTool()
+    # Main content
+    tool = QualitativeTool()
 
-    # Render configuration UI
     config = tool.render_config()
 
-    # Show error if config is invalid
     if not config.is_valid and config.error_message:
-        if "Please upload" in config.error_message or "Please enter AI instructions" in config.error_message:
-            # These are expected states, not errors
-            pass
-        else:
+        if "Please upload" not in config.error_message and "Please enter" not in config.error_message:
             st.error(config.error_message)
 
     # Execute buttons
@@ -66,14 +60,16 @@ def render():
                 f"Test ({test_batch_size} rows)",
                 type="primary",
                 use_container_width=True,
-                disabled=not config.is_valid
+                disabled=not config.is_valid,
+                key="qualitative_test_btn"
             )
         with col2:
             run_full = st.button(
                 "Full Run",
                 type="secondary",
                 use_container_width=True,
-                disabled=not config.is_valid
+                disabled=not config.is_valid,
+                key="qualitative_full_btn"
             )
 
         if run_test or run_full:
@@ -81,21 +77,14 @@ def render():
                 st.error(config.error_message or "Configuration is not valid")
                 st.stop()
 
-            # Prepare config for execution
             exec_config = config.config_data.copy()
             exec_config["is_test"] = run_test
 
-            # Create progress display
-            progress = ProgressDisplay(
-                title="Processing Status",
-                max_log_lines=10
-            )
+            progress = ProgressDisplay(title="Processing Status", max_log_lines=10)
 
-            # Progress callback
             def progress_callback(completed, total, success, errors, retries, log_entry, is_error):
                 progress.update(completed, total, success, errors, retries, log_entry, is_error)
 
-            # Run the tool
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
@@ -104,12 +93,11 @@ def render():
                     tool.execute(exec_config, progress_callback)
                 )
             except Exception as e:
-                st.error(f"Processing failed: {str(e)}")
+                st.error(f"Qualitative coding failed: {str(e)}")
                 return
             finally:
                 loop.close()
 
-            # Render results
             st.divider()
             tool.render_results(result)
 

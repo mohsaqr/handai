@@ -6,7 +6,7 @@ UI for selecting LLM provider — reads from configured_providers table
 import streamlit as st
 from typing import Tuple, Optional
 from core.providers import (
-    LLMProvider, PROVIDER_CONFIGS, get_provider_names
+    LLMProvider, PROVIDER_CONFIGS, get_provider_names, is_local_provider
 )
 from ui.state import (
     save_setting, get_api_key_for_provider, set_api_key_for_provider
@@ -41,6 +41,10 @@ def render_provider_selector(key_prefix: str = "main") -> Tuple[LLMProvider, str
 
     if enabled:
         names = [e[0] for e in enabled]
+        if not names:
+            st.warning("No providers configured. Please configure providers in the LLM Providers page.")
+            return LLMProvider.OPENAI, "", None
+
         saved = st.session_state.get("selected_provider", names[0])
         default_idx = names.index(saved) if saved in names else 0
 
@@ -57,13 +61,23 @@ def render_provider_selector(key_prefix: str = "main") -> Tuple[LLMProvider, str
         except ValueError:
             provider_enum = LLMProvider.CUSTOM
 
-        api_key = api_key or "dummy"
         st.session_state.model_name = default_model
 
-        if not api_key or api_key == "dummy":
+        # Show active model as read-only caption
+        st.caption(f"Model: **{default_model}** · [Configure in LLM Providers](/llm-providers)")
+
+        # Check if this provider requires an API key
+        requires_key = not is_local_provider(provider_enum)
+        has_key = api_key and api_key.strip()
+
+        if requires_key and not has_key:
             st.warning("No API key configured for this provider. Set it in **LLM Providers** page.")
         else:
             st.success("Provider configured", icon=":material/check:")
+
+        # Use dummy key for local providers that don't need one
+        if not has_key:
+            api_key = "dummy"
 
         return provider_enum, api_key, base_url
 
@@ -129,6 +143,9 @@ def render_provider_selector_compact(key_prefix: str = "compact") -> Tuple[LLMPr
 
     if enabled:
         names = [e[0] for e in enabled]
+        if not names:
+            return LLMProvider.OPENAI, "dummy", None
+
         saved = st.session_state.get("selected_provider", names[0])
         default_idx = names.index(saved) if saved in names else 0
 

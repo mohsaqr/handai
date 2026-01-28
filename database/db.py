@@ -399,7 +399,7 @@ class HandaiDB:
             if row:
                 try:
                     return json.loads(row[0])
-                except:
+                except (json.JSONDecodeError, TypeError):
                     return row[0]
             return default
 
@@ -424,7 +424,7 @@ class HandaiDB:
             for row in cursor.fetchall():
                 try:
                     settings[row[0]] = json.loads(row[1])
-                except:
+                except (json.JSONDecodeError, TypeError):
                     settings[row[0]] = row[1]
             return settings
 
@@ -459,7 +459,7 @@ class HandaiDB:
             if row and row[0] is not None:
                 try:
                     return json.loads(row[0])
-                except:
+                except (json.JSONDecodeError, TypeError):
                     return row[0]
             return default
 
@@ -475,7 +475,7 @@ class HandaiDB:
             for row in cursor.fetchall():
                 try:
                     settings[row[0]] = json.loads(row[1]) if row[1] else None
-                except:
+                except (json.JSONDecodeError, TypeError):
                     settings[row[0]] = row[1]
             return settings
 

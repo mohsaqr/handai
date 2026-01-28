@@ -11,6 +11,8 @@ from . import process_documents
 from . import history
 from . import settings
 from . import models
+from . import qualitative
+from . import consensus
 
 __all__ = [
     "home",
@@ -20,4 +22,6 @@ __all__ = [
     "history",
     "settings",
     "models",
+    "qualitative",
+    "consensus",
 ]

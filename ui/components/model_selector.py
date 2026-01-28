@@ -113,17 +113,30 @@ def render_model_selector(
             )
             st.session_state.custom_model = model_name
         else:
-            saved_model = st.session_state.get("model_name", available_models[0] if available_models else "")
-            default_idx = available_models.index(saved_model) if saved_model in available_models else 0
+            default_model = available_models[0] if available_models else ""
+            saved_model = st.session_state.get("model_name", default_model)
+            if available_models:
+                default_idx = available_models.index(saved_model) if saved_model in available_models else 0
+            else:
+                default_idx = 0
 
-            model_name = st.selectbox(
-                "Select Model",
-                available_models,
-                index=default_idx,
-                key=f"{key_prefix}_model_name",
-                on_change=lambda: save_setting("model_name")
-            )
-            st.session_state.model_name = model_name
+            if available_models:
+                model_name = st.selectbox(
+                    "Select Model",
+                    available_models,
+                    index=default_idx,
+                    key=f"{key_prefix}_model_name",
+                    on_change=lambda: save_setting("model_name")
+                )
+                st.session_state.model_name = model_name
+            else:
+                model_name = st.text_input(
+                    "Model Name",
+                    value=st.session_state.get("model_name", ""),
+                    key=f"{key_prefix}_model_name_input",
+                    placeholder="Enter model name"
+                )
+                st.session_state.model_name = model_name
 
     return model_name
 
@@ -152,7 +165,8 @@ def render_model_selector_compact(
             placeholder="Enter model name"
         )
 
-    saved_model = st.session_state.get("model_name", available_models[0])
+    default_model = available_models[0] if available_models else ""
+    saved_model = st.session_state.get("model_name", default_model)
     default_idx = available_models.index(saved_model) if saved_model in available_models else 0
 
     return st.selectbox(

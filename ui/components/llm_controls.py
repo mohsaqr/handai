@@ -160,8 +160,10 @@ def render_llm_controls_compact(key_prefix: str = "compact") -> Tuple[float, int
             0.0, 2.0,
             st.session_state.get("temperature", 0.0),
             0.1,
-            key=f"{key_prefix}_temp"
+            key=f"{key_prefix}_temp",
+            on_change=lambda: save_setting("temperature")
         )
+        st.session_state.temperature = temperature
 
     with col2:
         max_tokens = st.number_input(
@@ -169,14 +171,18 @@ def render_llm_controls_compact(key_prefix: str = "compact") -> Tuple[float, int
             1, 128000,
             st.session_state.get("max_tokens", 2048),
             256,
-            key=f"{key_prefix}_tokens"
+            key=f"{key_prefix}_tokens",
+            on_change=lambda: save_setting("max_tokens")
         )
+        st.session_state.max_tokens = max_tokens
 
     with col3:
         json_mode = st.checkbox(
             "JSON",
             st.session_state.get("json_mode", False),
-            key=f"{key_prefix}_json"
+            key=f"{key_prefix}_json",
+            on_change=lambda: save_setting("json_mode")
         )
+        st.session_state.json_mode = json_mode
 
     return temperature, max_tokens, json_mode

@@ -5,7 +5,6 @@ Tool for extracting structured data from documents using AI
 
 import streamlit as st
 import pandas as pd
-import asyncio
 import json
 import os
 from pathlib import Path

@@ -72,7 +72,7 @@ def save_setting(key: str):
 def save_all_current_settings():
     """Save all current settings to database"""
     settings_keys = [
-        "selected_provider", "base_url", "model_name", "custom_model",
+        "selected_provider", "base_url", "model_name", "custom_model", "use_custom_model",
         "temperature", "max_tokens", "json_mode", "max_concurrency", "test_batch_size",
         "realtime_progress", "save_path", "auto_retry", "max_retries",
         "dataset_mode", "schema_mode", "generation_prompt", "system_prompt"

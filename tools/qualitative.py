@@ -1,11 +1,11 @@
 """
-Transform Tool
-Tool for transforming existing datasets with AI
+Qualitative Coder Tool
+Code qualitative data (interviews, surveys, observations) with AI
 """
 
 import streamlit as st
 import pandas as pd
-from typing import Dict, Any, Optional, Callable, List
+from typing import Dict, Any, Optional, Callable
 
 from .base import BaseTool, ToolConfig, ToolResult
 from core.providers import LLMProvider, PROVIDER_CONFIGS
@@ -17,21 +17,61 @@ from ui.state import (
 )
 from config import SAMPLE_DATA_COLUMNS
 
+DEFAULT_QUALITATIVE_PROMPT = """Analyze the provided data and respond with ONLY the requested output values.
 
-class TransformTool(BaseTool):
-    """Tool for transforming existing datasets with AI"""
+CRITICAL FORMAT REQUIREMENTS:
+- Output MUST be in strict CSV format (comma-separated values)
+- NO explanations, NO prose, NO markdown, NO code blocks
+- NO headers or labels - just the raw values
 
-    id = "transform"
-    name = "Transform Data"
-    description = "Upload a dataset and transform each row using AI"
-    icon = ""
+Respond with ONLY the CSV-formatted data values. Nothing else."""
+
+
+def estimate_openai_cost(df, system_prompt, model, selected_cols):
+    """Estimate OpenAI API cost for processing a dataframe."""
+    try:
+        import tiktoken
+    except ImportError:
+        return 0, 0.0
+
+    pricing = {
+        "gpt-4o": {"input": 2.50, "output": 10.00},
+        "gpt-4-turbo": {"input": 10.00, "output": 30.00},
+        "gpt-3.5-turbo": {"input": 0.50, "output": 1.50},
+    }
+    prices = pricing.get(model, None)
+    if not prices:
+        return 0, 0.0
+
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except Exception:
+        encoding = tiktoken.get_encoding("cl100k_base")
+
+    subset = df[selected_cols] if selected_cols else df
+    prompt_tokens = len(encoding.encode(system_prompt))
+    sample = subset.head(100)
+    data_tokens_sum = sum(len(encoding.encode(row.to_json())) for _, row in sample.iterrows())
+    avg_row_tokens = data_tokens_sum / len(sample) if len(sample) > 0 else 0
+    total_tokens = (prompt_tokens + avg_row_tokens) * len(df)
+    cost = (total_tokens / 1_000_000) * prices["input"]
+    return int(total_tokens), cost
+
+
+class QualitativeTool(BaseTool):
+    """Tool for qualitative coding of data with AI"""
+
+    id = "qualitative"
+    name = "Qualitative Coder"
+    description = "Code qualitative data with AI"
+    icon = ":material/psychology:"
     category = "Processing"
 
     def __init__(self):
         self.db = get_db()
 
     def render_config(self) -> ToolConfig:
-        """Render transform tool configuration UI"""
+        """Render qualitative coder configuration UI"""
 
         # File upload section
         st.header("1. Upload Data")
@@ -41,14 +81,15 @@ class TransformTool(BaseTool):
             uploaded_file = st.file_uploader(
                 "Upload Dataset",
                 type=["csv", "xlsx", "xls", "json"],
-                key="transform_upload"
+                key="qualitative_upload"
             )
         with col_sample:
             st.write("")
-            use_sample = st.button("Use Sample Data", help="Load sample data for testing")
+            use_sample = st.button("Use Sample Data", help="Load sample data for testing",
+                                   key="qualitative_sample_btn")
 
         if use_sample:
-            st.session_state["use_sample_data"] = True
+            st.session_state["qualitative_use_sample"] = True
 
         # Load data
         df = None
@@ -67,7 +108,7 @@ class TransformTool(BaseTool):
             except Exception as e:
                 return ToolConfig(is_valid=False, error_message=f"Error loading file: {str(e)}")
 
-        elif st.session_state.get("use_sample_data"):
+        elif st.session_state.get("qualitative_use_sample"):
             df = pd.DataFrame(SAMPLE_DATA_COLUMNS)
             data_source = "sample_data.csv"
             st.success("Using sample data (10 product reviews)")
@@ -84,40 +125,41 @@ class TransformTool(BaseTool):
             "Active Columns (sent to AI)",
             all_cols,
             default=all_cols,
-            key="transform_selected_cols"
+            key="qualitative_selected_cols"
         )
 
         st.dataframe(df.head(), height=200)
 
         # Prompt section
-        st.header("2. Define Transformation")
+        st.header("2. Coding Instructions")
         system_prompt = st.text_area(
             "AI Instructions",
             height=250,
-            placeholder="Example: Extract the main topic from each text and classify sentiment as positive/negative/neutral...",
-            key="transform_system_prompt",
-            value=st.session_state.get("system_prompt", "")
+            key="qualitative_system_prompt",
+            value=st.session_state.get("qualitative_prompt_value", DEFAULT_QUALITATIVE_PROMPT),
+            help="Pre-filled with a qualitative coding prompt. Edit to match your analysis needs."
         )
 
-        if st.session_state.get("json_mode", False):
-            st.info("JSON Mode enabled - instruct the AI to return valid JSON in your prompt")
+        # Cost estimation for OpenAI
+        provider = get_selected_provider()
+        api_key = get_effective_api_key()
+        model = get_selected_model()
 
-        # Validate
+        if provider in (LLMProvider.OPENAI,) and system_prompt and selected_cols:
+            tokens, cost = estimate_openai_cost(df, system_prompt, model, selected_cols)
+            if cost > 0:
+                st.caption(f"Estimated cost: ${cost:.4f} (~{tokens:,} tokens)")
+
         if not system_prompt or not system_prompt.strip():
             return ToolConfig(
                 is_valid=False,
-                error_message="Please enter AI instructions",
+                error_message="Please enter coding instructions",
                 config_data={
                     "df": df,
                     "data_source": data_source,
                     "selected_cols": selected_cols
                 }
             )
-
-        # Get settings from session state
-        provider = get_selected_provider()
-        api_key = get_effective_api_key()
-        model = get_selected_model()
 
         if PROVIDER_CONFIGS[provider].requires_api_key and not api_key:
             return ToolConfig(
@@ -131,7 +173,6 @@ class TransformTool(BaseTool):
                 }
             )
 
-        # Build config
         config_data = {
             "df": df,
             "data_source": data_source,
@@ -143,7 +184,7 @@ class TransformTool(BaseTool):
             "model": model,
             "temperature": st.session_state.get("temperature", 0.0),
             "max_tokens": st.session_state.get("max_tokens", 2048),
-            "json_mode": st.session_state.get("json_mode", False),
+            "json_mode": False,
             "max_concurrency": st.session_state.get("max_concurrency", 5),
             "auto_retry": st.session_state.get("auto_retry", True),
             "max_retries": st.session_state.get("max_retries", 3),
@@ -159,13 +200,12 @@ class TransformTool(BaseTool):
         config: Dict[str, Any],
         progress_callback: Optional[Callable] = None
     ) -> ToolResult:
-        """Execute the transform operation"""
+        """Execute the qualitative coding operation"""
 
         df = config["df"]
         is_test = config.get("is_test", False)
         test_batch_size = config.get("test_batch_size", 10)
 
-        # Prepare target dataframe
         if is_test:
             target_df = df.head(test_batch_size).copy()
         else:
@@ -174,16 +214,14 @@ class TransformTool(BaseTool):
 
         run_type = "test" if is_test else "full"
 
-        # Create or get session
         session_id = get_current_session_id()
         if not session_id:
-            session = self.db.create_session("transform", get_current_settings())
+            session = self.db.create_session("qualitative", get_current_settings())
             session_id = session.session_id
             set_current_session_id(session_id)
             self.db.log(LogLevel.INFO, f"Created new session: {session.name}",
                        session_id=session_id)
 
-        # Create run
         run = self.db.create_run(
             session_id=session_id,
             run_type=run_type,
@@ -196,7 +234,7 @@ class TransformTool(BaseTool):
             variables={},
             input_file=config["data_source"],
             input_rows=len(target_df),
-            json_mode=config["json_mode"],
+            json_mode=False,
             max_concurrency=config["max_concurrency"],
             auto_retry=config["auto_retry"],
             max_retry_attempts=config["max_retries"],
@@ -207,7 +245,6 @@ class TransformTool(BaseTool):
                    {"provider": config["provider"].value, "model": config["model"]},
                    run_id=run.run_id, session_id=session_id)
 
-        # Create processor
         processing_config = ProcessingConfig(
             provider=config["provider"],
             api_key=config["api_key"],
@@ -215,7 +252,7 @@ class TransformTool(BaseTool):
             model=config["model"],
             temperature=config["temperature"],
             max_tokens=config["max_tokens"],
-            json_mode=config["json_mode"],
+            json_mode=False,
             max_concurrency=config["max_concurrency"],
             auto_retry=config["auto_retry"],
             max_retries=config["max_retries"],
@@ -225,7 +262,6 @@ class TransformTool(BaseTool):
 
         processor = TransformProcessor(processing_config, run.run_id, session_id)
 
-        # Run processing
         try:
             result = await processor.process(
                 target_df,
@@ -234,7 +270,6 @@ class TransformTool(BaseTool):
                 progress_callback
             )
 
-            # Update run status
             self.db.update_run_status(
                 run.run_id, RunStatus.COMPLETED,
                 success_count=result.success_count,
@@ -248,7 +283,6 @@ class TransformTool(BaseTool):
                        {"duration": result.total_duration, "avg_latency": result.avg_latency},
                        run_id=run.run_id)
 
-            # Add results to dataframe
             target_df["ai_output"] = [r.get("output", "N/A") for r in result.results]
             target_df["latency_s"] = [r.get("latency", 0) for r in result.results]
 
@@ -270,16 +304,14 @@ class TransformTool(BaseTool):
             return ToolResult(success=False, error_message=str(e))
 
     def render_results(self, result: ToolResult):
-        """Render transform results"""
-        import streamlit as st
+        """Render qualitative coding results"""
         from ui.components.result_inspector import render_result_inspector
         from ui.components.download_buttons import render_download_buttons
 
         if not result.success:
-            st.error(f"Transformation failed: {result.error_message}")
+            st.error(f"Qualitative coding failed: {result.error_message}")
             return
 
-        # Success message with stats
         stats = result.stats
         st.success(
             f"Complete! "
@@ -290,13 +322,10 @@ class TransformTool(BaseTool):
             f"Total: {stats.get('duration', '0s')}"
         )
 
-        # Data preview
         st.dataframe(result.data, use_container_width=True)
 
-        # Result inspector
         st.divider()
         render_result_inspector(result.data)
 
-        # Download buttons
         st.divider()
-        render_download_buttons(result.data)
+        render_download_buttons(result.data, filename_prefix="qualitative_results")

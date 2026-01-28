@@ -56,6 +56,8 @@ class GenerateTool(BaseTool):
         # Initialize session state for dynamic fields
         if "custom_fields" not in st.session_state:
             st.session_state.custom_fields = []
+        if "column_suggestions" not in st.session_state:
+            st.session_state.column_suggestions = ""
 
         # Section 1: Prompt (Primary Input - First)
         st.subheader("What would you like to generate?")
@@ -109,6 +111,8 @@ class GenerateTool(BaseTool):
             use_freeform = True
         elif schema_mode == "Define columns":
             if output_format == "Tabular (CSV)":
+                # Render column suggestions above the column input
+                self._render_column_suggestions(generation_prompt)
                 csv_columns = self._render_column_input()
                 if csv_columns:
                     schema = {col.strip(): "string" for col in csv_columns.split(",")}
@@ -118,6 +122,8 @@ class GenerateTool(BaseTool):
             schema = self._render_template_selector()
             if schema and output_format == "Tabular (CSV)":
                 csv_columns = ",".join(schema.keys())
+                # Auto-fill suggestions from template schema keys
+                st.session_state.column_suggestions = csv_columns
 
         st.divider()
 
@@ -201,6 +207,7 @@ class GenerateTool(BaseTool):
             "schema": schema,
             "use_freeform": use_freeform,
             "csv_columns": csv_columns,
+            "suggested_columns": st.session_state.get("column_suggestions", ""),
             "variables": variables,
             "gen_temperature": gen_temperature,
             "provider": provider,
@@ -214,6 +221,157 @@ class GenerateTool(BaseTool):
         }
 
         return ToolConfig(is_valid=True, config_data=config_data)
+
+    def _render_column_suggestions(self, generation_prompt: str) -> None:
+        """Render column suggestions UI with AI suggestion capability"""
+        st.write("**Suggested Columns**")
+
+        # Editable text area for suggestions
+        suggestions = st.text_area(
+            "Column suggestions (comma-separated)",
+            value=st.session_state.column_suggestions,
+            placeholder="name, email, age, city, purchase_amount",
+            key="gen_column_suggestions_input",
+            height=68,
+            help="Edit suggestions or use the buttons below to auto-generate",
+            label_visibility="collapsed"
+        )
+
+        # Update session state when user edits
+        if suggestions != st.session_state.column_suggestions:
+            st.session_state.column_suggestions = suggestions
+
+        # Buttons row
+        col_suggest, col_apply = st.columns(2)
+
+        with col_suggest:
+            if st.button("Suggest from Prompt", key="btn_suggest_columns", use_container_width=True):
+                if generation_prompt and generation_prompt.strip():
+                    with st.spinner("Analyzing prompt..."):
+                        suggested = self._get_ai_column_suggestions(generation_prompt)
+                        if suggested:
+                            st.session_state.column_suggestions = suggested
+                            st.rerun()
+                else:
+                    st.warning("Please enter a generation prompt first")
+
+        with col_apply:
+            if st.button("Apply to Columns", key="btn_apply_suggestions", use_container_width=True):
+                if st.session_state.column_suggestions:
+                    st.session_state.gen_csv_columns = st.session_state.column_suggestions
+                    st.rerun()
+
+    def _get_ai_column_suggestions(self, generation_prompt: str) -> str:
+        """Get AI-suggested column names based on the generation prompt"""
+        from core.llm_client import get_client, create_http_client
+        from core.providers import is_local_provider
+        from database import get_db
+        import asyncio
+
+        provider = get_selected_provider()
+        model = get_selected_model()
+        base_url = st.session_state.get("base_url")
+
+        # Get API key and base_url - try configured providers first
+        api_key = None
+        provider_name = st.session_state.get("selected_provider", "OpenAI")
+        db = get_db()
+        configured_providers = db.get_enabled_configured_providers()
+
+        for p in configured_providers:
+            if p.display_name == provider_name or p.provider_type == provider_name:
+                if p.api_key:
+                    api_key = p.api_key
+                if p.base_url:
+                    base_url = p.base_url
+                if p.default_model:
+                    model = p.default_model
+                break
+
+        # Fallback to get_effective_api_key
+        if not api_key:
+            api_key = get_effective_api_key()
+
+        # Local providers (LM Studio, Ollama) don't need real API keys
+        is_local = is_local_provider(provider)
+        if is_local and (not api_key or api_key == "dummy"):
+            api_key = "dummy"  # Use dummy key for local providers
+
+        if not api_key:
+            st.error(f"API key required for AI suggestions. Please configure in LLM Providers page.")
+            return ""
+
+        system_prompt = """You are a data schema expert. Given a description of data to generate, suggest appropriate column names.
+
+RULES:
+1. Return ONLY comma-separated column names, nothing else
+2. Use snake_case for column names
+3. Suggest 3-8 relevant columns
+4. Be specific to the data described
+5. No explanations, just the column names
+
+Example output: name, email, age, city, signup_date"""
+
+        user_prompt = f"Suggest column names for this data: {generation_prompt}"
+
+        try:
+            http_client = create_http_client()
+            client = get_client(provider, api_key, base_url, http_client)
+
+            # Run async call using a new event loop to avoid conflicts
+            async def get_suggestions():
+                try:
+                    if provider == LLMProvider.OPENAI:
+                        response = await client.chat.completions.create(
+                            model=model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt}
+                            ],
+                            max_tokens=100,
+                            temperature=0
+                        )
+                        return response.choices[0].message.content.strip()
+                    elif provider == LLMProvider.ANTHROPIC:
+                        response = await client.messages.create(
+                            model=model,
+                            max_tokens=100,
+                            system=system_prompt,
+                            messages=[{"role": "user", "content": user_prompt}]
+                        )
+                        return response.content[0].text.strip()
+                    elif provider == LLMProvider.GOOGLE:
+                        response = await client.models.generate_content_async(
+                            model=model,
+                            contents=f"{system_prompt}\n\n{user_prompt}"
+                        )
+                        return response.text.strip()
+                    else:
+                        # OpenAI-compatible providers
+                        response = await client.chat.completions.create(
+                            model=model,
+                            messages=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt}
+                            ],
+                            max_tokens=100,
+                            temperature=0
+                        )
+                        return response.choices[0].message.content.strip()
+                finally:
+                    await http_client.aclose()
+
+            # Use new event loop to avoid conflicts with existing loops
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(get_suggestions())
+            finally:
+                loop.close()
+            return result
+        except Exception as e:
+            st.error(f"Failed to get suggestions: {str(e)}")
+            return ""
 
     def _render_column_input(self) -> str:
         """Render simple column input for tabular format"""
@@ -368,7 +526,8 @@ class GenerateTool(BaseTool):
                 config["use_freeform"],
                 progress_callback,
                 output_format=config.get("output_format", "JSON"),
-                csv_columns=config.get("csv_columns", "")
+                csv_columns=config.get("csv_columns", ""),
+                suggested_columns=config.get("suggested_columns", "")
             )
 
             # Update run status

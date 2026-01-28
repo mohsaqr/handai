@@ -221,7 +221,8 @@ class TransformProcessor:
             temp_df["ai_output"] = [results_map[i].get("output") for i in current_indices]
             temp_df["latency_s"] = [results_map[i].get("latency", 0) for i in current_indices]
             temp_df.to_csv(os.path.join(self.config.save_path, "partial_handai.csv"), index=False)
-        except Exception:
+        except (OSError, IOError, KeyError):
+            # Silently ignore file save errors during partial saves
             pass
 
 
@@ -272,7 +273,8 @@ class GenerateProcessor:
                         else:
                             result[f"column_{i+1}"] = val.strip().strip('"')
                     return result
-        except Exception:
+        except (csv.Error, ValueError):
+            # CSV parsing failed, fall back to raw output
             pass
 
         # Fallback: return raw output
@@ -287,7 +289,8 @@ class GenerateProcessor:
         use_freeform: bool = False,
         progress_callback: Optional[Callable] = None,
         output_format: str = "JSON",
-        csv_columns: str = ""
+        csv_columns: str = "",
+        suggested_columns: str = ""
     ) -> ProcessingResult:
         """
         Generate new dataset rows.
@@ -301,6 +304,7 @@ class GenerateProcessor:
             progress_callback: Optional callback for progress updates
             output_format: Output format - "Tabular (CSV)", "JSON", or "Free Text"
             csv_columns: Comma-separated column names for tabular format
+            suggested_columns: Comma-separated suggested column names for guidance
 
         Returns:
             ProcessingResult with statistics and generated data
@@ -316,6 +320,11 @@ class GenerateProcessor:
         # Build system prompt based on output format
         is_tabular = output_format == "Tabular (CSV)"
         is_freetext = output_format == "Free Text"
+
+        # Build suggestion guidance if provided
+        suggestion_guidance = ""
+        if suggested_columns and suggested_columns.strip():
+            suggestion_guidance = f"\n\nSuggested columns to include: {suggested_columns}"
 
         if is_tabular:
             # Tabular/CSV format - strict prompting
@@ -342,7 +351,7 @@ EXAMPLE OUTPUT FORMAT:
 Generate diverse, realistic data that varies naturally."""
             else:
                 # Freeform tabular - AI decides columns
-                system_prompt = """You are a tabular data generator. Generate realistic data in STRICT CSV format.
+                system_prompt = f"""You are a tabular data generator. Generate realistic data in STRICT CSV format.
 
 CRITICAL RULES - FOLLOW EXACTLY:
 1. Output ONLY a single CSV row - NO headers, NO markdown, NO code blocks, NO explanations
@@ -353,7 +362,7 @@ CRITICAL RULES - FOLLOW EXACTLY:
 6. Do NOT output multiple rows - just ONE row per request
 7. Do NOT include column headers - just the data values
 8. Do NOT add any text before or after the CSV row
-9. Keep the same column structure across all rows
+9. Keep the same column structure across all rows{suggestion_guidance}
 
 Generate diverse, realistic data that varies naturally."""
 
@@ -368,7 +377,7 @@ CRITICAL RULES:
 5. Just output the requested content directly"""
 
         elif use_freeform:
-            system_prompt = """You are a synthetic data generator. Based on the user's description, generate realistic, diverse data.
+            system_prompt = f"""You are a synthetic data generator. Based on the user's description, generate realistic, diverse data.
 
 CRITICAL RULES:
 1. Return ONLY valid JSON - a single object with appropriate fields
@@ -376,7 +385,7 @@ CRITICAL RULES:
 3. Each response should be unique and realistic
 4. Vary the content naturally
 5. Do not include any explanation, just the JSON object
-6. Use sensible field names in snake_case"""
+6. Use sensible field names in snake_case{suggestion_guidance}"""
         else:
             schema_str = json.dumps(schema, indent=2)
             system_prompt = f"""You are a synthetic data generator. Generate realistic, diverse data following this exact schema:
@@ -498,7 +507,7 @@ CRITICAL RULES:
                                     retry_attempt=attempts
                                 )
                                 return row_idx, parsed, round(duration, 3), True, result
-                            except:
+                            except (json.JSONDecodeError, TypeError):
                                 pass
 
                         result = RunResult.create(
@@ -758,7 +767,8 @@ class DocumentProcessor:
             partial_results = [results_map[i] for i in sorted(results_map.keys())]
             partial_df = build_results_dataframe(partial_results, csv_columns)
             partial_df.to_csv(self.config.save_path, index=False)
-        except Exception:
+        except (OSError, IOError, KeyError):
+            # Silently ignore file save errors during partial saves
             pass
 
 
@@ -862,3 +872,254 @@ def build_results_dataframe(results: List[Dict], columns: str) -> pd.DataFrame:
     final_cols = ["document_name"] + [c for c in col_list if c in df.columns]
     other_cols = [c for c in df.columns if c not in final_cols]
     return df[final_cols + other_cols]
+
+
+# ==========================================
+# Consensus Processing
+# ==========================================
+
+@dataclass
+class ConsensusConfig:
+    """Configuration for a consensus processing run"""
+    worker_configs: List[Dict[str, Any]]  # list of {provider_enum, api_key, base_url, model}
+    judge_config: Dict[str, Any]           # same shape
+    max_concurrency: int
+    auto_retry: bool
+    max_retries: int
+    save_path: Optional[str]
+    realtime_progress: bool
+    include_reasoning: bool
+
+
+class ConsensusProcessor:
+    """Processor for multi-model consensus coding"""
+
+    def __init__(self, config: ConsensusConfig, run_id: str, session_id: str):
+        self.config = config
+        self.run_id = run_id
+        self.session_id = session_id
+        self.db = get_db()
+
+    async def process(
+        self,
+        df: pd.DataFrame,
+        worker_prompt: str,
+        judge_prompt: str,
+        selected_cols: List[str],
+        progress_callback: Optional[Callable] = None
+    ) -> ProcessingResult:
+        """Process a dataframe with multiple workers and a judge."""
+        import re as re_mod
+
+        http_client = create_http_client()
+
+        # Create worker clients
+        worker_clients = {}
+        for i, wc in enumerate(self.config.worker_configs):
+            w_name = f"worker_{i+1}"
+            client = get_client(wc["provider_enum"], wc["api_key"], wc["base_url"], http_client)
+            worker_clients[w_name] = (client, wc["model"])
+
+        # Create judge client
+        jc = self.config.judge_config
+        judge_client = get_client(jc["provider_enum"], jc["api_key"], jc["base_url"], http_client)
+        judge_model = jc["model"]
+
+        semaphore = asyncio.Semaphore(self.config.max_concurrency)
+        results_map = {}
+        all_db_results = []
+
+        total = len(df)
+        completed = 0
+        success_count = 0
+        error_count = 0
+        retry_count = 0
+
+        async def _call_llm_simple(client, system_prompt, user_content, model):
+            """Simple LLM call without retry framework (uses tenacity-style inline)."""
+            max_attempts = self.config.max_retries if self.config.auto_retry else 1
+            last_error = None
+            for attempt in range(max_attempts):
+                try:
+                    output, duration, error_info, attempts = await call_llm_with_retry(
+                        client, system_prompt, user_content, model,
+                        0.0, 2048, False,
+                        self.run_id, 0,
+                        0,  # no internal retries, we handle retries here
+                        self.db
+                    )
+                    if error_info:
+                        last_error = error_info.message
+                        continue
+                    return output, duration
+                except Exception as e:
+                    last_error = str(e)
+                    continue
+            return f"Error: {last_error}", 0.0
+
+        async def process_row(row_idx: int, row: pd.Series):
+            async with semaphore:
+                if selected_cols:
+                    row_data = row[selected_cols].to_json()
+                else:
+                    row_data = row.to_json()
+                user_content = f"Data: {row_data}"
+
+                results = {}
+
+                # Call all workers in parallel
+                async def call_worker(w_name, client, model):
+                    start = time.time()
+                    output, _ = await _call_llm_simple(client, worker_prompt, user_content, model)
+                    duration = time.time() - start
+                    return w_name, output, duration
+
+                worker_tasks = [
+                    call_worker(w_name, client, model)
+                    for w_name, (client, model) in worker_clients.items()
+                ]
+                worker_results = await asyncio.gather(*worker_tasks, return_exceptions=True)
+
+                worker_text_parts = []
+                for task_idx, wr in enumerate(worker_results):
+                    if isinstance(wr, Exception):
+                        w_name = f"worker_{task_idx + 1}"
+                        results[f"{w_name}_error"] = f"Error: {str(wr)}"
+                        results[f"{w_name}_latency"] = 0.0
+                    else:
+                        w_name, output, duration = wr
+                        results[w_name] = output
+                        results[f"{w_name}_latency"] = round(duration, 3)
+                        worker_text_parts.append(f"--- {w_name.upper()} ---\n{output}\n\n")
+
+                # Build judge context
+                context_block = f"""You are the Judge.
+--- TASK ---
+System Prompt: {worker_prompt}
+Data: {row_data}
+
+--- WORKER PROPOSALS ---
+{"".join(worker_text_parts)}
+--- INSTRUCTIONS ---
+Analyze the worker proposals above."""
+
+                json_instruction = """
+CRITICAL: Return a VALID JSON object only. No markdown.
+Keys: "consensus" (Yes/No/Partial), "best_answer" (CSV format only), "reasoning" (brief)."""
+
+                start_judge = time.time()
+                try:
+                    judge_output, _ = await _call_llm_simple(
+                        judge_client,
+                        f"{judge_prompt}\n\n{json_instruction}",
+                        context_block,
+                        judge_model
+                    )
+
+                    # Robust JSON extraction
+                    parsed = None
+                    try:
+                        clean = judge_output.strip()
+                        if "```" in clean:
+                            json_match = re_mod.search(r'```(?:json)?\s*([\s\S]*?)```', clean)
+                            if json_match:
+                                clean = json_match.group(1).strip()
+                            else:
+                                clean = clean.replace("```json", "").replace("```", "").strip()
+                        if not clean.startswith("{"):
+                            start = clean.find("{")
+                            end = clean.rfind("}") + 1
+                            if start != -1 and end > start:
+                                clean = clean[start:end]
+                        parsed = json.loads(clean)
+                    except Exception:
+                        try:
+                            consensus_match = re_mod.search(r'"?consensus"?\s*[:\s]+["\']?(\w+)["\']?', judge_output, re_mod.I)
+                            answer_match = re_mod.search(r'"?best_answer"?\s*[:\s]+["\']?([^"\'}\n]+)["\']?', judge_output, re_mod.I)
+                            reasoning_match = re_mod.search(r'"?reasoning"?\s*[:\s]+["\']?([^"\'}\n]+)["\']?', judge_output, re_mod.I)
+                            parsed = {
+                                "consensus": consensus_match.group(1) if consensus_match else "Partial",
+                                "best_answer": answer_match.group(1).strip() if answer_match else judge_output[:500],
+                                "reasoning": reasoning_match.group(1).strip() if reasoning_match else "Extracted from response"
+                            }
+                        except Exception:
+                            parsed = None
+
+                    if parsed:
+                        results["judge_consensus"] = parsed.get("consensus", "Partial")
+                        results["judge_best_answer"] = parsed.get("best_answer", judge_output[:500])
+                        results["judge_reasoning"] = parsed.get("reasoning", "N/A")
+                    else:
+                        results["judge_consensus"] = "Partial"
+                        results["judge_best_answer"] = judge_output[:500] if len(judge_output) > 500 else judge_output
+                        results["judge_reasoning"] = "Could not parse structured response"
+
+                except Exception as e:
+                    results["judge_consensus"] = "Error"
+                    results["judge_best_answer"] = f"Judge Error: {e}"
+                    results["judge_reasoning"] = str(e)
+
+                results["judge_latency"] = round(time.time() - start_judge, 3)
+
+                # Create RunResult for database persistence
+                is_error = results.get("judge_consensus") == "Error"
+                db_result = RunResult.create(
+                    run_id=self.run_id,
+                    row_index=row_idx,
+                    input_data=row_data,
+                    output=json.dumps(results),
+                    status=ResultStatus.ERROR if is_error else ResultStatus.SUCCESS,
+                    latency=results.get("judge_latency", 0),
+                    error_type="judge_error" if is_error else None,
+                    error_message=results.get("judge_reasoning") if is_error else None,
+                    retry_attempt=0
+                )
+                return row_idx, results, db_result
+
+        tasks = [process_row(i, row) for i, row in df.iterrows()]
+        start_time = time.time()
+
+        for future in asyncio.as_completed(tasks):
+            idx, res_dict, db_result = await future
+            results_map[idx] = res_dict
+            all_db_results.append(db_result)
+            completed += 1
+
+            is_error = res_dict.get("judge_consensus") == "Error"
+            if is_error:
+                error_count += 1
+            else:
+                success_count += 1
+
+            if progress_callback:
+                should_update = (
+                    self.config.realtime_progress or
+                    completed % 10 == 0 or
+                    completed == total
+                )
+                if should_update:
+                    log_entry = f"Row {idx}: {res_dict.get('judge_consensus', 'Done')}"
+                    progress_callback(completed, total, success_count, error_count,
+                                     retry_count, log_entry, is_error)
+
+        await http_client.aclose()
+
+        # Save all results to database
+        if all_db_results:
+            self.db.save_results_batch(all_db_results)
+
+        latencies = [r.get("judge_latency", 0) for r in results_map.values()
+                     if r.get("judge_consensus") != "Error"]
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+        total_duration = time.time() - start_time
+
+        sorted_results = [results_map[i] for i in sorted(results_map.keys())]
+
+        return ProcessingResult(
+            success_count=success_count,
+            error_count=error_count,
+            retry_count=retry_count,
+            avg_latency=avg_latency,
+            total_duration=total_duration,
+            results=sorted_results
+        )

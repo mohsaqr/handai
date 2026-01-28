@@ -10,7 +10,6 @@ from tools.process_documents import ProcessDocumentsTool
 from tools.registry import register_default_tools
 from ui.state import initialize_session_state
 from ui.components.provider_selector import render_provider_selector
-from ui.components.model_selector import render_model_selector
 from ui.components.llm_controls import render_llm_controls, render_performance_controls
 from ui.components.progress_display import ProgressDisplay
 
@@ -29,11 +28,6 @@ def render():
 
         # Provider selection
         provider, api_key, base_url = render_provider_selector()
-
-        st.divider()
-
-        # Model selection
-        model = render_model_selector(provider, base_url)
 
         st.divider()
 
@@ -120,9 +114,15 @@ def render():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            result = loop.run_until_complete(
-                tool.execute(exec_config, progress_callback)
-            )
+            try:
+                result = loop.run_until_complete(
+                    tool.execute(exec_config, progress_callback)
+                )
+            except Exception as e:
+                st.error(f"Document processing failed: {str(e)}")
+                return
+            finally:
+                loop.close()
 
             # Render results
             st.divider()
