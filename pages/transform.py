@@ -11,7 +11,6 @@ from tools.transform import TransformTool
 from tools.registry import register_default_tools
 from ui.state import initialize_session_state
 from ui.components.provider_selector import render_provider_selector
-from ui.components.llm_controls import render_llm_controls, render_performance_controls
 from ui.components.progress_display import ProgressDisplay
 
 
@@ -25,20 +24,13 @@ def render():
 
     # Sidebar settings
     with st.sidebar:
-        st.header("Settings")
+        st.header(":material/smart_toy: AI Provider")
 
         # Provider selection
         provider, api_key, base_url = render_provider_selector()
 
         st.divider()
-
-        # LLM controls
-        temperature, max_tokens, json_mode = render_llm_controls(provider, show_header=True)
-
-        st.divider()
-
-        # Performance controls
-        max_concurrency, test_batch_size, auto_retry, max_retries, realtime_progress, save_path = render_performance_controls()
+        st.caption(":material/settings: [Settings](/settings) for Temperature, Max Tokens, and Performance")
 
     # Main content - use the tool
     tool = TransformTool()

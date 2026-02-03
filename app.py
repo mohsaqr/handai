@@ -16,19 +16,25 @@ st.set_page_config(
 # Enlarge sidebar navigation text
 st.markdown("""
 <style>
-    /* Sidebar nav link labels */
+    /* Sidebar nav link labels - bigger */
     [data-testid="stSidebarNav"] span {
-        font-size: 1.1rem !important;
+        font-size: 1.2rem !important;
+        font-weight: 500 !important;
     }
-    /* Sidebar section headers */
+    /* Sidebar section headers - bigger */
     [data-testid="stSidebarNav"] h2,
     [data-testid="stSidebarNav"] [data-testid="stMarkdownContainer"] p {
-        font-size: 1.15rem !important;
+        font-size: 1.3rem !important;
+        font-weight: 600 !important;
     }
-    /* Material icons in sidebar */
+    /* Material icons in sidebar - bigger */
     [data-testid="stSidebarNav"] [data-testid="stIcon"] {
-        width: 1.4rem !important;
-        height: 1.4rem !important;
+        width: 1.5rem !important;
+        height: 1.5rem !important;
+    }
+    /* Sidebar header styling */
+    .sidebar .stMarkdown h1, .sidebar .stMarkdown h2, .sidebar .stMarkdown h3 {
+        font-size: 1.3rem !important;
     }
 </style>
 """, unsafe_allow_html=True)

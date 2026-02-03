@@ -11,7 +11,8 @@ from ui.state import (
 )
 from database import get_db
 from config import (
-    DEFAULT_MAX_CONCURRENCY, DEFAULT_TEST_BATCH_SIZE, DEFAULT_MAX_RETRIES
+    DEFAULT_MAX_CONCURRENCY, DEFAULT_TEST_BATCH_SIZE, DEFAULT_MAX_RETRIES,
+    DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS
 )
 
 
@@ -21,15 +22,64 @@ def render():
     db = get_db()
 
     st.title("Settings")
-    st.caption("API keys and LLM defaults have moved to the **LLM Providers** page.")
+    st.caption("Configure model defaults, performance, and storage options.")
 
-    # Tabs for remaining settings categories
-    tab3, tab4 = st.tabs(["Performance", "Storage"])
+    # Tabs for settings categories
+    tab1, tab2, tab3 = st.tabs([
+        ":material/tune: Model Defaults",
+        ":material/speed: Performance",
+        ":material/folder: Storage"
+    ])
+
+    # ==========================================
+    # TAB: Model Defaults
+    # ==========================================
+    with tab1:
+        st.header("Model Defaults")
+        st.caption("Default settings used when running AI tools")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            temperature = st.slider(
+                "Temperature",
+                0.0, 2.0,
+                st.session_state.get("temperature", DEFAULT_TEMPERATURE),
+                0.1,
+                key="settings_temperature",
+                help="0 = deterministic, 2 = creative"
+            )
+            if temperature != st.session_state.get("temperature"):
+                st.session_state.temperature = temperature
+                save_setting("temperature")
+
+        with col2:
+            max_tokens = st.number_input(
+                "Max Tokens",
+                1, 128000,
+                st.session_state.get("max_tokens", DEFAULT_MAX_TOKENS),
+                256,
+                key="settings_max_tokens",
+                help="Maximum response length"
+            )
+            if max_tokens != st.session_state.get("max_tokens"):
+                st.session_state.max_tokens = max_tokens
+                save_setting("max_tokens")
+
+        json_mode = st.checkbox(
+            "JSON Mode",
+            st.session_state.get("json_mode", False),
+            key="settings_json_mode",
+            help="Force structured JSON output (when supported by provider)"
+        )
+        if json_mode != st.session_state.get("json_mode"):
+            st.session_state.json_mode = json_mode
+            save_setting("json_mode")
 
     # ==========================================
     # TAB: Performance
     # ==========================================
-    with tab3:
+    with tab2:
         st.header("Performance Settings")
 
         col1, col2 = st.columns(2)
@@ -93,9 +143,9 @@ def render():
                 save_setting("realtime_progress")
 
     # ==========================================
-    # TAB 4: Storage
+    # TAB: Storage
     # ==========================================
-    with tab4:
+    with tab3:
         st.header("Storage Settings")
 
         col1, col2 = st.columns(2)

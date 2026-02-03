@@ -24,6 +24,27 @@ def render():
     Upload datasets for AI-powered transformation, or generate entirely new synthetic datasets.
     """)
 
+    # Quick navigation links
+    nav_pages = st.session_state.get("_pages", {})
+    st.markdown("---")
+    quick_links = [
+        ("transform", ":material/sync:", "Transform"),
+        ("generate", ":material/auto_awesome:", "Generate"),
+        ("process-documents", ":material/description:", "Documents"),
+        ("qualitative", ":material/psychology:", "Qualitative"),
+        ("consensus", ":material/groups:", "Consensus"),
+        ("llm-providers", ":material/smart_toy:", "Providers"),
+        ("history", ":material/history:", "History"),
+        ("settings", ":material/settings:", "Settings"),
+    ]
+    cols = st.columns(len(quick_links))
+    for col, (key, icon, label) in zip(cols, quick_links):
+        with col:
+            page = nav_pages.get(key)
+            if page:
+                st.page_link(page, label=label, icon=icon)
+    st.markdown("---")
+
     # Quick stats
     stats = db.get_global_stats()
     if stats.get("total_runs", 0) > 0:
@@ -43,8 +64,6 @@ def render():
 
     # Tool cards
     st.header("Available Tools")
-
-    nav_pages = st.session_state.get("_pages", {})
 
     tool_cards = [
         ("transform", ":material/transform:", "Transform Data",

@@ -22,36 +22,11 @@ def render():
 
     # Sidebar
     with st.sidebar:
-        st.header("Performance")
-        max_concurrency = st.slider("Max Concurrent Rows", 1, 50, 5,
-                                     help="Rows processed simultaneously",
-                                     key="consensus_max_concurrency")
-        st.session_state.max_concurrency = max_concurrency
+        st.header(":material/groups: Consensus")
+        st.caption("Configure worker and judge models in the main panel.")
 
-        test_batch_size = st.number_input("Test Batch Size", 1, 1000, 10,
-                                           key="consensus_test_batch_size")
-        st.session_state.test_batch_size = test_batch_size
-
-        auto_retry = st.checkbox("Auto-retry Failed", True,
-                                  help="Retry rows that fail or return empty",
-                                  key="consensus_auto_retry")
-        st.session_state.auto_retry = auto_retry
-
-        max_retries = 3
-        if auto_retry:
-            max_retries = st.number_input("Max Retries", 1, 5, 3,
-                                           key="consensus_max_retries")
-        st.session_state.max_retries = max_retries
-
-        realtime_progress = st.checkbox("Real-Time Progress", True,
-                                         help="Update UI every row",
-                                         key="consensus_realtime")
-        st.session_state.realtime_progress = realtime_progress
-
-        save_path = st.text_input("Auto-Save Path", value="",
-                                   placeholder="/path/to/save/results",
-                                   key="consensus_save_path")
-        st.session_state.save_path = save_path
+        st.divider()
+        st.caption(":material/settings: [Settings](/settings) for Temperature, Max Tokens, and Performance")
 
     # Main content
     tool = ConsensusTool()

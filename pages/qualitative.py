@@ -10,7 +10,6 @@ from tools.qualitative import QualitativeTool
 from tools.registry import register_default_tools
 from ui.state import initialize_session_state
 from ui.components.provider_selector import render_provider_selector
-from ui.components.llm_controls import render_llm_controls, render_performance_controls
 from ui.components.progress_display import ProgressDisplay
 
 
@@ -24,20 +23,12 @@ def render():
 
     # Sidebar settings
     with st.sidebar:
-        st.header("Settings")
+        st.header(":material/smart_toy: AI Provider")
 
         provider, api_key, base_url = render_provider_selector(key_prefix="qualitative")
 
         st.divider()
-
-        temperature, max_tokens, json_mode = render_llm_controls(
-            provider, key_prefix="qualitative", show_header=True
-        )
-
-        st.divider()
-
-        max_concurrency, test_batch_size, auto_retry, max_retries, realtime_progress, save_path = \
-            render_performance_controls(key_prefix="qualitative")
+        st.caption(":material/settings: [Settings](/settings) for Temperature, Max Tokens, and Performance")
 
     # Main content
     tool = QualitativeTool()
