@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 
 from .providers import (
     LLMProvider, PROVIDER_CONFIGS,
-    is_reasoning_model, uses_completion_tokens, supports_json_mode
+    is_reasoning_model, uses_completion_tokens, supports_json_mode, requires_max_tokens
 )
 from errors import ErrorClassifier, ErrorInfo
 from database import get_db, LogLevel
@@ -107,13 +107,14 @@ async def call_llm_with_retry(
     system_prompt: str,
     user_content: str,
     model: str,
-    temperature: float,
-    max_tokens: int,
+    temperature: Optional[float],
+    max_tokens: Optional[int],
     json_mode: bool,
     run_id: str = None,
     row_index: int = 0,
     max_retries: int = 3,
-    db=None
+    db=None,
+    provider: LLMProvider = None
 ) -> Tuple[Optional[str], float, Optional[ErrorInfo], int]:
     """
     Call LLM with error handling and auto-retry for empty results.
@@ -139,15 +140,19 @@ async def call_llm_with_retry(
                 ],
             }
 
-            # Add temperature only for models that support it (not o1/o3/gpt-5)
-            if not is_reasoning_model(model):
+            # Temperature: only if user set it AND model supports it
+            if temperature is not None and not is_reasoning_model(model):
                 kwargs["temperature"] = temperature
 
-            # Use appropriate token parameter
-            if uses_completion_tokens(model):
-                kwargs["max_completion_tokens"] = max_tokens
-            else:
-                kwargs["max_tokens"] = max_tokens
+            # Max tokens: only if user set it OR provider requires it
+            if max_tokens is not None:
+                if uses_completion_tokens(model):
+                    kwargs["max_completion_tokens"] = max_tokens
+                else:
+                    kwargs["max_tokens"] = max_tokens
+            elif provider and requires_max_tokens(provider):
+                # Anthropic requires max_tokens - use sensible default
+                kwargs["max_tokens"] = 4096
 
             # Add JSON mode if supported
             if json_mode:
@@ -223,9 +228,10 @@ async def call_llm_simple(
     system_prompt: str,
     user_content: str,
     model: str,
-    temperature: float = 0.0,
-    max_tokens: int = 2048,
-    json_mode: bool = False
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    json_mode: bool = False,
+    provider: LLMProvider = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Simple LLM call without retry logic.
@@ -242,13 +248,19 @@ async def call_llm_simple(
             ],
         }
 
-        if not is_reasoning_model(model):
+        # Temperature: only if user set it AND model supports it
+        if temperature is not None and not is_reasoning_model(model):
             kwargs["temperature"] = temperature
 
-        if uses_completion_tokens(model):
-            kwargs["max_completion_tokens"] = max_tokens
-        else:
-            kwargs["max_tokens"] = max_tokens
+        # Max tokens: only if user set it OR provider requires it
+        if max_tokens is not None:
+            if uses_completion_tokens(model):
+                kwargs["max_completion_tokens"] = max_tokens
+            else:
+                kwargs["max_tokens"] = max_tokens
+        elif provider and requires_max_tokens(provider):
+            # Anthropic requires max_tokens - use sensible default
+            kwargs["max_tokens"] = 4096
 
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}

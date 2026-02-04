@@ -285,10 +285,22 @@ def fetch_openrouter_models() -> List[str]:
         "meta-llama/llama-3.3-70b-instruct",
     ]
 
+def requires_max_tokens_local(provider: LLMProvider) -> bool:
+    """Check if provider requires max_tokens parameter (has no server-side default)"""
+    return provider == LLMProvider.ANTHROPIC
+
+
 async def call_llm_with_retry(client, system_prompt: str, user_content: str, model: str,
-                              temperature: float, max_tokens: int, json_mode: bool,
-                              run_id: str, row_index: int, max_retries: int = 3):
-    """Call LLM with error handling and auto-retry for empty results."""
+                              temperature: Optional[float], max_tokens: Optional[int], json_mode: bool,
+                              run_id: str, row_index: int, max_retries: int = 3,
+                              provider: LLMProvider = None):
+    """Call LLM with error handling and auto-retry for empty results.
+
+    Args:
+        temperature: None = use provider default, value = user override
+        max_tokens: None = use provider default (unless provider requires it), value = user override
+        provider: LLMProvider enum for checking provider requirements
+    """
     attempt = 0
     last_error = None
 
@@ -297,6 +309,7 @@ async def call_llm_with_retry(client, system_prompt: str, user_content: str, mod
         try:
             # Some models (gpt-5, o1, o3) require max_completion_tokens instead of max_tokens
             uses_completion_tokens = any(x in model.lower() for x in ["gpt-5", "o1", "o3"])
+            is_reasoning = any(x in model.lower() for x in ["gpt-5", "o1", "o3"])
 
             kwargs = {
                 "model": model,
@@ -306,15 +319,19 @@ async def call_llm_with_retry(client, system_prompt: str, user_content: str, mod
                 ],
             }
 
-            # Add temperature only for models that support it (not o1/o3/gpt-5)
-            if not any(x in model.lower() for x in ["o1", "o3", "gpt-5"]):
+            # Temperature: only if user set it AND model supports it
+            if temperature is not None and not is_reasoning:
                 kwargs["temperature"] = temperature
 
-            # Use appropriate token parameter
-            if uses_completion_tokens:
-                kwargs["max_completion_tokens"] = max_tokens
-            else:
-                kwargs["max_tokens"] = max_tokens
+            # Max tokens: only if user set it OR provider requires it
+            if max_tokens is not None:
+                if uses_completion_tokens:
+                    kwargs["max_completion_tokens"] = max_tokens
+                else:
+                    kwargs["max_tokens"] = max_tokens
+            elif provider and requires_max_tokens_local(provider):
+                # Anthropic requires max_tokens - use sensible default
+                kwargs["max_tokens"] = 4096
 
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
@@ -325,7 +342,6 @@ async def call_llm_with_retry(client, system_prompt: str, user_content: str, mod
 
             # Check if result is empty/NA - auto-retry if so
             # Skip retry for reasoning models (gpt-5, o1, o3) as they may return empty during reasoning
-            is_reasoning = any(x in model.lower() for x in ["gpt-5", "o1", "o3"])
             if not is_reasoning and ErrorClassifier.is_empty_result(output) and attempt < max_retries:
                 db.log(LogLevel.WARNING, f"Empty result for row {row_index}, retrying...",
                        {"attempt": attempt, "output": output[:100] if output else None}, run_id=run_id)
@@ -522,6 +538,14 @@ with st.sidebar:
     # ==========================================
     st.header("🎛️ LLM Controls")
 
+    def on_temperature_change():
+        save_setting("temperature")
+        st.session_state["temperature_modified"] = True
+
+    def on_max_tokens_change():
+        save_setting("max_tokens")
+        st.session_state["max_tokens_modified"] = True
+
     temperature = st.slider(
         "Temperature",
         min_value=0.0,
@@ -529,8 +553,8 @@ with st.sidebar:
         value=st.session_state.get("temperature", 0.0),
         step=0.1,
         key="temperature",
-        help="0 = deterministic, 2 = very creative",
-        on_change=lambda: save_setting("temperature")
+        help="0 = deterministic, 2 = very creative. Leave at default to use provider's default.",
+        on_change=on_temperature_change
     )
 
     max_tokens = st.number_input(
@@ -540,8 +564,8 @@ with st.sidebar:
         value=st.session_state.get("max_tokens", 2048),
         step=256,
         key="max_tokens",
-        help="Maximum response length",
-        on_change=lambda: save_setting("max_tokens")
+        help="Maximum response length. Leave at default to use provider's default.",
+        on_change=on_max_tokens_change
     )
 
     json_mode = st.checkbox(
@@ -769,6 +793,10 @@ if dataset_mode == "Transform Existing Dataset":
                 LLMProvider.LM_STUDIO, LLMProvider.OLLAMA, LLMProvider.CUSTOM
             ] and not is_reasoning_model
 
+            # Determine effective temperature and max_tokens (None if not modified by user)
+            effective_temperature = temperature if st.session_state.get("temperature_modified") else None
+            effective_max_tokens = max_tokens if st.session_state.get("max_tokens_modified") else None
+
             async def run_transformation():
                 http_client = httpx.AsyncClient(
                     limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
@@ -789,8 +817,9 @@ if dataset_mode == "Transform Existing Dataset":
 
                         output, duration, error_info, attempts = await call_llm_with_retry(
                             client, system_prompt, user_content, model_name,
-                            temperature, max_tokens, effective_json_mode,
-                            run.run_id, row_idx, max_retries if auto_retry else 0
+                            effective_temperature, effective_max_tokens, effective_json_mode,
+                            run.run_id, row_idx, max_retries if auto_retry else 0,
+                            selected_provider
                         )
 
                         if error_info:
@@ -1188,6 +1217,10 @@ CRITICAL RULES:
         is_reasoning_model = any(x in model_name.lower() for x in ["gpt-5", "o1", "o3"])
         supports_json = selected_provider not in [LLMProvider.LM_STUDIO, LLMProvider.OLLAMA, LLMProvider.CUSTOM] and not is_reasoning_model
 
+        # For generation, temperature is always set via variation slider (explicit user choice)
+        # max_tokens follows the minimal parameter principle
+        effective_gen_max_tokens = max_tokens if st.session_state.get("max_tokens_modified") else None
+
         async def run_generation():
             http_client = httpx.AsyncClient(
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
@@ -1209,8 +1242,9 @@ CRITICAL RULES:
 
                     output, duration, error_info, attempts = await call_llm_with_retry(
                         client, gen_system, prompt, model_name,
-                        gen_temperature, max_tokens, supports_json,
-                        run.run_id, row_idx, max_retries if auto_retry else 0
+                        gen_temperature, effective_gen_max_tokens, supports_json,
+                        run.run_id, row_idx, max_retries if auto_retry else 0,
+                        selected_provider
                     )
 
                     if error_info:
@@ -1353,6 +1387,16 @@ CRITICAL RULES:
         rows = []
         latencies_list = []
         for data, latency, success in results:
+            # Handle case where LLM returns a list instead of dict
+            if isinstance(data, list):
+                if data and isinstance(data[0], dict):
+                    # Take first item if it's a list of dicts
+                    data = data[0]
+                else:
+                    # Wrap list in a dict
+                    data = {"data": data}
+
+            # Now data is guaranteed to be a dict
             if success and not data.get("error") and not data.get("raw_output"):
                 rows.append(data)
             else:

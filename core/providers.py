@@ -172,3 +172,8 @@ def supports_json_mode(provider: LLMProvider, model_name: str) -> bool:
 def uses_completion_tokens(model_name: str) -> bool:
     """Check if model uses max_completion_tokens instead of max_tokens"""
     return any(x in model_name.lower() for x in ["gpt-5", "o1", "o3"])
+
+
+def requires_max_tokens(provider: LLMProvider) -> bool:
+    """Check if provider requires max_tokens parameter (has no server-side default)"""
+    return provider == LLMProvider.ANTHROPIC

@@ -28,8 +28,8 @@ class ProcessingConfig:
     api_key: str
     base_url: Optional[str]
     model: str
-    temperature: float
-    max_tokens: int
+    temperature: Optional[float]  # None = use provider default
+    max_tokens: Optional[int]     # None = use provider default (unless provider requires it)
     json_mode: bool
     max_concurrency: int
     auto_retry: bool
@@ -116,7 +116,8 @@ class TransformProcessor:
                     self.config.temperature, self.config.max_tokens, effective_json_mode,
                     self.run_id, row_idx,
                     self.config.max_retries if self.config.auto_retry else 0,
-                    self.db
+                    self.db,
+                    self.config.provider
                 )
 
                 if error_info:
@@ -427,7 +428,8 @@ CRITICAL RULES:
                     self.config.temperature, self.config.max_tokens, effective_json_mode,
                     self.run_id, row_idx,
                     self.config.max_retries if self.config.auto_retry else 0,
-                    self.db
+                    self.db,
+                    self.config.provider
                 )
 
                 if error_info:
@@ -663,7 +665,8 @@ class DocumentProcessor:
                     self.config.temperature, self.config.max_tokens, effective_json_mode,
                     self.run_id, idx,
                     self.config.max_retries if self.config.auto_retry else 0,
-                    self.db
+                    self.db,
+                    self.config.provider
                 )
 
                 if error_info:
@@ -918,12 +921,13 @@ class ConsensusProcessor:
         for i, wc in enumerate(self.config.worker_configs):
             w_name = f"worker_{i+1}"
             client = get_client(wc["provider_enum"], wc["api_key"], wc["base_url"], http_client)
-            worker_clients[w_name] = (client, wc["model"])
+            worker_clients[w_name] = (client, wc["model"], wc["provider_enum"])
 
         # Create judge client
         jc = self.config.judge_config
         judge_client = get_client(jc["provider_enum"], jc["api_key"], jc["base_url"], http_client)
         judge_model = jc["model"]
+        judge_provider = jc["provider_enum"]
 
         semaphore = asyncio.Semaphore(self.config.max_concurrency)
         results_map = {}
@@ -935,7 +939,7 @@ class ConsensusProcessor:
         error_count = 0
         retry_count = 0
 
-        async def _call_llm_simple(client, system_prompt, user_content, model):
+        async def _call_llm_simple(client, system_prompt, user_content, model, provider_enum):
             """Simple LLM call without retry framework (uses tenacity-style inline)."""
             max_attempts = self.config.max_retries if self.config.auto_retry else 1
             last_error = None
@@ -943,10 +947,11 @@ class ConsensusProcessor:
                 try:
                     output, duration, error_info, attempts = await call_llm_with_retry(
                         client, system_prompt, user_content, model,
-                        0.0, 2048, False,
+                        None, None, False,  # Use provider defaults for temperature and max_tokens
                         self.run_id, 0,
                         0,  # no internal retries, we handle retries here
-                        self.db
+                        self.db,
+                        provider_enum
                     )
                     if error_info:
                         last_error = error_info.message
@@ -968,15 +973,15 @@ class ConsensusProcessor:
                 results = {}
 
                 # Call all workers in parallel
-                async def call_worker(w_name, client, model):
+                async def call_worker(w_name, client, model, provider_enum):
                     start = time.time()
-                    output, _ = await _call_llm_simple(client, worker_prompt, user_content, model)
+                    output, _ = await _call_llm_simple(client, worker_prompt, user_content, model, provider_enum)
                     duration = time.time() - start
                     return w_name, output, duration
 
                 worker_tasks = [
-                    call_worker(w_name, client, model)
-                    for w_name, (client, model) in worker_clients.items()
+                    call_worker(w_name, client, model, provider_enum)
+                    for w_name, (client, model, provider_enum) in worker_clients.items()
                 ]
                 worker_results = await asyncio.gather(*worker_tasks, return_exceptions=True)
 
@@ -1013,7 +1018,8 @@ Keys: "consensus" (Yes/No/Partial), "best_answer" (CSV format only), "reasoning"
                         judge_client,
                         f"{judge_prompt}\n\n{json_instruction}",
                         context_block,
-                        judge_model
+                        judge_model,
+                        judge_provider
                     )
 
                     # Robust JSON extraction
