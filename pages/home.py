@@ -16,6 +16,49 @@ def render():
     register_default_tools()
     db = get_db()
 
+    # Larger font styling for home page
+    st.markdown("""
+    <style>
+        /* Larger title */
+        .main h1 { font-size: 3rem !important; }
+        /* Larger card text */
+        .main .stMarkdown p { font-size: 1.25rem !important; line-height: 1.6 !important; }
+        /* Larger headers */
+        .main h2 { font-size: 2.2rem !important; }
+        .main h3 { font-size: 1.6rem !important; }
+        /* Bigger, bolder page links */
+        .main .stPageLink span {
+            font-size: 1.5rem !important;
+            font-weight: 600 !important;
+        }
+        /* Bigger icons in page links */
+        .main .stPageLink [data-testid="stIcon"] {
+            width: 2rem !important;
+            height: 2rem !important;
+        }
+        /* Make the entire link area more prominent */
+        .main .stPageLink {
+            padding: 0.5rem 0 !important;
+        }
+        /* Larger metric values */
+        .main [data-testid="stMetricValue"] {
+            font-size: 2rem !important;
+        }
+        /* Larger metric labels */
+        .main [data-testid="stMetricLabel"] {
+            font-size: 1.1rem !important;
+        }
+        /* Larger expander text */
+        .main .streamlit-expanderHeader {
+            font-size: 1.15rem !important;
+        }
+        /* Caption text */
+        .main .stCaption {
+            font-size: 1.05rem !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     # Header
     st.title("Handai")
     st.markdown("""
@@ -24,43 +67,7 @@ def render():
     Upload datasets for AI-powered transformation, or generate entirely new synthetic datasets.
     """)
 
-    # Quick navigation links
     nav_pages = st.session_state.get("_pages", {})
-    st.markdown("---")
-    quick_links = [
-        ("transform", ":material/sync:", "Transform"),
-        ("generate", ":material/auto_awesome:", "Generate"),
-        ("process-documents", ":material/description:", "Documents"),
-        ("qualitative", ":material/psychology:", "Qualitative"),
-        ("consensus", ":material/groups:", "Consensus"),
-        ("llm-providers", ":material/smart_toy:", "Providers"),
-        ("history", ":material/history:", "History"),
-        ("settings", ":material/settings:", "Settings"),
-    ]
-    cols = st.columns(len(quick_links))
-    for col, (key, icon, label) in zip(cols, quick_links):
-        with col:
-            page = nav_pages.get(key)
-            if page:
-                st.page_link(page, label=label, icon=icon)
-    st.markdown("---")
-
-    # Quick stats
-    stats = db.get_global_stats()
-    if stats.get("total_runs", 0) > 0:
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Sessions", stats.get("total_sessions", 0), help="Total saved sessions")
-        with col2:
-            st.metric("Total Runs", stats.get("total_runs", 0), help="Total tool executions across all sessions")
-        with col3:
-            st.metric("Rows Processed", stats.get("total_rows_processed", 0), help="Total data rows processed by AI")
-        with col4:
-            total = (stats.get("total_success", 0) or 0) + (stats.get("total_errors", 0) or 0)
-            success_rate = (stats.get("total_success", 0) or 0) / total * 100 if total > 0 else 0
-            st.metric("Success Rate", f"{success_rate:.1f}%", help="Percentage of rows processed without errors")
-
-        st.divider()
 
     # Tool cards
     st.header("Available Tools")
@@ -127,6 +134,24 @@ def render():
                     st.markdown(details)
 
     st.divider()
+
+    # Quick stats (below cards)
+    stats = db.get_global_stats()
+    if stats.get("total_runs", 0) > 0:
+        st.header("Statistics")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Sessions", stats.get("total_sessions", 0), help="Total saved sessions")
+        with col2:
+            st.metric("Total Runs", stats.get("total_runs", 0), help="Total tool executions across all sessions")
+        with col3:
+            st.metric("Rows Processed", stats.get("total_rows_processed", 0), help="Total data rows processed by AI")
+        with col4:
+            total = (stats.get("total_success", 0) or 0) + (stats.get("total_errors", 0) or 0)
+            success_rate = (stats.get("total_success", 0) or 0) / total * 100 if total > 0 else 0
+            st.metric("Success Rate", f"{success_rate:.1f}%", help="Percentage of rows processed without errors")
+
+        st.divider()
 
     # System page links
     system_cards = [
