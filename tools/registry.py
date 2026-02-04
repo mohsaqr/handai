@@ -150,6 +150,7 @@ def register_default_tools():
     from .process_documents import ProcessDocumentsTool
     from .qualitative import QualitativeTool
     from .consensus import ConsensusTool
+    from .codebook_generator import CodebookGeneratorTool
 
     # Only register if not already registered
     if not ToolRegistry.tool_exists("transform"):
@@ -166,3 +167,6 @@ def register_default_tools():
 
     if not ToolRegistry.tool_exists("consensus"):
         ToolRegistry.register(ConsensusTool())
+
+    if not ToolRegistry.tool_exists("codebook-generator"):
+        ToolRegistry.register(CodebookGeneratorTool())
