@@ -17,6 +17,7 @@ from core.prompt_registry import get_effective_prompt, ensure_prompts_registered
 from ui.state import (
     get_selected_provider, get_effective_api_key, get_selected_model
 )
+from core.sample_data import get_sample_data, get_dataset_info
 
 # Sample qualitative data for testing
 def extract_json(text: str) -> Optional[Dict]:
@@ -260,6 +261,20 @@ class CodebookGeneratorTool(BaseTool):
         if use_sample:
             st.session_state["codebook_use_sample"] = True
 
+        # Sample data selector
+        if st.session_state.get("codebook_use_sample"):
+            sample_options = {
+                "learning_experience": "Learning Experience (20 student responses)",
+                "healthcare_interviews": "Healthcare Interviews (15 worker experiences)",
+                "exit_interviews": "Exit Interviews (15 employee departures)",
+            }
+            selected_sample = st.selectbox(
+                "Choose sample dataset",
+                options=list(sample_options.keys()),
+                format_func=lambda x: sample_options[x],
+                key="codebook_sample_choice"
+            )
+
         # Load data
         df = None
         data_source = None
@@ -278,9 +293,11 @@ class CodebookGeneratorTool(BaseTool):
                 return ToolConfig(is_valid=False, error_message=f"Error loading file: {str(e)}")
 
         elif st.session_state.get("codebook_use_sample"):
-            df = pd.DataFrame(SAMPLE_QUALITATIVE_DATA)
-            data_source = "sample_qualitative_data.csv"
-            st.success("Using sample data (15 learning experience responses)")
+            selected = st.session_state.get("codebook_sample_choice", "learning_experience")
+            df = pd.DataFrame(get_sample_data(selected))
+            info = get_dataset_info()[selected]
+            data_source = f"{selected}.csv"
+            st.success(f"Using sample data: {info['name']} ({info['rows']} rows)")
 
         if df is None:
             return ToolConfig(is_valid=False, error_message="Please upload a file or use sample data")

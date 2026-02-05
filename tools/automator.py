@@ -22,6 +22,7 @@ from ui.state import (
     get_selected_provider, get_effective_api_key, get_selected_model,
     get_current_settings, set_current_session_id, get_current_session_id
 )
+from core.sample_data import get_sample_data, get_dataset_info
 
 # Sample data for testing
 SAMPLE_AUTOMATOR_DATA = {
@@ -441,6 +442,21 @@ class AutomatorTool(BaseTool):
         if use_sample:
             st.session_state["automator_use_sample"] = True
 
+        # Sample data selector
+        if st.session_state.get("automator_use_sample"):
+            sample_options = {
+                "news_articles": "News Articles (20 articles for classification)",
+                "social_media_posts": "Social Media Posts (20 posts for moderation)",
+                "support_tickets": "Support Tickets (20 customer issues)",
+                "product_reviews": "Product Reviews (20 reviews with sentiment)",
+            }
+            selected_sample = st.selectbox(
+                "Choose sample dataset",
+                options=list(sample_options.keys()),
+                format_func=lambda x: sample_options[x],
+                key="automator_sample_choice"
+            )
+
         # Load data
         df = None
         data_source = None
@@ -459,9 +475,11 @@ class AutomatorTool(BaseTool):
                 return ToolConfig(is_valid=False, error_message=f"Error loading file: {str(e)}")
 
         elif st.session_state.get("automator_use_sample"):
-            df = pd.DataFrame(SAMPLE_AUTOMATOR_DATA)
-            data_source = "sample_automator_data.csv"
-            st.success("Using sample data (10 news articles)")
+            selected = st.session_state.get("automator_sample_choice", "news_articles")
+            df = pd.DataFrame(get_sample_data(selected))
+            info = get_dataset_info()[selected]
+            data_source = f"{selected}.csv"
+            st.success(f"Using sample data: {info['name']} ({info['rows']} rows)")
 
         if df is None:
             return ToolConfig(is_valid=False, error_message="Please upload a file or use sample data")

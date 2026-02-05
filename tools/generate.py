@@ -62,14 +62,43 @@ class GenerateTool(BaseTool):
 
         # Section 1: Prompt (Primary Input - First)
         st.subheader("What would you like to generate?")
-        generation_prompt = st.text_area(
-            "Describe your data",
-            height=120,
-            placeholder="Example: Generate realistic customer profiles including full names, email addresses, and purchase history...",
-            key="generate_prompt",
-            help="Describe the data you need. Be specific about the content and any constraints.",
-            label_visibility="collapsed"
-        )
+
+        # Sample prompts
+        sample_prompts = {
+            "": "-- Select a sample prompt --",
+            "customer_profiles": "Generate realistic customer profiles for an e-commerce platform. Include diverse names, valid email formats, ages between 18-75, cities across the US, and realistic purchase amounts.",
+            "product_catalog": "Generate a product catalog for an electronics store. Include product names, categories (phones, laptops, accessories), prices in USD, stock quantities, and brief descriptions.",
+            "employee_directory": "Generate an employee directory for a tech company. Include full names, job titles (Engineer, Manager, Designer, etc.), departments, years of experience, and salary ranges.",
+            "survey_responses": "Generate survey responses about workplace satisfaction. Include respondent IDs, department, satisfaction scores (1-5), and open-ended comments about what could be improved.",
+            "medical_records": "Generate synthetic patient records for a clinic. Include patient IDs, ages, genders, blood types, primary diagnoses, and appointment dates in 2024.",
+            "financial_transactions": "Generate bank transaction records. Include transaction IDs, dates, transaction types (deposit, withdrawal, transfer), amounts, and account balances.",
+            "social_media_posts": "Generate social media posts for a marketing analysis. Include usernames, post content about technology topics, engagement metrics (likes, shares), and timestamps.",
+            "research_participants": "Generate research study participant data. Include participant IDs, age groups, education levels, consent status, and group assignments (control/treatment).",
+        }
+
+        col_prompt, col_sample = st.columns([4, 1])
+        with col_sample:
+            selected_sample = st.selectbox(
+                "Sample",
+                options=list(sample_prompts.keys()),
+                format_func=lambda x: sample_prompts[x][:40] + "..." if x and len(sample_prompts[x]) > 40 else sample_prompts[x],
+                key="generate_sample_prompt",
+                label_visibility="collapsed"
+            )
+            if selected_sample and selected_sample != "":
+                if st.button("Use", key="apply_sample_prompt", use_container_width=True):
+                    st.session_state["generate_prompt"] = sample_prompts[selected_sample]
+                    st.rerun()
+
+        with col_prompt:
+            generation_prompt = st.text_area(
+                "Describe your data",
+                height=120,
+                placeholder="Example: Generate realistic customer profiles including full names, email addresses, and purchase history...",
+                key="generate_prompt",
+                help="Describe the data you need. Be specific about the content and any constraints.",
+                label_visibility="collapsed"
+            )
 
         st.divider()
 

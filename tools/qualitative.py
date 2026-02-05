@@ -16,7 +16,7 @@ from ui.state import (
     get_selected_provider, get_effective_api_key, get_selected_model,
     get_current_settings, set_current_session_id, get_current_session_id
 )
-from config import SAMPLE_DATA_COLUMNS
+from core.sample_data import get_sample_data, get_dataset_info
 
 DEFAULT_QUALITATIVE_PROMPT = """Analyze the provided data and respond with ONLY the requested output values.
 
@@ -92,6 +92,23 @@ class QualitativeTool(BaseTool):
         if use_sample:
             st.session_state["qualitative_use_sample"] = True
 
+        # Sample data selector
+        if st.session_state.get("qualitative_use_sample"):
+            dataset_info = get_dataset_info()
+            sample_options = {
+                "product_reviews": "Product Reviews (20 reviews with sentiment)",
+                "healthcare_interviews": "Healthcare Interviews (15 worker experiences)",
+                "support_tickets": "Support Tickets (20 customer issues)",
+                "learning_experience": "Learning Experience (20 student responses)",
+                "exit_interviews": "Exit Interviews (15 employee departures)",
+            }
+            selected_sample = st.selectbox(
+                "Choose sample dataset",
+                options=list(sample_options.keys()),
+                format_func=lambda x: sample_options[x],
+                key="qualitative_sample_choice"
+            )
+
         # Load data
         df = None
         data_source = None
@@ -110,9 +127,11 @@ class QualitativeTool(BaseTool):
                 return ToolConfig(is_valid=False, error_message=f"Error loading file: {str(e)}")
 
         elif st.session_state.get("qualitative_use_sample"):
-            df = pd.DataFrame(SAMPLE_DATA_COLUMNS)
-            data_source = "sample_data.csv"
-            st.success("Using sample data (10 product reviews)")
+            selected = st.session_state.get("qualitative_sample_choice", "product_reviews")
+            df = pd.DataFrame(get_sample_data(selected))
+            info = get_dataset_info()[selected]
+            data_source = f"{selected}.csv"
+            st.success(f"Using sample data: {info['name']} ({info['rows']} rows)")
 
         if df is None:
             return ToolConfig(is_valid=False, error_message="Please upload a file or use sample data")

@@ -20,6 +20,7 @@ from database import get_db, RunStatus, LogLevel
 from ui.state import (
     get_current_settings, set_current_session_id, get_current_session_id
 )
+from core.sample_data import get_sample_data, get_dataset_info
 
 DEFAULT_WORKER_PROMPT = """Analyze the provided data and respond with ONLY the requested output values.
 
@@ -97,11 +98,35 @@ class ConsensusTool(BaseTool):
 
         # File upload
         st.header("1. Upload Data")
-        uploaded_file = st.file_uploader(
-            "Upload Dataset",
-            type=["csv", "xlsx", "xls", "json"],
-            key="consensus_upload"
-        )
+
+        col_upload, col_sample = st.columns([3, 1])
+        with col_upload:
+            uploaded_file = st.file_uploader(
+                "Upload Dataset",
+                type=["csv", "xlsx", "xls", "json"],
+                key="consensus_upload"
+            )
+        with col_sample:
+            st.write("")
+            use_sample = st.button("Use Sample Data", help="Load sample data for testing",
+                                   key="consensus_sample_btn")
+
+        if use_sample:
+            st.session_state["consensus_use_sample"] = True
+
+        # Sample data selector
+        if st.session_state.get("consensus_use_sample"):
+            sample_options = {
+                "product_reviews": "Product Reviews (20 reviews with sentiment)",
+                "research_abstracts": "Research Abstracts (15 papers for classification)",
+                "support_tickets": "Support Tickets (20 customer issues)",
+            }
+            selected_sample = st.selectbox(
+                "Choose sample dataset",
+                options=list(sample_options.keys()),
+                format_func=lambda x: sample_options[x],
+                key="consensus_sample_choice"
+            )
 
         df = None
         data_source = None
@@ -119,8 +144,15 @@ class ConsensusTool(BaseTool):
             except Exception as e:
                 return ToolConfig(is_valid=False, error_message=f"Error loading file: {str(e)}")
 
+        elif st.session_state.get("consensus_use_sample"):
+            selected = st.session_state.get("consensus_sample_choice", "product_reviews")
+            df = pd.DataFrame(get_sample_data(selected))
+            info = get_dataset_info()[selected]
+            data_source = f"{selected}.csv"
+            st.success(f"Using sample data: {info['name']} ({info['rows']} rows)")
+
         if df is None:
-            return ToolConfig(is_valid=False, error_message="Please upload a file")
+            return ToolConfig(is_valid=False, error_message="Please upload a file or use sample data")
 
         if df.empty:
             return ToolConfig(is_valid=False, error_message="The uploaded file is empty")
