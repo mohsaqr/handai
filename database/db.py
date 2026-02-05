@@ -586,6 +586,78 @@ class HandaiDB:
                 return ConfiguredProvider(**d)
         return None
 
+    # ==========================================
+    # SYSTEM PROMPT OVERRIDES
+    # ==========================================
+
+    def save_prompt_override(self, prompt_id: str, custom_value: str, is_enabled: bool = True):
+        """Save or update a system prompt override"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO system_prompt_overrides
+                (prompt_id, custom_value, is_enabled, updated_at)
+                VALUES (?, ?, ?, ?)
+            ''', (prompt_id, custom_value, 1 if is_enabled else 0, datetime.now().isoformat()))
+
+    def get_prompt_override(self, prompt_id: str) -> Optional[str]:
+        """Get a system prompt override value if it exists and is enabled"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT custom_value FROM system_prompt_overrides
+                WHERE prompt_id = ? AND is_enabled = 1
+            ''', (prompt_id,))
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+        return None
+
+    def get_all_prompt_overrides(self) -> Dict[str, str]:
+        """Get all enabled system prompt overrides"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT prompt_id, custom_value FROM system_prompt_overrides
+                WHERE is_enabled = 1
+            ''')
+            return {row[0]: row[1] for row in cursor.fetchall()}
+
+    def get_prompt_override_info(self, prompt_id: str) -> Optional[Dict[str, Any]]:
+        """Get full info about a prompt override including enabled status"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT prompt_id, custom_value, is_enabled, updated_at
+                FROM system_prompt_overrides
+                WHERE prompt_id = ?
+            ''', (prompt_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'prompt_id': row[0],
+                    'custom_value': row[1],
+                    'is_enabled': bool(row[2]),
+                    'updated_at': row[3]
+                }
+        return None
+
+    def delete_prompt_override(self, prompt_id: str):
+        """Delete a system prompt override"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM system_prompt_overrides WHERE prompt_id = ?', (prompt_id,))
+
+    def set_prompt_override_enabled(self, prompt_id: str, is_enabled: bool):
+        """Enable or disable a prompt override without deleting it"""
+        with self.get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE system_prompt_overrides
+                SET is_enabled = ?, updated_at = ?
+                WHERE prompt_id = ?
+            ''', (1 if is_enabled else 0, datetime.now().isoformat(), prompt_id))
+
 
 # Singleton instance
 _db_instance = None

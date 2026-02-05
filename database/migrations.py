@@ -139,7 +139,16 @@ MIGRATIONS: List[Tuple[int, str, List[str]]] = [
         )
         """,
     ]),
-    # Migration 3 (configured_providers) was inserted above; version 4 keeps original schema_versions logic
+    (5, "Add system_prompt_overrides table", [
+        """
+        CREATE TABLE IF NOT EXISTS system_prompt_overrides (
+            prompt_id TEXT PRIMARY KEY,
+            custom_value TEXT NOT NULL,
+            is_enabled INTEGER DEFAULT 1,
+            updated_at TEXT NOT NULL
+        )
+        """,
+    ]),
 ]
 
 

@@ -15,6 +15,7 @@ from typing import Dict, Any, Optional, Callable, List, Tuple
 from .base import BaseTool, ToolConfig, ToolResult
 from core.providers import LLMProvider, PROVIDER_CONFIGS
 from core.processing import ConsensusProcessor, ConsensusConfig
+from core.prompt_registry import get_effective_prompt, ensure_prompts_registered
 from database import get_db, RunStatus, LogLevel
 from ui.state import (
     get_current_settings, set_current_session_id, get_current_session_id
@@ -162,20 +163,26 @@ class ConsensusTool(BaseTool):
 
         # Prompts
         st.header("3. Prompts")
+
+        # Get effective prompts (respects overrides from Settings > System Prompts)
+        ensure_prompts_registered()
+        default_worker_prompt = get_effective_prompt("consensus.worker_prompt")
+        default_judge_prompt = get_effective_prompt("consensus.judge_prompt")
+
         col1, col2 = st.columns(2)
         with col1:
             worker_prompt = st.text_area(
                 "Worker Instructions",
                 height=200,
                 key="consensus_worker_prompt",
-                value=st.session_state.get("consensus_worker_prompt_val", DEFAULT_WORKER_PROMPT),
+                value=st.session_state.get("consensus_worker_prompt_val", default_worker_prompt),
             )
         with col2:
             judge_prompt = st.text_area(
                 "Judge Instructions",
                 height=200,
                 key="consensus_judge_prompt",
-                value=st.session_state.get("consensus_judge_prompt_val", DEFAULT_JUDGE_PROMPT),
+                value=st.session_state.get("consensus_judge_prompt_val", default_judge_prompt),
             )
 
         include_reasoning = st.checkbox("Include Judge Reasoning", value=True, key="consensus_reasoning")

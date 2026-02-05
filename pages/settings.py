@@ -14,6 +14,11 @@ from config import (
     DEFAULT_MAX_CONCURRENCY, DEFAULT_TEST_BATCH_SIZE, DEFAULT_MAX_RETRIES,
     DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS
 )
+from core.prompt_registry import (
+    PromptRegistry, ensure_prompts_registered, get_effective_prompt,
+    get_prompt_status, set_temporary_override, set_permanent_override,
+    reset_to_default, get_default_prompt
+)
 
 
 def render():
@@ -24,11 +29,15 @@ def render():
     st.title("Settings")
     st.caption("Configure model defaults, performance, and storage options.")
 
+    # Ensure prompts are registered
+    ensure_prompts_registered()
+
     # Tabs for settings categories
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         ":material/tune: Model Defaults",
         ":material/speed: Performance",
-        ":material/folder: Storage"
+        ":material/folder: Storage",
+        ":material/edit_note: System Prompts"
     ])
 
     # ==========================================
@@ -210,6 +219,123 @@ def render():
             if st.button("Confirm Clear All Data", type="primary"):
                 # This would need a confirmation dialog in practice
                 st.warning("This action cannot be undone!")
+
+    # ==========================================
+    # TAB: System Prompts
+    # ==========================================
+    with tab4:
+        st.header("System Prompts")
+        st.caption("Customize AI system prompts used by various tools. Changes can be temporary (session only) or permanent (saved to database).")
+
+        # Get all registered prompts
+        all_prompts = PromptRegistry.get_all()
+        categories = PromptRegistry.get_categories()
+
+        if not all_prompts:
+            st.info("No system prompts registered.")
+        else:
+            # Category filter
+            selected_category = st.selectbox(
+                "Filter by Category",
+                ["All Categories"] + categories,
+                key="prompt_category_filter"
+            )
+
+            # Filter prompts by category
+            if selected_category == "All Categories":
+                filtered_prompts = all_prompts
+            else:
+                filtered_prompts = PromptRegistry.get_by_category(selected_category)
+
+            st.divider()
+
+            # Render each prompt
+            for prompt_id, prompt_def in sorted(filtered_prompts.items(), key=lambda x: (x[1].category, x[1].name)):
+                status = get_prompt_status(prompt_id)
+
+                # Status indicator
+                if status == "session":
+                    status_badge = ":orange[Session Override]"
+                elif status == "permanent":
+                    status_badge = ":blue[Permanent Override]"
+                else:
+                    status_badge = ":green[Using Default]"
+
+                # Create expander for each prompt
+                with st.expander(f"**{prompt_def.name}** - {status_badge}", expanded=False):
+                    st.caption(f"**Module:** {prompt_def.module} | **ID:** `{prompt_id}`")
+                    st.markdown(f"*{prompt_def.description}*")
+
+                    # Get current effective value
+                    current_value = get_effective_prompt(prompt_id)
+                    default_value = get_default_prompt(prompt_id)
+
+                    # Text area for editing
+                    edited_value = st.text_area(
+                        "Prompt Content",
+                        value=current_value,
+                        height=200,
+                        key=f"prompt_edit_{prompt_id}",
+                        label_visibility="collapsed"
+                    )
+
+                    # Check if value has been modified
+                    is_modified = edited_value != current_value
+
+                    # Action buttons
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    with col1:
+                        if st.button(
+                            "Save Temporary",
+                            key=f"save_temp_{prompt_id}",
+                            use_container_width=True,
+                            disabled=not is_modified,
+                            help="Save for this session only (will be lost on restart)"
+                        ):
+                            set_temporary_override(prompt_id, edited_value)
+                            st.success("Saved as temporary override!")
+                            st.rerun()
+
+                    with col2:
+                        if st.button(
+                            "Save Permanent",
+                            key=f"save_perm_{prompt_id}",
+                            use_container_width=True,
+                            disabled=not is_modified,
+                            help="Save to database (persists across sessions)"
+                        ):
+                            set_permanent_override(prompt_id, edited_value)
+                            st.success("Saved as permanent override!")
+                            st.rerun()
+
+                    with col3:
+                        if st.button(
+                            "Reset to Default",
+                            key=f"reset_{prompt_id}",
+                            use_container_width=True,
+                            disabled=status == "default",
+                            help="Remove all overrides and use the default value"
+                        ):
+                            reset_to_default(prompt_id)
+                            st.success("Reset to default!")
+                            st.rerun()
+
+                    with col4:
+                        if st.button(
+                            "View Default",
+                            key=f"view_default_{prompt_id}",
+                            use_container_width=True,
+                            help="Show the original default value"
+                        ):
+                            st.session_state[f"show_default_{prompt_id}"] = not st.session_state.get(f"show_default_{prompt_id}", False)
+                            st.rerun()
+
+                    # Show default value if requested
+                    if st.session_state.get(f"show_default_{prompt_id}", False):
+                        st.markdown("---")
+                        st.markdown("**Default Value:**")
+                        st.code(default_value, language="text")
 
 
 if __name__ == "__main__":

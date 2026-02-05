@@ -13,6 +13,7 @@ from .base import BaseTool, ToolConfig, ToolResult
 from core.providers import LLMProvider, PROVIDER_CONFIGS
 from core.templates import DATASET_TEMPLATES, get_template_names
 from core.processing import GenerateProcessor, ProcessingConfig
+from core.prompt_registry import get_effective_prompt, ensure_prompts_registered
 from database import get_db, RunStatus, LogLevel
 from ui.state import (
     get_selected_provider, get_effective_api_key, get_selected_model,
@@ -301,16 +302,9 @@ class GenerateTool(BaseTool):
             st.error(f"API key required for AI suggestions. Please configure in LLM Providers page.")
             return ""
 
-        system_prompt = """You are a data schema expert. Given a description of data to generate, suggest appropriate column names.
-
-RULES:
-1. Return ONLY comma-separated column names, nothing else
-2. Use snake_case for column names
-3. Suggest 3-8 relevant columns
-4. Be specific to the data described
-5. No explanations, just the column names
-
-Example output: name, email, age, city, signup_date"""
+        # Get effective system prompt (respects overrides from Settings > System Prompts)
+        ensure_prompts_registered()
+        system_prompt = get_effective_prompt("generate.column_suggestions")
 
         user_prompt = f"Suggest column names for this data: {generation_prompt}"
 

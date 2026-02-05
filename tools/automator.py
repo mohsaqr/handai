@@ -16,6 +16,7 @@ import time
 from .base import BaseTool, ToolConfig, ToolResult
 from core.providers import LLMProvider, PROVIDER_CONFIGS, supports_json_mode
 from core.llm_client import get_client, create_http_client, call_llm_with_retry
+from core.prompt_registry import get_effective_prompt, ensure_prompts_registered
 from database import get_db, RunResult, ResultStatus, RunStatus, LogLevel
 from ui.state import (
     get_selected_provider, get_effective_api_key, get_selected_model,
@@ -337,14 +338,10 @@ def build_system_prompt(config: AutomatorConfig) -> str:
     if config.consistency_prompt:
         prompt_parts.append(f"\nCONSISTENCY RULES:\n{config.consistency_prompt}")
 
-    prompt_parts.extend([
-        "\nCRITICAL RULES:",
-        "1. Return ONLY the requested output format, no explanations or additional text",
-        "2. Include ALL required fields in every response",
-        "3. Use null/empty string for optional fields if not applicable",
-        "4. Be consistent in judgment and formatting across all rows",
-        "5. If data is unclear or ambiguous, make your best reasonable inference"
-    ])
+    # Get critical rules from prompt registry (respects overrides)
+    ensure_prompts_registered()
+    critical_rules = get_effective_prompt("automator.critical_rules")
+    prompt_parts.append(f"\n{critical_rules}")
 
     return "\n".join(prompt_parts)
 
@@ -383,14 +380,10 @@ def build_step_prompt(step: PipelineStep, confidence_enabled: bool = False) -> s
     if confidence_enabled:
         prompt_parts.append("\nCONFIDENCE: Include a 'confidence' field (0-100) indicating your certainty in the output.")
 
-    prompt_parts.extend([
-        "\nCRITICAL RULES:",
-        "1. Return ONLY the requested output format, no explanations or additional text",
-        "2. Include ALL required fields in every response",
-        "3. Use null/empty string for optional fields if not applicable",
-        "4. Be consistent in judgment and formatting",
-        "5. If data is unclear or ambiguous, make your best reasonable inference"
-    ])
+    # Get critical rules from prompt registry (respects overrides)
+    ensure_prompts_registered()
+    critical_rules = get_effective_prompt("automator.critical_rules")
+    prompt_parts.append(f"\n{critical_rules}")
 
     return "\n".join(prompt_parts)
 

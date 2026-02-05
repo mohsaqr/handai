@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, Callable
 from .base import BaseTool, ToolConfig, ToolResult
 from core.providers import LLMProvider, PROVIDER_CONFIGS
 from core.processing import TransformProcessor, ProcessingConfig
+from core.prompt_registry import get_effective_prompt, ensure_prompts_registered
 from database import get_db, RunStatus, LogLevel
 from ui.state import (
     get_selected_provider, get_effective_api_key, get_selected_model,
@@ -132,11 +133,16 @@ class QualitativeTool(BaseTool):
 
         # Prompt section
         st.header("2. Coding Instructions")
+
+        # Get the effective prompt (respects overrides from Settings > System Prompts)
+        ensure_prompts_registered()
+        default_prompt = get_effective_prompt("qualitative.default_prompt")
+
         system_prompt = st.text_area(
             "AI Instructions",
             height=250,
             key="qualitative_system_prompt",
-            value=st.session_state.get("qualitative_prompt_value", DEFAULT_QUALITATIVE_PROMPT),
+            value=st.session_state.get("qualitative_prompt_value", default_prompt),
             help="Pre-filled with a qualitative coding prompt. Edit to match your analysis needs."
         )
 

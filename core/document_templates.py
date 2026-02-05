@@ -4,6 +4,7 @@ Predefined templates for common document processing tasks
 """
 
 from typing import Dict, List, Optional
+from functools import lru_cache
 
 # Master system prompt that enforces CSV output
 MASTER_SYSTEM_PROMPT = """You are a document data extractor. Your ONLY job is to output clean CSV data.
@@ -167,6 +168,22 @@ def get_template_description(name: str) -> str:
     return ""
 
 
+def get_effective_master_prompt() -> str:
+    """
+    Get the effective master system prompt, respecting any overrides.
+
+    Returns:
+        The master system prompt (from override or default)
+    """
+    try:
+        from core.prompt_registry import get_effective_prompt, ensure_prompts_registered
+        ensure_prompts_registered()
+        return get_effective_prompt("documents.master_prompt")
+    except ImportError:
+        # Fallback if prompt registry not available
+        return MASTER_SYSTEM_PROMPT
+
+
 def create_full_system_prompt(user_prompt: str) -> str:
     """
     Combine master system prompt with user's specific prompt.
@@ -177,4 +194,5 @@ def create_full_system_prompt(user_prompt: str) -> str:
     Returns:
         Full system prompt for LLM
     """
-    return MASTER_SYSTEM_PROMPT + "\n\n" + user_prompt
+    master = get_effective_master_prompt()
+    return master + "\n\n" + user_prompt

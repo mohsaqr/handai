@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, asdict
 from .base import BaseTool, ToolConfig, ToolResult
 from core.providers import LLMProvider, PROVIDER_CONFIGS, supports_json_mode
 from core.llm_client import get_client, call_llm_simple
+from core.prompt_registry import get_effective_prompt, ensure_prompts_registered
 from ui.state import (
     get_selected_provider, get_effective_api_key, get_selected_model
 )
@@ -632,9 +633,13 @@ Respond in JSON format:
     ]
 }}"""
 
+            # Get theme discovery system prompt (respects overrides)
+            ensure_prompts_registered()
+            theme_discovery_prompt = get_effective_prompt("codebook.theme_discovery")
+
             theme_result, theme_error = await call_llm_simple(
                 client=client,
-                system_prompt="You are an expert qualitative researcher skilled in thematic analysis. Analyze data systematically and identify meaningful patterns. Always respond with valid JSON.",
+                system_prompt=theme_discovery_prompt,
                 user_content=theme_prompt,
                 model=model,
                 json_mode=use_json_mode,
@@ -681,9 +686,12 @@ Respond in JSON format:
     ]
 }}"""
 
+            # Get theme consolidation system prompt (respects overrides)
+            theme_consolidation_prompt = get_effective_prompt("codebook.theme_consolidation")
+
             merge_result, merge_error = await call_llm_simple(
                 client=client,
-                system_prompt="You are an expert qualitative researcher consolidating thematic analysis results. Always respond with valid JSON.",
+                system_prompt=theme_consolidation_prompt,
                 user_content=merge_prompt,
                 model=model,
                 json_mode=use_json_mode,
@@ -753,9 +761,12 @@ Respond in JSON format:
     ]
 }}"""
 
+        # Get code definition system prompt (respects overrides)
+        code_definition_prompt = get_effective_prompt("codebook.code_definition")
+
         code_result, code_error = await call_llm_simple(
             client=client,
-            system_prompt="You are an expert qualitative researcher creating a rigorous codebook. Define codes clearly with specific, actionable criteria. Always respond with valid JSON.",
+            system_prompt=code_definition_prompt,
             user_content=code_prompt,
             model=model,
             json_mode=use_json_mode,
