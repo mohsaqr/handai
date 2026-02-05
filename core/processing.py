@@ -17,6 +17,7 @@ from .providers import LLMProvider, PROVIDER_CONFIGS, supports_json_mode
 from .llm_client import get_client, create_http_client, call_llm_with_retry
 from .document_reader import read_document, read_uploaded_file
 from .document_templates import create_full_system_prompt
+from .prompt_registry import get_effective_prompt, ensure_prompts_registered
 from database import get_db, RunResult, ResultStatus, RunStatus, LogLevel
 from errors import ErrorClassifier
 
@@ -322,50 +323,29 @@ class GenerateProcessor:
         is_tabular = output_format == "Tabular (CSV)"
         is_freetext = output_format == "Free Text"
 
+        # Ensure prompts are registered
+        ensure_prompts_registered()
+
         # Build suggestion guidance if provided
         suggestion_guidance = ""
         if suggested_columns and suggested_columns.strip():
             suggestion_guidance = f"\n\nSuggested columns to include: {suggested_columns}"
 
         if is_tabular:
-            # Tabular/CSV format - strict prompting
+            # Tabular/CSV format - use prompts from registry
             if csv_columns:
                 columns_list = [c.strip() for c in csv_columns.split(",")]
                 columns_display = ", ".join(columns_list)
-                system_prompt = f"""You are a tabular data generator. Generate realistic data in STRICT CSV format.
-
-COLUMNS: {columns_display}
-
-CRITICAL RULES - FOLLOW EXACTLY:
-1. Output ONLY a single CSV row - NO headers, NO markdown, NO code blocks, NO explanations
-2. Use exactly {len(columns_list)} comma-separated values in this order: {columns_display}
-3. Wrap ALL text values in double quotes ""
-4. If a value contains a comma, it MUST be wrapped in double quotes
-5. Each response must be unique and realistic
-6. Do NOT output multiple rows - just ONE row per request
-7. Do NOT include column headers - just the data values
-8. Do NOT add any text before or after the CSV row
-
-EXAMPLE OUTPUT FORMAT:
-"John Smith","john@email.com","32","New York","150.00"
-
-Generate diverse, realistic data that varies naturally."""
+                # Get prompt from registry (supports overrides)
+                prompt_template = get_effective_prompt("generate.csv_with_columns")
+                system_prompt = prompt_template.format(
+                    columns=columns_display,
+                    num_columns=len(columns_list)
+                )
             else:
                 # Freeform tabular - AI decides columns
-                system_prompt = f"""You are a tabular data generator. Generate realistic data in STRICT CSV format.
-
-CRITICAL RULES - FOLLOW EXACTLY:
-1. Output ONLY a single CSV row - NO headers, NO markdown, NO code blocks, NO explanations
-2. Determine appropriate columns based on the user's description
-3. Wrap ALL text values in double quotes ""
-4. If a value contains a comma, it MUST be wrapped in double quotes
-5. Each response must be unique and realistic
-6. Do NOT output multiple rows - just ONE row per request
-7. Do NOT include column headers - just the data values
-8. Do NOT add any text before or after the CSV row
-9. Keep the same column structure across all rows{suggestion_guidance}
-
-Generate diverse, realistic data that varies naturally."""
+                prompt_template = get_effective_prompt("generate.csv_freeform")
+                system_prompt = prompt_template.format(suggestion_guidance=suggestion_guidance)
 
         elif is_freetext:
             system_prompt = """You are a content generator. Based on the user's description, generate realistic, diverse content.
