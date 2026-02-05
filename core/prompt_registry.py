@@ -677,44 +677,29 @@ Generate diverse, realistic data."""
     ))
 
     # Generate Data - CSV with defined columns (Rigorous)
-    generate_csv_with_columns_rigorous = """You are a precision synthetic data generator producing publication-quality tabular data.
+    generate_csv_with_columns_rigorous = """You are a tabular data generator. Generate realistic data in STRICT CSV format.
 
-ASSIGNED COLUMNS (in exact order): {columns}
-TOTAL FIELDS PER ROW: {num_columns}
+COLUMNS: {columns}
 
-OUTPUT SPECIFICATION:
-- Format: Single CSV row (one record)
-- Structure: {num_columns} comma-separated values matching column order exactly
+CRITICAL RULES:
+1. Output ONLY a single CSV row - NO headers, NO markdown, NO code blocks
+2. Use exactly {num_columns} comma-separated values in this order: {columns}
+3. Wrap ALL text values in double quotes
+4. Each response must be unique and realistic
+5. Do NOT output multiple rows - just ONE row per request
+6. Do NOT add any text before or after the CSV row
 
-FORMATTING RULES:
-1. Wrap ALL values in double quotes: "value"
-2. Escape internal quotes by doubling them (two double-quotes)
-3. Preserve commas inside quoted values: "New York, NY"
-4. Use empty quotes for missing data: ""
-5. Numbers should still be quoted: "42", "19.99"
+EXAMPLE FORMAT:
+"John Smith","john@email.com","32","New York","150.00"
 
-DATA QUALITY REQUIREMENTS:
-1. Realistic: Values should reflect real-world patterns
-2. Diverse: Each row should differ meaningfully from others
-3. Consistent: Data types should match column semantics
-4. Complete: Provide values for ALL {num_columns} columns
-
-COLUMN-SPECIFIC GUIDANCE:
+DATA QUALITY:
 - Names: Use culturally diverse, realistic names
-- Emails: Use realistic patterns (not example.com unless testing)
-- Dates: Use ISO format YYYY-MM-DD or contextually appropriate
-- IDs: Use realistic identifiers (UUIDs, sequential, etc.)
-- Amounts: Include appropriate decimal places for currency
-- Categories: Stay within implied domain categories
+- Emails: Use valid email patterns
+- Dates: Use YYYY-MM-DD format
+- IDs: Use consistent identifier formats (PT001, PT002, etc.)
+- Be diverse: vary genders, ages, categories, locations across rows
 
-PROHIBITED:
-- NO column headers in output
-- NO markdown formatting (```, **, etc.)
-- NO explanatory text before or after
-- NO multiple rows - exactly ONE row
-- NO line breaks within the output
-
-OUTPUT NOW: Generate exactly one CSV row with {num_columns} quoted values."""
+Generate diverse, realistic data."""
 
     PromptRegistry.register(PromptDefinition(
         id="generate.csv_with_columns.rigorous",
@@ -748,37 +733,28 @@ Generate diverse, realistic data."""
     ))
 
     # Generate Data - CSV freeform (Rigorous)
-    generate_csv_freeform_rigorous = """You are a precision synthetic data generator. Analyze the data description and generate publication-quality tabular data.
+    generate_csv_freeform_rigorous = """You are a tabular data generator. Generate realistic data in STRICT CSV format.
 
-TASK: Generate ONE row of CSV data with columns appropriate to the description.
-
-COLUMN DETERMINATION:
-1. Identify key entities and attributes from the description
-2. Include: identifiers, names, categories, quantities, dates as appropriate
-3. Use 4-8 columns that comprehensively represent the entity
-4. Column order should be logical (ID first, then core attributes, then metadata)
+CRITICAL RULES:
+1. Output ONLY a single CSV row - NO headers, NO markdown, NO code blocks
+2. Determine appropriate columns based on the data description provided
+3. Wrap ALL text values in double quotes
+4. Each response must be unique and realistic
+5. Do NOT output multiple rows - just ONE row per request
+6. Keep the same column structure across all rows
 {suggestion_guidance}
 
-FORMATTING RULES:
-1. Wrap ALL values in double quotes: "value"
-2. Escape internal quotes by doubling them
-3. Preserve commas inside quoted values
-4. Numbers should be quoted: "42", "19.99"
-5. Use empty quotes "" for optional/missing data
+EXAMPLE FORMAT:
+"PT001","45","Male","O+","Type 2 Diabetes","2024-03-15"
 
-DATA QUALITY REQUIREMENTS:
-1. Realistic: Values should reflect real-world patterns
-2. Diverse: Each row should differ meaningfully from others
-3. Consistent: Maintain same column count and order across rows
-4. Coherent: Values within a row should make sense together
+DATA QUALITY:
+- Use 4-8 columns that represent the entity well
+- Names: Use culturally diverse, realistic names
+- Dates: Use YYYY-MM-DD format
+- IDs: Use consistent identifier formats
+- Be diverse: vary values meaningfully across rows
 
-PROHIBITED:
-- NO column headers - just data
-- NO markdown formatting
-- NO explanatory text
-- NO multiple rows - exactly ONE row
-
-OUTPUT: Single CSV row with quoted values."""
+Generate diverse, realistic data."""
 
     PromptRegistry.register(PromptDefinition(
         id="generate.csv_freeform.rigorous",
