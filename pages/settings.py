@@ -227,6 +227,51 @@ def render():
         st.header("System Prompts")
         st.caption("Customize AI system prompts used by various tools. Changes can be temporary (session only) or permanent (saved to database).")
 
+        # Quick actions for rigorous prompts
+        st.subheader("Quick Actions")
+        col_rig1, col_rig2, col_rig3 = st.columns([2, 2, 3])
+
+        with col_rig1:
+            if st.button("Use Rigorous Prompts", use_container_width=True, type="primary",
+                        help="Replace all standard prompts with their rigorous research-grade variants"):
+                # Find all rigorous prompts and set them as permanent overrides
+                rigorous_applied = 0
+                all_registered = PromptRegistry.get_all()
+                for prompt_id, prompt_def in all_registered.items():
+                    if prompt_id.endswith(".rigorous"):
+                        # Get the base prompt ID (without .rigorous)
+                        base_id = prompt_id.rsplit(".rigorous", 1)[0]
+                        if base_id in all_registered:
+                            set_permanent_override(base_id, prompt_def.default_value)
+                            rigorous_applied += 1
+                if rigorous_applied > 0:
+                    st.success(f"Applied {rigorous_applied} rigorous prompts!")
+                    st.rerun()
+                else:
+                    st.warning("No rigorous prompts found to apply.")
+
+        with col_rig2:
+            if st.button("Reset All to Default", use_container_width=True,
+                        help="Remove all overrides and restore original prompts"):
+                reset_count = 0
+                all_registered = PromptRegistry.get_all()
+                for prompt_id in all_registered.keys():
+                    if not prompt_id.endswith(".rigorous"):
+                        status = get_prompt_status(prompt_id)
+                        if status != "default":
+                            reset_to_default(prompt_id)
+                            reset_count += 1
+                if reset_count > 0:
+                    st.success(f"Reset {reset_count} prompts to default!")
+                    st.rerun()
+                else:
+                    st.info("All prompts are already using defaults.")
+
+        with col_rig3:
+            st.caption("Rigorous prompts are designed for academic research with detailed methodological guidelines.")
+
+        st.divider()
+
         # Get all registered prompts
         all_prompts = PromptRegistry.get_all()
         categories = PromptRegistry.get_categories()
@@ -241,11 +286,12 @@ def render():
                 key="prompt_category_filter"
             )
 
-            # Filter prompts by category
+            # Filter prompts by category (exclude .rigorous variants from main list)
             if selected_category == "All Categories":
-                filtered_prompts = all_prompts
+                filtered_prompts = {k: v for k, v in all_prompts.items() if not k.endswith(".rigorous")}
             else:
-                filtered_prompts = PromptRegistry.get_by_category(selected_category)
+                category_prompts = PromptRegistry.get_by_category(selected_category)
+                filtered_prompts = {k: v for k, v in category_prompts.items() if not k.endswith(".rigorous")}
 
             st.divider()
 
