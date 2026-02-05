@@ -25,44 +25,74 @@ When a tool requests a system prompt, the following priority order applies:
 
 ## Available Prompts
 
+Each tool has two prompt variants:
+- **Standard** - Concise, minimal prompts for general use
+- **Rigorous** - Detailed, methodologically-grounded prompts with explicit frameworks and quality standards
+
 ### Qualitative Coder
 
 | Prompt ID | Name | Description |
 |-----------|------|-------------|
-| `qualitative.default_prompt` | Default Coding Prompt | The default system prompt for qualitative coding tasks |
+| `qualitative.default_prompt` | Default Coding Prompt | Concise prompt for qualitative coding tasks |
+| `qualitative.default_prompt.rigorous` | Default Coding Prompt (Rigorous) | Detailed prompt with analytical framework and quality standards |
 
 ### Consensus Coder
 
 | Prompt ID | Name | Description |
 |-----------|------|-------------|
-| `consensus.worker_prompt` | Worker Model Prompt | System prompt for worker models in consensus coding |
-| `consensus.judge_prompt` | Judge Model Prompt | System prompt for the judge model that synthesizes worker responses |
+| `consensus.worker_prompt` | Worker Model Prompt | Basic prompt for worker models |
+| `consensus.worker_prompt.rigorous` | Worker Model Prompt (Rigorous) | Emphasizes independent coding and inter-rater reliability |
+| `consensus.judge_prompt` | Judge Model Prompt | Basic prompt for synthesizing worker responses |
+| `consensus.judge_prompt.rigorous` | Judge Model Prompt (Rigorous) | Detailed adjudication rules and decision criteria |
 
 ### Codebook Generator
 
 | Prompt ID | Name | Description |
 |-----------|------|-------------|
-| `codebook.theme_discovery` | Theme Discovery Prompt | System prompt for discovering themes from qualitative data |
-| `codebook.theme_consolidation` | Theme Consolidation Prompt | System prompt for merging and consolidating discovered themes |
-| `codebook.code_definition` | Code Definition Prompt | System prompt for defining formal codes with inclusion/exclusion criteria |
+| `codebook.theme_discovery` | Theme Discovery Prompt | Basic theme discovery |
+| `codebook.theme_discovery.rigorous` | Theme Discovery Prompt (Rigorous) | Braun & Clarke framework for systematic thematic analysis |
+| `codebook.theme_consolidation` | Theme Consolidation Prompt | Basic theme merging |
+| `codebook.theme_consolidation.rigorous` | Theme Consolidation Prompt (Rigorous) | Explicit criteria for merging vs preserving themes |
+| `codebook.code_definition` | Code Definition Prompt | Basic code definition |
+| `codebook.code_definition.rigorous` | Code Definition Prompt (Rigorous) | Comprehensive codebook with inclusion/exclusion criteria |
 
 ### Generate Tool
 
 | Prompt ID | Name | Description |
 |-----------|------|-------------|
-| `generate.column_suggestions` | Column Suggestions Prompt | System prompt for AI-based column name suggestions |
+| `generate.column_suggestions` | Column Suggestions Prompt | Basic column name suggestions |
+| `generate.column_suggestions.rigorous` | Column Suggestions Prompt (Rigorous) | Data architecture principles with naming conventions |
 
 ### Document Templates
 
 | Prompt ID | Name | Description |
 |-----------|------|-------------|
-| `documents.master_prompt` | Master Document Prompt | Master system prompt that enforces CSV output format for document processing |
+| `documents.master_prompt` | Master Document Prompt | Basic CSV extraction rules |
+| `documents.master_prompt.rigorous` | Master Document Prompt (Rigorous) | Comprehensive formatting rules with quality checklist |
 
 ### Automator
 
 | Prompt ID | Name | Description |
 |-----------|------|-------------|
-| `automator.critical_rules` | Critical Rules Section | Standard rules appended to automator system prompts |
+| `automator.critical_rules` | Critical Rules Section | Basic processing rules |
+| `automator.critical_rules.rigorous` | Critical Rules Section (Rigorous) | Comprehensive rules covering output discipline, consistency, and QA |
+
+## When to Use Rigorous Prompts
+
+The rigorous variants are recommended when:
+
+- **High-stakes research** - Academic papers, regulatory submissions
+- **Multi-coder studies** - When inter-rater reliability matters
+- **Complex data** - Nuanced content requiring careful analysis
+- **Quality audits** - When outputs need to be defensible
+- **Training coders** - To establish consistent coding practices
+
+The standard prompts are suitable for:
+
+- **Exploratory analysis** - Initial data exploration
+- **Simple tasks** - Straightforward categorization
+- **Fast iteration** - When speed matters more than rigor
+- **Personal projects** - Lower stakes analysis
 
 ## Using the UI
 
