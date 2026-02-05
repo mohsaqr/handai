@@ -146,21 +146,16 @@ class GenerateTool(BaseTool):
                 st.caption("Columns will be auto-generated based on your description. Edit if needed.")
 
                 # Auto-suggest if not already done for this prompt
-                prompt_hash = hash(generation_prompt.strip()[:100])
-                if st.session_state.get("auto_suggest_hash") != prompt_hash:
-                    if st.button("Generate Columns from Description", key="auto_suggest_cols", use_container_width=True):
-                        with st.spinner("Analyzing description..."):
-                            suggested = self._get_ai_column_suggestions(generation_prompt)
-                            if suggested:
-                                st.session_state.column_suggestions = suggested
-                                st.session_state.auto_suggest_hash = prompt_hash
-                                st.rerun()
+                if st.button("Generate Columns from Description", key="auto_suggest_cols", use_container_width=True):
+                    with st.spinner("Analyzing description..."):
+                        suggested = self._get_ai_column_suggestions(generation_prompt)
+                        if suggested:
+                            st.session_state.auto_cols_input = suggested
+                            st.rerun()
 
-                # Show editable columns
-                current_suggestions = st.session_state.get("column_suggestions", "")
+                # Show editable columns - use session state directly
                 edited_cols = st.text_input(
                     "Columns (edit if needed)",
-                    value=current_suggestions,
                     key="auto_cols_input",
                     placeholder="patient_id, age, gender, blood_type, diagnosis, appointment_date"
                 )
