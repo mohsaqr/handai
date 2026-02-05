@@ -228,11 +228,16 @@ class GenerateTool(BaseTool):
                 }
             )
 
-        # For tabular format with defined columns, validate columns exist
+        # For tabular format, validate columns exist (unless free text mode)
         if output_format == "Tabular (CSV)" and not use_freeform and not csv_columns:
+            # Different message depending on schema mode
+            if schema_mode == "Let AI decide":
+                error_msg = "Click 'Generate Columns from Description' to create columns"
+            else:
+                error_msg = "Please define column names for tabular output"
             return ToolConfig(
                 is_valid=False,
-                error_message="Please define column names for tabular output",
+                error_message=error_msg,
                 config_data={
                     "generation_prompt": generation_prompt,
                     "num_rows": num_rows,
