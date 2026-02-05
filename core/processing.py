@@ -237,13 +237,14 @@ class GenerateProcessor:
         self.session_id = session_id
         self.db = get_db()
 
-    def _parse_csv_row(self, output: str, csv_columns: str) -> Dict[str, Any]:
+    def _parse_csv_row(self, output: str, csv_columns: str, inferred_columns: List[str] = None) -> Dict[str, Any]:
         """
         Parse a CSV row output into a dictionary.
 
         Args:
             output: Raw CSV output from LLM
             csv_columns: Comma-separated column names
+            inferred_columns: Previously inferred column names (for freeform mode)
 
         Returns:
             Dictionary mapping column names to values
@@ -257,9 +258,11 @@ class GenerateProcessor:
             text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
             text = text.strip()
 
-        # Parse column names
+        # Parse column names - prefer explicit, then inferred
         if csv_columns:
             col_list = [c.strip() for c in csv_columns.split(",")]
+        elif inferred_columns:
+            col_list = inferred_columns
         else:
             col_list = []
 
@@ -268,6 +271,10 @@ class GenerateProcessor:
             reader = csv.reader(StringIO(text))
             for row in reader:
                 if row:  # Take the first non-empty row
+                    # Detect if this looks like a header row (all values look like column names)
+                    if self._looks_like_header_row(row, col_list):
+                        return {"_is_header": True, "_header_values": row}
+
                     result = {}
                     for i, val in enumerate(row):
                         if i < len(col_list):
@@ -281,6 +288,39 @@ class GenerateProcessor:
 
         # Fallback: return raw output
         return {"raw_output": text}
+
+    def _looks_like_header_row(self, row: List[str], expected_cols: List[str]) -> bool:
+        """
+        Detect if a row appears to be a header row instead of data.
+
+        Args:
+            row: The parsed CSV row values
+            expected_cols: Expected column names (if known)
+
+        Returns:
+            True if the row looks like headers
+        """
+        if not row:
+            return False
+
+        # Check if values match expected column names (case-insensitive)
+        if expected_cols and len(row) == len(expected_cols):
+            matches = sum(1 for v, c in zip(row, expected_cols)
+                        if v.strip().lower().replace('_', '').replace(' ', '') ==
+                           c.strip().lower().replace('_', '').replace(' ', ''))
+            if matches >= len(row) * 0.7:  # 70% match
+                return True
+
+        # Check for common header patterns
+        header_patterns = ['id', 'name', 'date', 'type', 'status', 'email', 'age',
+                          'gender', 'address', 'phone', 'description', 'category']
+        clean_values = [v.strip().lower().replace('_', ' ') for v in row]
+        pattern_matches = sum(1 for v in clean_values
+                             if any(p in v for p in header_patterns))
+        if len(row) >= 3 and pattern_matches >= len(row) * 0.5:
+            return True
+
+        return False
 
     async def generate(
         self,
@@ -392,7 +432,12 @@ CRITICAL RULES:
         error_count = 0
         retry_count = 0
 
+        # Track inferred columns for freeform mode
+        inferred_columns: List[str] = []
+        inferred_lock = asyncio.Lock()
+
         async def generate_row(row_idx: int) -> Tuple[int, Dict, float, bool, RunResult]:
+            nonlocal inferred_columns
             async with semaphore:
                 # Build prompt with variable substitution
                 prompt = generation_prompt
@@ -428,8 +473,35 @@ CRITICAL RULES:
 
                 # Parse output based on format
                 if is_tabular:
-                    # Parse CSV output
-                    parsed = self._parse_csv_row(output, csv_columns)
+                    # Parse CSV output with inferred columns for freeform mode
+                    parsed = self._parse_csv_row(output, csv_columns, inferred_columns if not csv_columns else None)
+
+                    # Check if this is a header row (AI output column names instead of data)
+                    if parsed.get("_is_header"):
+                        # Use the header values to set inferred columns
+                        async with inferred_lock:
+                            if not inferred_columns:
+                                inferred_columns.extend(parsed.get("_header_values", []))
+                        # Mark as error - will be filtered out
+                        result = RunResult.create(
+                            run_id=self.run_id,
+                            row_index=row_idx,
+                            input_data=prompt,
+                            output=output,
+                            status=ResultStatus.ERROR,
+                            latency=duration,
+                            error_type="header_row",
+                            error_message="AI output headers instead of data",
+                            retry_attempt=attempts
+                        )
+                        return row_idx, {"error": "Header row detected"}, round(duration, 3), False, result
+
+                    # In freeform mode, capture column names from first successful row
+                    if not csv_columns and not inferred_columns and parsed:
+                        async with inferred_lock:
+                            if not inferred_columns:
+                                inferred_columns.extend(parsed.keys())
+
                     result = RunResult.create(
                         run_id=self.run_id,
                         row_index=row_idx,
