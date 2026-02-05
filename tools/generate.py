@@ -137,8 +137,43 @@ class GenerateTool(BaseTool):
         use_freeform = False
         csv_columns = ""
 
-        if output_format == "Free Text" or schema_mode == "Let AI decide":
+        if output_format == "Free Text":
             use_freeform = True
+        elif schema_mode == "Let AI decide":
+            # For tabular output, auto-suggest columns then use them
+            if output_format == "Tabular (CSV)" and generation_prompt and generation_prompt.strip():
+                st.markdown("**AI-Suggested Columns**")
+                st.caption("Columns will be auto-generated based on your description. Edit if needed.")
+
+                # Auto-suggest if not already done for this prompt
+                prompt_hash = hash(generation_prompt.strip()[:100])
+                if st.session_state.get("auto_suggest_hash") != prompt_hash:
+                    if st.button("Generate Columns from Description", key="auto_suggest_cols", use_container_width=True):
+                        with st.spinner("Analyzing description..."):
+                            suggested = self._get_ai_column_suggestions(generation_prompt)
+                            if suggested:
+                                st.session_state.column_suggestions = suggested
+                                st.session_state.auto_suggest_hash = prompt_hash
+                                st.rerun()
+
+                # Show editable columns
+                current_suggestions = st.session_state.get("column_suggestions", "")
+                edited_cols = st.text_input(
+                    "Columns (edit if needed)",
+                    value=current_suggestions,
+                    key="auto_cols_input",
+                    placeholder="patient_id, age, gender, blood_type, diagnosis, appointment_date"
+                )
+
+                if edited_cols and edited_cols.strip():
+                    csv_columns = edited_cols
+                    schema = {col.strip(): "string" for col in csv_columns.split(",")}
+                    col_list = [c.strip() for c in csv_columns.split(",") if c.strip()]
+                    st.success(f"Using {len(col_list)} columns: {', '.join(col_list)}")
+                else:
+                    st.info("Click the button above to generate columns, or enter them manually.")
+            else:
+                use_freeform = True
         elif schema_mode == "Define columns":
             if output_format == "Tabular (CSV)":
                 # Render column suggestions above the column input
