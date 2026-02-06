@@ -8,6 +8,7 @@ from .registry import ToolRegistry
 from .transform import TransformTool
 from .generate import GenerateTool
 from .process_documents import ProcessDocumentsTool
+from .manual_coder import ManualCoderTool
 
 __all__ = [
     "BaseTool",
@@ -15,4 +16,5 @@ __all__ = [
     "TransformTool",
     "GenerateTool",
     "ProcessDocumentsTool",
+    "ManualCoderTool",
 ]

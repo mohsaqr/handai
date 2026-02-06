@@ -27,3 +27,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Manual coder autosave
+.manual_coder_saves/
+
+# Electron desktop
+desktop/node_modules/
+desktop/dist/
+desktop/python/**
+!desktop/python/README.md
+!desktop/python/**/.keep
+desktop/python_sources/**
+!desktop/python_sources/README.md
