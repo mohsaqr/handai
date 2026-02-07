@@ -3,14 +3,35 @@ Handai Configuration
 App-wide constants and defaults
 """
 
+import os
+import platform
+
 # App Info
 APP_NAME = "Handai"
 APP_VERSION = "4.0"
 APP_DESCRIPTION = "AI Data Transformer & Generator"
 
-# Database
-DB_FILE = "handai_data.db"
-CONFIG_FILE = "handai_config.json"
+# Database + config storage (writable per-user location)
+def _get_user_data_dir(app_name: str) -> str:
+    system = platform.system().lower()
+    home = os.path.expanduser("~")
+
+    if system == "darwin":
+        base = os.path.join(home, "Library", "Application Support")
+    elif system == "windows":
+        base = os.environ.get("APPDATA", os.path.join(home, "AppData", "Roaming"))
+    else:
+        base = os.environ.get("XDG_DATA_HOME", os.path.join(home, ".local", "share"))
+
+    path = os.path.join(base, app_name)
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+_DATA_DIR = os.environ.get("HANDAI_DATA_DIR") or _get_user_data_dir("Handai")
+
+DB_FILE = os.path.join(_DATA_DIR, "handai_data.db")
+CONFIG_FILE = os.path.join(_DATA_DIR, "handai_config.json")
 
 # Default Settings
 DEFAULT_TEMPERATURE = 0.0
