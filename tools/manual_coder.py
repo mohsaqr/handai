@@ -614,9 +614,8 @@ class ManualCoderTool(BaseTool):
                 self._save_session()
 
             def close_immersive():
-                # Flag is already False (reset before showing dialog)
-                # Just let the dialog close naturally
-                pass
+                # Explicitly set flag to False to close dialog
+                st.session_state["mc_immersive_mode"] = False
 
             head_col1, head_col2, head_col3 = st.columns([2, 1, 1])
             with head_col1:
