@@ -72,8 +72,10 @@ def render():
     # Tool cards
     st.header("Available Tools")
 
-    tool_cards = [
-        ("transform", ":material/transform:", "Transform Data",
+    # Data Processing Tools
+    st.subheader("Data Processing")
+    data_tools = [
+        ("transform", ":material/sync:", "Transform Data",
          "Upload a CSV and use AI to transform, enrich, or classify each row.",
          "- Enrich rows with extracted entities, topics, or classifications\n"
          "- Add sentiment scores, summaries, or translations to every row\n"
@@ -94,6 +96,29 @@ def render():
          "- Batch-process entire folders of documents in parallel\n"
          "- Built-in CSV output formatting with master prompt enforcement\n\n"
          "*Best for: invoice parsing, resume extraction, report digitization*"),
+        ("automator", ":material/precision_manufacturing:", "Automator",
+         "Build multi-step AI pipelines with branching logic and automation.",
+         "- Chain multiple AI operations together in sequence\n"
+         "- Conditional branching based on previous step outputs\n"
+         "- Save and reuse automation templates\n"
+         "- Schedule recurring data processing jobs\n\n"
+         "*Best for: complex workflows, ETL pipelines, recurring batch jobs*"),
+    ]
+
+    row1 = st.columns(4)
+    for col, (key, icon, title, tagline, details) in zip(row1, data_tools):
+        with col:
+            with st.container(border=True):
+                page = nav_pages.get(key)
+                if page:
+                    st.page_link(page, label=title, icon=icon)
+                st.write(tagline)
+                with st.expander("Learn more"):
+                    st.markdown(details)
+
+    # Qualitative Analysis Tools
+    st.subheader("Qualitative Analysis")
+    qual_tools = [
         ("qualitative", ":material/psychology:", "Qualitative Coder",
          "Code qualitative data like interviews, observations, and surveys with AI.",
          "- Pre-configured prompt template optimized for qualitative coding\n"
@@ -108,22 +133,25 @@ def render():
          "- Inter-rater reliability analytics: Cohen's Kappa, pairwise agreement, Jaccard index\n"
          "- Visualizations: judge alignment bar chart, consensus distribution pie chart\n\n"
          "*Best for: high-stakes coding, reducing AI bias, validation through model triangulation*"),
+        ("codebook-generator", ":material/book:", "Codebook Generator",
+         "Generate structured codebooks from qualitative data using AI.",
+         "- Automatically identify themes and patterns in your data\n"
+         "- Generate code definitions, examples, and inclusion criteria\n"
+         "- Export codebooks in various formats (CSV, JSON, Word)\n"
+         "- Iteratively refine codes with AI assistance\n\n"
+         "*Best for: grounded theory, codebook development, thematic framework creation*"),
+        ("manual-coder", ":material/touch_app:", "Manual Coder",
+         "Code qualitative data manually with clickable codes and keyboard shortcuts.",
+         "- Fast, distraction-free immersive coding mode\n"
+         "- Clickable code buttons with customizable highlights\n"
+         "- Session save/load with auto-restore on refresh\n"
+         "- Export coded data with one-hot encoding or text format\n"
+         "- Sample datasets included for practice\n\n"
+         "*Best for: human coding, inter-rater reliability studies, training coders*"),
     ]
 
-    # Row 1: 3 cards, Row 2: 2 cards
-    row1 = st.columns(3)
-    for col, (key, icon, title, tagline, details) in zip(row1, tool_cards[:3]):
-        with col:
-            with st.container(border=True):
-                page = nav_pages.get(key)
-                if page:
-                    st.page_link(page, label=title, icon=icon)
-                st.write(tagline)
-                with st.expander("Learn more"):
-                    st.markdown(details)
-
-    row2 = st.columns(3)
-    for col, (key, icon, title, tagline, details) in zip(row2, tool_cards[3:]):
+    row2 = st.columns(4)
+    for col, (key, icon, title, tagline, details) in zip(row2, qual_tools):
         with col:
             with st.container(border=True):
                 page = nav_pages.get(key)
