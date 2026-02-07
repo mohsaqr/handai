@@ -606,22 +606,27 @@ class ManualCoderTool(BaseTool):
             light_mode = st.session_state.get("mc_light_mode", True)
             context_rows = st.session_state.get("mc_context_rows", 2)
 
-            # Header row
+            # Header row callbacks
+            def save_immersive():
+                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
+                if not st.session_state.get("mc_current_session"):
+                    st.session_state["mc_current_session"] = self._generate_session_name()
+                self._save_session()
+
+            def close_immersive():
+                # Flag is already False (reset before showing dialog)
+                # Just let the dialog close naturally
+                pass
+
             head_col1, head_col2, head_col3 = st.columns([2, 1, 1])
             with head_col1:
                 coded_count = self._count_coded_rows()
                 progress_pct = coded_count / total_rows if total_rows > 0 else 0
                 st.markdown(f"**Row {current_row + 1}/{total_rows}** | {coded_count} coded ({progress_pct:.0%})")
             with head_col2:
-                if st.button("Save", key="mc_imm_save", use_container_width=True):
-                    if not st.session_state.get("mc_current_session"):
-                        st.session_state["mc_current_session"] = self._generate_session_name()
-                    self._save_session()
-                    st.toast("Saved!")
+                st.button("Save", key="mc_imm_save", use_container_width=True, on_click=save_immersive)
             with head_col3:
-                if st.button("Close", key="mc_imm_exit", use_container_width=True):
-                    st.session_state["mc_immersive_mode"] = False
-                    st.rerun()
+                st.button("Close", key="mc_imm_exit", use_container_width=True, on_click=close_immersive)
 
             # Colors
             if light_mode:
@@ -679,7 +684,11 @@ class ManualCoderTool(BaseTool):
                 unsafe_allow_html=True
             )
 
-            # Code buttons - use on_click callbacks to avoid rerun issues
+            # Code buttons - use on_click callbacks that keep dialog open
+            def add_code_immersive(row_idx, code):
+                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
+                self._add_code(row_idx, code)
+
             num_codes = len(codes)
             if num_codes > 0:
                 code_cols = st.columns(num_codes)
@@ -691,25 +700,29 @@ class ManualCoderTool(BaseTool):
                             code,
                             key=f"mc_imm_code_{current_row}_{code}",
                             use_container_width=True,
-                            on_click=self._add_code,
+                            on_click=add_code_immersive,
                             args=(current_row, code)
                         )
 
-            # Navigation - use on_click callbacks
+            # Navigation - use on_click callbacks that keep dialog open
             is_disabled_prev = current_row <= 0
             is_disabled_next = current_row >= total_rows - 1
 
             def go_prev5():
+                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 5)
 
             def go_prev():
+                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 1)
 
             def go_next():
+                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
                 self._save_progress()
 
             def go_next5():
+                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 5)
 
             nav1, nav2, nav3, nav4 = st.columns([1, 1, 1, 1])
@@ -723,6 +736,10 @@ class ManualCoderTool(BaseTool):
                 st.button("▶▶", disabled=is_disabled_next, key="mc_imm_next5", use_container_width=True, on_click=go_next5)
 
             # Applied codes section - fixed height container to prevent jumping
+            def remove_code_immersive(row_idx, position):
+                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
+                self._remove_code_at(row_idx, position)
+
             applied_codes = self._get_applied_codes(current_row)
             st.markdown('<div style="min-height: 50px;">', unsafe_allow_html=True)
             if applied_codes:
@@ -731,7 +748,7 @@ class ManualCoderTool(BaseTool):
                     color = self._get_code_color(code)
                     with app_cols[i]:
                         st.markdown(f'<span style="background-color: {color}; padding: 2px 6px; border-radius: 3px; font-size: 0.85em;">{code}</span>', unsafe_allow_html=True)
-                        st.button("×", key=f"mc_imm_rm_{current_row}_{i}", on_click=self._remove_code_at, args=(current_row, i))
+                        st.button("×", key=f"mc_imm_rm_{current_row}_{i}", on_click=remove_code_immersive, args=(current_row, i))
             st.markdown('</div>', unsafe_allow_html=True)
 
             # Progress bar
@@ -842,6 +859,8 @@ class ManualCoderTool(BaseTool):
 
         # Immersive mode - show as dialog (only when flag is True)
         if immersive_mode:
+            # Reset flag immediately so X button or clicking outside also closes properly
+            st.session_state["mc_immersive_mode"] = False
             self._show_immersive_dialog(df, codes, text_col, total_rows)
 
         # Word highlighter configuration (outside fragment)
