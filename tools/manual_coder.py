@@ -109,6 +109,7 @@ class ManualCoderTool(BaseTool):
                 "text_col": st.session_state.get("mc_text_col"),
                 "highlights": st.session_state.get("mc_highlights", {}),
                 "coded_count": self._count_coded_rows(),
+                "sample_dataset": st.session_state.get("mc_sample_choice") if st.session_state.get("mc_use_sample") else None,
             }
             # Convert int keys to strings for JSON
             save_data["coding_data"] = {str(k): v for k, v in save_data["coding_data"].items()}
@@ -141,6 +142,17 @@ class ManualCoderTool(BaseTool):
                 st.session_state["mc_text_col"] = save_data.get("text_col")
                 st.session_state["mc_highlights"] = save_data.get("highlights", {})
                 st.session_state["mc_current_session"] = name
+
+                # Restore sample dataset if it was used
+                sample_dataset = save_data.get("sample_dataset")
+                if sample_dataset:
+                    st.session_state["mc_use_sample"] = True
+                    st.session_state["mc_sample_choice"] = sample_dataset
+                    st.session_state["mc_last_sample"] = sample_dataset
+                    # Load the dataframe
+                    df = pd.DataFrame(get_sample_data(sample_dataset))
+                    st.session_state["mc_df"] = df
+
                 return True
         except Exception as e:
             pass
