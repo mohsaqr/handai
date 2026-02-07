@@ -189,6 +189,30 @@ class ManualCoderTool(BaseTool):
         except:
             pass
 
+    def _rename_session(self, old_name: str, new_name: str) -> bool:
+        """Rename a session file. Returns True if successful."""
+        try:
+            old_file = self._get_session_file(old_name)
+            new_file = self._get_session_file(new_name)
+            if old_file.exists() and not new_file.exists():
+                # Read the session data
+                with open(old_file, "r") as f:
+                    data = json.load(f)
+                # Update the name field
+                data["name"] = new_name
+                # Write to new file
+                with open(new_file, "w") as f:
+                    json.dump(data, f, indent=2)
+                # Delete old file
+                old_file.unlink()
+                # Update current session if it was the renamed one
+                if st.session_state.get("mc_current_session") == old_name:
+                    st.session_state["mc_current_session"] = new_name
+                return True
+        except:
+            pass
+        return False
+
     def _init_session_state(self):
         """Initialize session state keys for the tool"""
         first_init = "mc_initialized" not in st.session_state
@@ -219,8 +243,10 @@ class ManualCoderTool(BaseTool):
             st.session_state["mc_autosave_enabled"] = True  # autosave enabled by default
         if "mc_buttons_above" not in st.session_state:
             st.session_state["mc_buttons_above"] = False  # buttons below text by default
-        if "mc_immersive_mode" not in st.session_state:
-            st.session_state["mc_immersive_mode"] = False  # immersive coding mode
+        if "mc_immersive_trigger" not in st.session_state:
+            st.session_state["mc_immersive_trigger"] = False  # one-shot trigger for immersive mode
+        if "mc_immersive_active" not in st.session_state:
+            st.session_state["mc_immersive_active"] = False  # persistent flag for immersive mode
         if "mc_current_session" not in st.session_state:
             st.session_state["mc_current_session"] = None  # current session name
         if "mc_use_sample" not in st.session_state:
@@ -231,7 +257,8 @@ class ManualCoderTool(BaseTool):
         # Auto-load most recent session on first init (page refresh)
         if first_init:
             st.session_state["mc_initialized"] = True
-            st.session_state["mc_immersive_mode"] = False  # Always start with immersive off
+            st.session_state["mc_immersive_trigger"] = False  # Always start with immersive off
+            st.session_state["mc_immersive_active"] = False
             try:
                 sessions = self._list_sessions()
                 if sessions:
@@ -606,26 +633,20 @@ class ManualCoderTool(BaseTool):
             light_mode = st.session_state.get("mc_light_mode", True)
             context_rows = st.session_state.get("mc_context_rows", 2)
 
-            # Header row callbacks
-            def save_immersive():
-                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
-                if not st.session_state.get("mc_current_session"):
-                    st.session_state["mc_current_session"] = self._generate_session_name()
-                self._save_session()
-
-            def close_immersive():
-                # Explicitly set flag to False to close dialog
-                st.session_state["mc_immersive_mode"] = False
-
+            # Header row with progress and action buttons
             head_col1, head_col2, head_col3 = st.columns([2, 1, 1])
             with head_col1:
                 coded_count = self._count_coded_rows()
                 progress_pct = coded_count / total_rows if total_rows > 0 else 0
                 st.markdown(f"**Row {current_row + 1}/{total_rows}** | {coded_count} coded ({progress_pct:.0%})")
             with head_col2:
-                st.button("Save", key="mc_imm_save", use_container_width=True, on_click=save_immersive)
+                if st.button("Save", key="mc_imm_save", use_container_width=True):
+                    st.session_state["mc_imm_save_requested"] = True
+                    st.rerun()
             with head_col3:
-                st.button("Close", key="mc_imm_exit", use_container_width=True, on_click=close_immersive)
+                if st.button("Close", key="mc_imm_exit", use_container_width=True):
+                    st.session_state["mc_imm_close_requested"] = True
+                    st.rerun()
 
             # Colors
             if light_mode:
@@ -683,9 +704,8 @@ class ManualCoderTool(BaseTool):
                 unsafe_allow_html=True
             )
 
-            # Code buttons - use on_click callbacks that keep dialog open
+            # Code buttons
             def add_code_immersive(row_idx, code):
-                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 self._add_code(row_idx, code)
 
             num_codes = len(codes)
@@ -703,40 +723,39 @@ class ManualCoderTool(BaseTool):
                             args=(current_row, code)
                         )
 
-            # Navigation - use on_click callbacks that keep dialog open
+            # Navigation
             is_disabled_prev = current_row <= 0
             is_disabled_next = current_row >= total_rows - 1
 
             def go_prev5():
-                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 5)
 
             def go_prev():
-                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 1)
 
             def go_next():
-                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
                 self._save_progress()
 
             def go_next5():
-                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 5)
 
+            # Big Next button (full width, like traditional mode)
+            st.button("Next ▶", disabled=is_disabled_next, key="mc_imm_next_big", type="primary", use_container_width=True, on_click=go_next)
+
+            # Secondary navigation buttons
             nav1, nav2, nav3, nav4 = st.columns([1, 1, 1, 1])
             with nav1:
                 st.button("◀◀", disabled=is_disabled_prev, key="mc_imm_prev5", use_container_width=True, on_click=go_prev5)
             with nav2:
                 st.button("◀ Prev", disabled=is_disabled_prev, key="mc_imm_prev", use_container_width=True, on_click=go_prev)
             with nav3:
-                st.button("Next ▶", disabled=is_disabled_next, key="mc_imm_next", type="primary", use_container_width=True, on_click=go_next)
+                st.button("Next ▶", disabled=is_disabled_next, key="mc_imm_next", use_container_width=True, on_click=go_next)
             with nav4:
                 st.button("▶▶", disabled=is_disabled_next, key="mc_imm_next5", use_container_width=True, on_click=go_next5)
 
             # Applied codes section - fixed height container to prevent jumping
             def remove_code_immersive(row_idx, position):
-                st.session_state["mc_immersive_mode"] = True  # Keep dialog open
                 self._remove_code_at(row_idx, position)
 
             applied_codes = self._get_applied_codes(current_row)
@@ -788,7 +807,20 @@ class ManualCoderTool(BaseTool):
         codes = st.session_state["mc_codes"]
         text_col = st.session_state["mc_text_col"]
         total_rows = len(df)
-        immersive_mode = st.session_state.get("mc_immersive_mode", False)
+
+        # Handle immersive dialog button actions (must be before dialog check)
+        if st.session_state.get("mc_imm_close_requested"):
+            st.session_state["mc_imm_close_requested"] = False
+            st.session_state["mc_immersive_active"] = False
+            st.session_state["mc_immersive_trigger"] = False
+            st.rerun()
+
+        if st.session_state.get("mc_imm_save_requested"):
+            st.session_state["mc_imm_save_requested"] = False
+            if not st.session_state.get("mc_current_session"):
+                st.session_state["mc_current_session"] = self._generate_session_name()
+            self._save_session()
+            st.toast("Session saved")
 
         # Session management bar (always visible)
         session_col1, session_col2, session_col3, session_col4 = st.columns([2, 1, 1, 1])
@@ -808,8 +840,8 @@ class ManualCoderTool(BaseTool):
                 st.session_state["mc_show_save_dialog"] = False
         with session_col4:
             if st.button("Immersive", key="mc_open_immersive", type="primary", use_container_width=True):
-                st.session_state["mc_immersive_mode"] = True
-                st.rerun()
+                st.session_state["mc_immersive_trigger"] = True
+                # No st.rerun() - button click triggers rerun automatically
 
         # Save dialog with session naming
         if st.session_state.get("mc_show_save_dialog"):
@@ -837,29 +869,62 @@ class ManualCoderTool(BaseTool):
                 st.markdown("---")
                 st.markdown("##### Saved Sessions")
                 for sess in sessions[:10]:  # Show last 10
-                    s_col1, s_col2, s_col3 = st.columns([3, 1, 1])
+                    sess_name = sess['name']
+                    s_col1, s_col2, s_col3, s_col4 = st.columns([3, 1, 1, 1])
                     with s_col1:
                         saved_time = sess.get("saved_at", "")[:16].replace("T", " ")
-                        st.markdown(f"`{sess['name']}` - {sess['coded_count']}/{sess['total_rows']} coded ({saved_time})")
+                        st.markdown(f"`{sess_name}` - {sess['coded_count']}/{sess['total_rows']} coded ({saved_time})")
                     with s_col2:
-                        if st.button("Load", key=f"mc_load_{sess['name']}", use_container_width=True):
-                            if self._load_session(sess['name']):
+                        if st.button("Load", key=f"mc_load_{sess_name}", use_container_width=True):
+                            if self._load_session(sess_name):
                                 st.session_state["mc_show_sessions"] = False
-                                st.toast(f"Loaded: {sess['name']}")
+                                st.toast(f"Loaded: {sess_name}")
                                 st.rerun()
                     with s_col3:
-                        if st.button("Delete", key=f"mc_del_{sess['name']}", use_container_width=True):
-                            self._delete_session(sess['name'])
+                        if st.button("Rename", key=f"mc_rename_btn_{sess_name}", use_container_width=True):
+                            st.session_state["mc_renaming_session"] = sess_name
+                    with s_col4:
+                        if st.button("Delete", key=f"mc_del_{sess_name}", use_container_width=True):
+                            self._delete_session(sess_name)
                             st.rerun()
+                    # Show rename input if this session is being renamed
+                    if st.session_state.get("mc_renaming_session") == sess_name:
+                        r_col1, r_col2, r_col3 = st.columns([3, 1, 1])
+                        with r_col1:
+                            new_name = st.text_input(
+                                "New name",
+                                value=sess_name,
+                                key=f"mc_rename_input_{sess_name}",
+                                label_visibility="collapsed"
+                            )
+                        with r_col2:
+                            if st.button("Save", key=f"mc_rename_save_{sess_name}", type="primary", use_container_width=True):
+                                if new_name.strip() and new_name.strip() != sess_name:
+                                    if self._rename_session(sess_name, new_name.strip()):
+                                        st.session_state["mc_renaming_session"] = None
+                                        st.toast(f"Renamed to: {new_name.strip()}")
+                                        st.rerun()
+                                    else:
+                                        st.toast("Rename failed - name may already exist")
+                                else:
+                                    st.session_state["mc_renaming_session"] = None
+                                    st.rerun()
+                        with r_col3:
+                            if st.button("Cancel", key=f"mc_rename_cancel_{sess_name}", use_container_width=True):
+                                st.session_state["mc_renaming_session"] = None
+                                st.rerun()
                 st.markdown("---")
             else:
                 st.info("No saved sessions found")
                 st.session_state["mc_show_sessions"] = False
 
-        # Immersive mode - show as dialog (only when flag is True)
-        if immersive_mode:
-            # Reset flag immediately so X button or clicking outside also closes properly
-            st.session_state["mc_immersive_mode"] = False
+        # Immersive mode - use two-flag pattern for reliable close behavior
+        trigger = st.session_state.get("mc_immersive_trigger", False)
+        active = st.session_state.get("mc_immersive_active", False)
+
+        if trigger or active:
+            st.session_state["mc_immersive_trigger"] = False  # Consume trigger
+            st.session_state["mc_immersive_active"] = True    # Mark as active
             self._show_immersive_dialog(df, codes, text_col, total_rows)
 
         # Word highlighter configuration (outside fragment)
