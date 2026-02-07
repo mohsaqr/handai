@@ -147,7 +147,7 @@ class ManualCoderTool(BaseTool):
         if "mc_light_mode" not in st.session_state:
             st.session_state["mc_light_mode"] = True  # light mode for highlight visibility
         if "mc_horizontal_codes" not in st.session_state:
-            st.session_state["mc_horizontal_codes"] = False  # horizontal code buttons layout
+            st.session_state["mc_horizontal_codes"] = True  # horizontal code buttons layout (default)
 
     def _add_code(self, row_idx: int, code: str):
         """Add a code to a specific row (allows duplicates)"""
@@ -457,6 +457,25 @@ class ManualCoderTool(BaseTool):
         # Preview data
         st.dataframe(df.head(), height=150)
 
+        # Show autosave restore message (stable location - before Start Coding button)
+        if st.session_state.get("mc_loaded_autosave") and not st.session_state.get("mc_autosave_dismissed"):
+            coded_count = self._count_coded_rows()
+            if coded_count > 0:
+                col_msg, col_btn1, col_btn2 = st.columns([3, 1, 1])
+                with col_msg:
+                    st.success(f"✅ Restored {coded_count} coded rows from autosave")
+                with col_btn1:
+                    if st.button("Clear", key="mc_clear_autosave", type="secondary"):
+                        self._clear_autosave()
+                        st.session_state["mc_coding_data"] = {}
+                        st.session_state["mc_current_row"] = 0
+                        st.session_state["mc_autosave_dismissed"] = True
+                        st.rerun()
+                with col_btn2:
+                    if st.button("OK", key="mc_dismiss_autosave", type="primary"):
+                        st.session_state["mc_autosave_dismissed"] = True
+                        st.rerun()
+
         return ToolConfig(
             is_valid=True,
             config_data={
@@ -496,30 +515,6 @@ class ManualCoderTool(BaseTool):
         codes = st.session_state["mc_codes"]
         text_col = st.session_state["mc_text_col"]
         total_rows = len(df)
-
-        # Show autosave status - compact but visible
-        if st.session_state.get("mc_loaded_autosave") and not st.session_state.get("mc_autosave_dismissed"):
-            coded_count = self._count_coded_rows()
-            if coded_count > 0:
-                col_msg, col_btn1, col_btn2 = st.columns([3, 1, 1])
-                with col_msg:
-                    st.markdown(
-                        f"""<div style="background: #4CAF50; color: white; padding: 8px 12px;
-                        border-radius: 5px; font-weight: bold;">
-                        ✅ Restored {coded_count} coded rows</div>""",
-                        unsafe_allow_html=True
-                    )
-                with col_btn1:
-                    if st.button("Clear", key="mc_clear_autosave", type="secondary"):
-                        self._clear_autosave()
-                        st.session_state["mc_coding_data"] = {}
-                        st.session_state["mc_current_row"] = 0
-                        st.session_state["mc_autosave_dismissed"] = True
-                        st.rerun()
-                with col_btn2:
-                    if st.button("OK", key="mc_dismiss_autosave", type="primary"):
-                        st.session_state["mc_autosave_dismissed"] = True
-                        st.rerun()
 
         # Word highlighter configuration (outside fragment)
         with st.expander("Word Highlighter - Define words to highlight for each code"):
@@ -663,12 +658,15 @@ class ManualCoderTool(BaseTool):
                 applied_codes = self._get_applied_codes(current_row)
                 is_disabled = current_row >= total_rows - 1
 
-                # Code buttons in columns
+                # Code buttons in columns with color indicators
                 num_codes = len(codes)
                 if num_codes > 0:
                     code_cols = st.columns(num_codes)
                     for i, code in enumerate(codes):
+                        color = self._get_code_color(code)
                         with code_cols[i]:
+                            # Color bar above button
+                            st.markdown(f'<div style="background:{color}; height:4px; border-radius:2px; margin-bottom:2px;"></div>', unsafe_allow_html=True)
                             st.button(
                                 code,
                                 key=f"mc_code_{current_row}_{code}",
@@ -682,6 +680,25 @@ class ManualCoderTool(BaseTool):
                 if st.button("Next ▶", key="mc_next_horiz", type="primary", use_container_width=True, disabled=is_disabled):
                     st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 1)
                     st.rerun()
+
+                # Navigation buttons after Next
+                def go_prev():
+                    st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 1)
+
+                def go_next():
+                    st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
+
+                nav1, nav2, nav_spacer, nav3, nav4 = st.columns([1, 1, 3, 1, 1])
+                with nav1:
+                    st.button("◀◀", disabled=current_row <= 0, key="mc_prev5_h",
+                              on_click=lambda: st.session_state.update({"mc_current_row": max(0, current_row - 5)}))
+                with nav2:
+                    st.button("◀ Prev", disabled=current_row <= 0, key="mc_prev_h", on_click=go_prev)
+                with nav3:
+                    st.button("Next ▶", disabled=current_row >= total_rows - 1, key="mc_next_h", on_click=go_next)
+                with nav4:
+                    st.button("▶▶", disabled=current_row >= total_rows - 1, key="mc_next5_h",
+                              on_click=lambda: st.session_state.update({"mc_current_row": min(total_rows - 1, current_row + 5)}))
 
                 # Applied codes with reordering
                 if applied_codes:
@@ -740,8 +757,10 @@ class ManualCoderTool(BaseTool):
                         st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 1)
                         st.rerun()
 
-                    # Code buttons
+                    # Code buttons with color indicators
                     for i, code in enumerate(codes):
+                        color = self._get_code_color(code)
+                        st.markdown(f'<div style="background:{color}; height:4px; border-radius:2px; margin-bottom:2px;"></div>', unsafe_allow_html=True)
                         st.button(
                             code,
                             key=f"mc_code_{current_row}_{code}",
