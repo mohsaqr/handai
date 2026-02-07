@@ -358,7 +358,7 @@ class ManualCoderTool(BaseTool):
             selected = st.session_state.get("mc_sample_choice", "mixed_feedback")
             df = pd.DataFrame(get_sample_data(selected))
             info = get_dataset_info()[selected]
-            st.success(f"Using sample data: {info['name']} ({info['rows']} rows)")
+            st.toast(f"Loaded: {info['name']} ({info['rows']} rows)")
 
             # Auto-select text column from dataset info
             if "text_column" in info:
@@ -421,7 +421,7 @@ class ManualCoderTool(BaseTool):
                         st.session_state["mc_codes"] = codes
                         st.session_state["mc_codebook"] = codebook_df
 
-                        st.success(f"Loaded {len(codes)} codes from '{code_col}' column")
+                        st.toast(f"Loaded {len(codes)} codes from codebook")
 
                         # Display codebook reference
                         with st.expander("📖 Codebook Reference", expanded=False):
