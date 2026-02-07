@@ -599,7 +599,8 @@ class ManualCoderTool(BaseTool):
                 start_row = max(0, current_row - context_rows)
                 end_row = min(total_rows, current_row + context_rows + 1)
 
-                # Display rows with context
+                # Fixed height container to prevent button jumping
+                text_container_html = []
                 for row_idx in range(start_row, end_row):
                     is_current = row_idx == current_row
                     text_content = str(df.iloc[row_idx][text_col])
@@ -616,25 +617,27 @@ class ManualCoderTool(BaseTool):
                         ])
 
                     if is_current:
-                        # Highlighted current row with counter
-                        st.markdown(
+                        text_container_html.append(
                             f'<div style="background-color: {current_bg}; color: {current_text}; '
                             f'padding: 15px; border-radius: 8px; border-left: 4px solid #4CAF50; '
                             f'margin: 5px 0; font-size: 1.1em;">'
                             f'<strong>► Row {row_idx + 1} of {total_rows}</strong>{codes_badge}<br/>'
-                            f'{highlighted_text}</div>',
-                            unsafe_allow_html=True
+                            f'{highlighted_text}</div>'
                         )
                     else:
-                        # Context rows
-                        st.markdown(
+                        text_container_html.append(
                             f'<div style="background-color: {context_bg}; color: {context_text}; '
                             f'padding: 10px; border-radius: 5px; margin: 3px 0; '
                             f'opacity: 0.85; font-size: 0.95em;">'
                             f'<span style="color: {row_label_color};">Row {row_idx + 1}</span>{codes_badge}<br/>'
-                            f'{highlighted_text}</div>',
-                            unsafe_allow_html=True
+                            f'{highlighted_text}</div>'
                         )
+
+                # Render in fixed height container with scroll
+                st.markdown(
+                    f'<div style="height: 350px; overflow-y: auto; padding-right: 10px;">{"".join(text_container_html)}</div>',
+                    unsafe_allow_html=True
+                )
 
             if horizontal_mode:
                 # Horizontal layout: codes in a row below text, then Next button
@@ -834,13 +837,33 @@ class ManualCoderTool(BaseTool):
         if coded_count == 0:
             st.info("Code some rows before exporting")
         else:
+            # Export format selection
+            export_format = st.radio(
+                "Export format",
+                ["Standard (codes as text)", "One-hot encoding (codes as columns)"],
+                horizontal=True,
+                key="mc_export_format"
+            )
+
             export_df = df.copy()
-            export_df["applied_codes"] = export_df.index.map(
-                lambda idx: "; ".join(st.session_state["mc_coding_data"].get(idx, []))
-            )
-            export_df["code_count"] = export_df.index.map(
-                lambda idx: len(st.session_state["mc_coding_data"].get(idx, []))
-            )
+
+            if export_format == "One-hot encoding (codes as columns)":
+                # Create one-hot encoded columns for each code
+                for code in codes:
+                    export_df[f"code_{code}"] = export_df.index.map(
+                        lambda idx, c=code: 1 if c in st.session_state["mc_coding_data"].get(idx, []) else 0
+                    )
+                export_df["code_count"] = export_df.index.map(
+                    lambda idx: len(st.session_state["mc_coding_data"].get(idx, []))
+                )
+            else:
+                # Standard format: codes as semicolon-separated text
+                export_df["applied_codes"] = export_df.index.map(
+                    lambda idx: "; ".join(st.session_state["mc_coding_data"].get(idx, []))
+                )
+                export_df["code_count"] = export_df.index.map(
+                    lambda idx: len(st.session_state["mc_coding_data"].get(idx, []))
+                )
 
             with st.expander("Preview export data"):
                 st.dataframe(export_df)
