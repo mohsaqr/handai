@@ -756,18 +756,35 @@ class ManualCoderTool(BaseTool):
             else:
                 st.markdown(f"**New Session** ({coded_count}/{total_rows} coded)")
         with session_col2:
-            if st.button("Save Session", key="mc_save_session", use_container_width=True):
-                if not st.session_state.get("mc_current_session"):
-                    st.session_state["mc_current_session"] = self._generate_session_name()
-                name = self._save_session()
-                if name:
-                    st.toast(f"Saved: {name}")
+            if st.button("Save", key="mc_save_session", use_container_width=True):
+                st.session_state["mc_show_save_dialog"] = True
         with session_col3:
-            if st.button("Load Session", key="mc_show_load", use_container_width=True):
+            if st.button("Load", key="mc_show_load", use_container_width=True):
                 st.session_state["mc_show_sessions"] = not st.session_state.get("mc_show_sessions", False)
+                st.session_state["mc_show_save_dialog"] = False
         with session_col4:
-            if st.button("Immersive Mode", key="mc_open_immersive", type="primary", use_container_width=True):
+            if st.button("Immersive", key="mc_open_immersive", type="primary", use_container_width=True):
                 st.session_state["mc_immersive_mode"] = True
+                st.rerun()
+
+        # Save dialog with session naming
+        if st.session_state.get("mc_show_save_dialog"):
+            save_col1, save_col2, save_col3 = st.columns([3, 1, 1])
+            with save_col1:
+                default_name = st.session_state.get("mc_current_session") or self._generate_session_name()
+                session_name = st.text_input("Session name", value=default_name, key="mc_session_name_input", label_visibility="collapsed")
+            with save_col2:
+                if st.button("Save", key="mc_do_save", type="primary", use_container_width=True):
+                    if session_name.strip():
+                        st.session_state["mc_current_session"] = session_name.strip()
+                        self._save_session(session_name.strip())
+                        st.session_state["mc_show_save_dialog"] = False
+                        st.toast(f"Saved: {session_name.strip()}")
+                        st.rerun()
+            with save_col3:
+                if st.button("Cancel", key="mc_cancel_save", use_container_width=True):
+                    st.session_state["mc_show_save_dialog"] = False
+                    st.rerun()
 
         # Session browser popup
         if st.session_state.get("mc_show_sessions"):
