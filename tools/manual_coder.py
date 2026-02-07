@@ -223,16 +223,24 @@ class ManualCoderTool(BaseTool):
             st.session_state["mc_immersive_mode"] = False  # immersive coding mode
         if "mc_current_session" not in st.session_state:
             st.session_state["mc_current_session"] = None  # current session name
+        if "mc_use_sample" not in st.session_state:
+            st.session_state["mc_use_sample"] = False  # using sample data
+        if "mc_session_restored" not in st.session_state:
+            st.session_state["mc_session_restored"] = False  # flag to prevent re-restoration
 
         # Auto-load most recent session on first init (page refresh)
         if first_init:
             st.session_state["mc_initialized"] = True
-            sessions = self._list_sessions()
-            if sessions:
-                # Load the most recent session
-                most_recent = sessions[0]["name"]
-                if self._load_session(most_recent):
-                    st.toast(f"Resumed: {most_recent}")
+            st.session_state["mc_immersive_mode"] = False  # Always start with immersive off
+            try:
+                sessions = self._list_sessions()
+                if sessions:
+                    most_recent = sessions[0]["name"]
+                    if self._load_session(most_recent):
+                        st.session_state["mc_session_restored"] = True
+                        st.toast(f"Resumed: {most_recent}")
+            except Exception as e:
+                st.toast(f"Could not restore session: {e}")
 
     def _add_code(self, row_idx: int, code: str):
         """Add a code to a specific row (allows duplicates)"""
@@ -333,8 +341,12 @@ class ManualCoderTool(BaseTool):
                 key="mc_sample_btn"
             )
 
+        # Check if this is a restored session - don't reset data
+        session_restored = st.session_state.get("mc_session_restored", False)
+
         if use_sample:
             st.session_state["mc_use_sample"] = True
+            st.session_state["mc_session_restored"] = False  # Clear restore flag - user is starting fresh
             # Reset coding data and codes when loading new data
             st.session_state["mc_coding_data"] = {}
             st.session_state["mc_current_row"] = 0
@@ -351,12 +363,18 @@ class ManualCoderTool(BaseTool):
                 "learning_experience": "Learning Experience (20 student responses)",
                 "exit_interviews": "Exit Interviews (15 employee departures)",
             }
+            # Get current sample choice (may be from restored session)
+            current_sample = st.session_state.get("mc_sample_choice", "mixed_feedback")
+            default_idx = list(sample_options.keys()).index(current_sample) if current_sample in sample_options else 0
             selected_sample = st.selectbox(
                 "Choose sample dataset",
                 options=list(sample_options.keys()),
                 format_func=lambda x: sample_options[x],
-                key="mc_sample_choice"
+                index=default_idx,
+                key="mc_sample_choice_select"
             )
+            # Update session state with selection
+            st.session_state["mc_sample_choice"] = selected_sample
 
         # Load data - check if already loaded from session first
         df = st.session_state.get("mc_df")
@@ -383,21 +401,27 @@ class ManualCoderTool(BaseTool):
             df = pd.DataFrame(get_sample_data(selected))
             info = get_dataset_info()[selected]
 
-            # Only show toast once when sample changes
+            # Only apply defaults when sample changes AND not restoring a session
             if st.session_state.get("mc_last_sample") != selected:
                 st.session_state["mc_last_sample"] = selected
-                st.toast(f"Loaded: {info['name']} ({info['rows']} rows)")
 
-                # Auto-select text column from dataset info
-                if "text_column" in info:
-                    st.session_state["mc_text_col"] = info["text_column"]
+                # If restored session, don't overwrite codes/highlights - just show toast
+                if session_restored:
+                    st.toast(f"Resumed session with {info['name']}")
+                    st.session_state["mc_session_restored"] = False  # Clear flag after first use
+                else:
+                    st.toast(f"Loaded: {info['name']} ({info['rows']} rows)")
 
-                # Load sample codes
-                if selected in self.SAMPLE_CODES:
-                    st.session_state["mc_codes"] = self.SAMPLE_CODES[selected]
-                # Load sample highlights
-                if selected in self.SAMPLE_HIGHLIGHTS:
-                    st.session_state["mc_highlights"] = self.SAMPLE_HIGHLIGHTS[selected]
+                    # Auto-select text column from dataset info
+                    if "text_column" in info:
+                        st.session_state["mc_text_col"] = info["text_column"]
+
+                    # Load sample codes (only if not restored)
+                    if selected in self.SAMPLE_CODES:
+                        st.session_state["mc_codes"] = self.SAMPLE_CODES[selected]
+                    # Load sample highlights (only if not restored)
+                    if selected in self.SAMPLE_HIGHLIGHTS:
+                        st.session_state["mc_highlights"] = self.SAMPLE_HIGHLIGHTS[selected]
 
         # If still no df, show error
         if df is None or (hasattr(df, 'empty') and df.empty):
@@ -574,138 +598,149 @@ class ManualCoderTool(BaseTool):
             }
         )
 
-    def _render_immersive_content(self, df, codes, text_col, total_rows):
-        """Render content for immersive coding dialog"""
-        current_row = st.session_state["mc_current_row"]
-        light_mode = st.session_state.get("mc_light_mode", True)
-        context_rows = st.session_state.get("mc_context_rows", 2)
+    def _show_immersive_dialog(self, df, codes, text_col, total_rows):
+        """Show immersive coding as a dialog"""
+        @st.dialog("Immersive Coding", width="large")
+        def immersive_dialog():
+            current_row = st.session_state["mc_current_row"]
+            light_mode = st.session_state.get("mc_light_mode", True)
+            context_rows = st.session_state.get("mc_context_rows", 2)
 
-        # Header row
-        head_col1, head_col2, head_col3 = st.columns([2, 1, 1])
-        with head_col1:
-            coded_count = self._count_coded_rows()
-            progress_pct = coded_count / total_rows if total_rows > 0 else 0
-            st.markdown(f"**Row {current_row + 1}/{total_rows}** | {coded_count} coded ({progress_pct:.0%})")
-        with head_col2:
-            if st.button("Save", key="mc_imm_save", use_container_width=True):
-                if not st.session_state.get("mc_current_session"):
-                    st.session_state["mc_current_session"] = self._generate_session_name()
-                self._save_session()
-                st.toast("Saved!")
-        with head_col3:
-            if st.button("Close", key="mc_imm_exit", use_container_width=True):
-                st.session_state["mc_immersive_mode"] = False
-                st.rerun()
+            # Header row
+            head_col1, head_col2, head_col3 = st.columns([2, 1, 1])
+            with head_col1:
+                coded_count = self._count_coded_rows()
+                progress_pct = coded_count / total_rows if total_rows > 0 else 0
+                st.markdown(f"**Row {current_row + 1}/{total_rows}** | {coded_count} coded ({progress_pct:.0%})")
+            with head_col2:
+                if st.button("Save", key="mc_imm_save", use_container_width=True):
+                    if not st.session_state.get("mc_current_session"):
+                        st.session_state["mc_current_session"] = self._generate_session_name()
+                    self._save_session()
+                    st.toast("Saved!")
+            with head_col3:
+                if st.button("Close", key="mc_imm_exit", use_container_width=True):
+                    st.session_state["mc_immersive_mode"] = False
+                    st.rerun()
 
-        # Colors
-        if light_mode:
-            current_bg = "#FFFEF5"
-            current_text = "#1a1a1a"
-            context_bg = "#F8F9FA"
-            context_text = "#555"
-        else:
-            current_bg = "#1a1a2e"
-            current_text = "#eee"
-            context_bg = "#2a2a3e"
-            context_text = "#bbb"
-
-        # Build text display with context
-        start_row = max(0, current_row - context_rows)
-        end_row = min(total_rows, current_row + context_rows + 1)
-
-        text_html = []
-        for row_idx in range(start_row, end_row):
-            is_current = row_idx == current_row
-            text_content = str(df.iloc[row_idx][text_col])
-            highlighted_text = self._highlight_text(text_content)
-            row_codes = self._get_applied_codes(row_idx)
-
-            # Codes badges for this row
-            badges = ""
-            if row_codes:
-                badges = " ".join([
-                    f'<span style="background-color: {self._get_code_color(c)}; '
-                    f'padding: 1px 6px; border-radius: 3px; font-size: 0.85em;">{c}</span>'
-                    for c in row_codes
-                ])
-
-            if is_current:
-                text_html.append(
-                    f'<div style="background-color: {current_bg}; color: {current_text}; '
-                    f'padding: 12px 15px; border-radius: 8px; border-left: 4px solid #4CAF50; '
-                    f'margin: 4px 0; font-size: 1.05em;">'
-                    f'<strong>► Row {row_idx + 1}</strong> {badges}<br/>'
-                    f'{highlighted_text}</div>'
-                )
+            # Colors
+            if light_mode:
+                current_bg = "#FFFEF5"
+                current_text = "#1a1a1a"
+                context_bg = "#F8F9FA"
+                context_text = "#555"
             else:
-                text_html.append(
-                    f'<div style="background-color: {context_bg}; color: {context_text}; '
-                    f'padding: 8px 12px; border-radius: 5px; margin: 2px 0; '
-                    f'font-size: 0.9em; opacity: 0.85;">'
-                    f'<span style="color: #888;">Row {row_idx + 1}</span> {badges}<br/>'
-                    f'{highlighted_text}</div>'
-                )
+                current_bg = "#1a1a2e"
+                current_text = "#eee"
+                context_bg = "#2a2a3e"
+                context_text = "#bbb"
 
-        # Fixed height text container
-        st.markdown(
-            f'<div style="min-height: 200px; max-height: 350px; overflow-y: auto; '
-            f'padding: 5px; margin: 5px 0;">{"".join(text_html)}</div>',
-            unsafe_allow_html=True
-        )
+            # Build text display with context
+            start_row = max(0, current_row - context_rows)
+            end_row = min(total_rows, current_row + context_rows + 1)
 
-        # Code buttons
-        num_codes = len(codes)
-        if num_codes > 0:
-            code_cols = st.columns(num_codes)
-            for i, code in enumerate(codes):
-                color = self._get_code_color(code)
-                with code_cols[i]:
-                    st.markdown(f'<div style="background:{color}; height:4px; border-radius:2px; margin-bottom:2px;"></div>', unsafe_allow_html=True)
-                    if st.button(code, key=f"mc_imm_code_{current_row}_{code}", use_container_width=True):
-                        self._add_code(current_row, code)
-                        st.rerun()
+            text_html = []
+            for row_idx in range(start_row, end_row):
+                is_current = row_idx == current_row
+                text_content = str(df.iloc[row_idx][text_col])
+                highlighted_text = self._highlight_text(text_content)
+                row_codes = self._get_applied_codes(row_idx)
 
-        # Navigation
-        is_disabled_prev = current_row <= 0
-        is_disabled_next = current_row >= total_rows - 1
+                # Codes badges for this row
+                badges = ""
+                if row_codes:
+                    badges = " ".join([
+                        f'<span style="background-color: {self._get_code_color(c)}; '
+                        f'padding: 1px 6px; border-radius: 3px; font-size: 0.85em;">{c}</span>'
+                        for c in row_codes
+                    ])
 
-        nav1, nav2, nav3, nav4 = st.columns([1, 1, 1, 1])
-        with nav1:
-            if st.button("◀◀", disabled=is_disabled_prev, key="mc_imm_prev5", use_container_width=True):
-                st.session_state["mc_current_row"] = max(0, current_row - 5)
-                st.rerun()
-        with nav2:
-            if st.button("◀ Prev", disabled=is_disabled_prev, key="mc_imm_prev", use_container_width=True):
-                st.session_state["mc_current_row"] = max(0, current_row - 1)
-                st.rerun()
-        with nav3:
-            if st.button("Next ▶", disabled=is_disabled_next, key="mc_imm_next", type="primary", use_container_width=True):
-                st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 1)
+                if is_current:
+                    text_html.append(
+                        f'<div style="background-color: {current_bg}; color: {current_text}; '
+                        f'padding: 12px 15px; border-radius: 8px; border-left: 4px solid #4CAF50; '
+                        f'margin: 4px 0; font-size: 1.05em;">'
+                        f'<strong>► Row {row_idx + 1}</strong> {badges}<br/>'
+                        f'{highlighted_text}</div>'
+                    )
+                else:
+                    text_html.append(
+                        f'<div style="background-color: {context_bg}; color: {context_text}; '
+                        f'padding: 8px 12px; border-radius: 5px; margin: 2px 0; '
+                        f'font-size: 0.9em; opacity: 0.85;">'
+                        f'<span style="color: #888;">Row {row_idx + 1}</span> {badges}<br/>'
+                        f'{highlighted_text}</div>'
+                    )
+
+            # Fixed height text container
+            st.markdown(
+                f'<div style="min-height: 200px; max-height: 350px; overflow-y: auto; '
+                f'padding: 5px; margin: 5px 0;">{"".join(text_html)}</div>',
+                unsafe_allow_html=True
+            )
+
+            # Code buttons - use on_click callbacks to avoid rerun issues
+            num_codes = len(codes)
+            if num_codes > 0:
+                code_cols = st.columns(num_codes)
+                for i, code in enumerate(codes):
+                    color = self._get_code_color(code)
+                    with code_cols[i]:
+                        st.markdown(f'<div style="background:{color}; height:4px; border-radius:2px; margin-bottom:2px;"></div>', unsafe_allow_html=True)
+                        st.button(
+                            code,
+                            key=f"mc_imm_code_{current_row}_{code}",
+                            use_container_width=True,
+                            on_click=self._add_code,
+                            args=(current_row, code)
+                        )
+
+            # Navigation - use on_click callbacks
+            is_disabled_prev = current_row <= 0
+            is_disabled_next = current_row >= total_rows - 1
+
+            def go_prev5():
+                st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 5)
+
+            def go_prev():
+                st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 1)
+
+            def go_next():
+                st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
                 self._save_progress()
-                st.rerun()
-        with nav4:
-            if st.button("▶▶", disabled=is_disabled_next, key="mc_imm_next5", use_container_width=True):
-                st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 5)
-                st.rerun()
 
-        # Applied codes section - fixed height container to prevent jumping
-        applied_codes = self._get_applied_codes(current_row)
-        st.markdown('<div style="min-height: 50px;">', unsafe_allow_html=True)
-        if applied_codes:
-            app_cols = st.columns(min(len(applied_codes), 6))  # Max 6 columns
-            for i, code in enumerate(applied_codes[:6]):  # Show max 6
-                color = self._get_code_color(code)
-                with app_cols[i]:
-                    st.markdown(f'<span style="background-color: {color}; padding: 2px 6px; border-radius: 3px; font-size: 0.85em;">{code}</span>', unsafe_allow_html=True)
-                    if st.button("×", key=f"mc_imm_rm_{current_row}_{i}"):
-                        self._remove_code_at(current_row, i)
-                        st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+            def go_next5():
+                st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 5)
 
-        # Progress bar
-        coded_count = self._count_coded_rows()
-        progress = coded_count / total_rows if total_rows > 0 else 0
-        st.progress(progress)
+            nav1, nav2, nav3, nav4 = st.columns([1, 1, 1, 1])
+            with nav1:
+                st.button("◀◀", disabled=is_disabled_prev, key="mc_imm_prev5", use_container_width=True, on_click=go_prev5)
+            with nav2:
+                st.button("◀ Prev", disabled=is_disabled_prev, key="mc_imm_prev", use_container_width=True, on_click=go_prev)
+            with nav3:
+                st.button("Next ▶", disabled=is_disabled_next, key="mc_imm_next", type="primary", use_container_width=True, on_click=go_next)
+            with nav4:
+                st.button("▶▶", disabled=is_disabled_next, key="mc_imm_next5", use_container_width=True, on_click=go_next5)
+
+            # Applied codes section - fixed height container to prevent jumping
+            applied_codes = self._get_applied_codes(current_row)
+            st.markdown('<div style="min-height: 50px;">', unsafe_allow_html=True)
+            if applied_codes:
+                app_cols = st.columns(min(len(applied_codes), 6))  # Max 6 columns
+                for i, code in enumerate(applied_codes[:6]):  # Show max 6
+                    color = self._get_code_color(code)
+                    with app_cols[i]:
+                        st.markdown(f'<span style="background-color: {color}; padding: 2px 6px; border-radius: 3px; font-size: 0.85em;">{code}</span>', unsafe_allow_html=True)
+                        st.button("×", key=f"mc_imm_rm_{current_row}_{i}", on_click=self._remove_code_at, args=(current_row, i))
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # Progress bar
+            coded_count = self._count_coded_rows()
+            progress = coded_count / total_rows if total_rows > 0 else 0
+            st.progress(progress)
+
+        # Call the dialog
+        immersive_dialog()
 
     async def execute(
         self,
@@ -805,12 +840,9 @@ class ManualCoderTool(BaseTool):
                 st.info("No saved sessions found")
                 st.session_state["mc_show_sessions"] = False
 
-        # Immersive mode - modal dialog
+        # Immersive mode - show as dialog (only when flag is True)
         if immersive_mode:
-            @st.dialog("Immersive Coding", width="large")
-            def show_immersive():
-                self._render_immersive_content(df, codes, text_col, total_rows)
-            show_immersive()
+            self._show_immersive_dialog(df, codes, text_col, total_rows)
 
         # Word highlighter configuration (outside fragment)
         with st.expander("Word Highlighter - Define words to highlight for each code"):
