@@ -7,15 +7,15 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, List
 
 from .base import BaseTool, ToolConfig, ToolResult
 from core.sample_data import get_sample_data, get_dataset_info
 
-# Auto-save directory
-AUTOSAVE_DIR = Path(".manual_coder_saves")
-AUTOSAVE_FILE = AUTOSAVE_DIR / "autosave.json"
+# Sessions directory
+SESSIONS_DIR = Path(".manual_coder_sessions")
 
 
 class ManualCoderTool(BaseTool):
@@ -34,6 +34,7 @@ class ManualCoderTool(BaseTool):
         "support_tickets": ["Bug", "Feature Request", "Billing", "Account Issue", "Shipping", "Refund"],
         "learning_experience": ["Positive Experience", "Negative Experience", "Technical Issue", "Engagement", "Isolation", "Flexibility"],
         "exit_interviews": ["Compensation", "Career Growth", "Management", "Work-Life Balance", "Culture", "Relocation"],
+        "mixed_feedback": ["Positive", "Negative", "Neutral", "Detailed", "Brief"],
     }
 
     # Sample highlight words for each code
@@ -63,6 +64,11 @@ class ManualCoderTool(BaseTool):
             "Career Growth": "growth, progression, career, promotion, opportunity",
             "Management": "leadership, management, manager, boss",
         },
+        "mixed_feedback": {
+            "Positive": "love, great, excellent, happy, exceeded, recommend, amazing",
+            "Negative": "terrible, frustrating, wrong, mistake, never, worst, painful",
+            "Neutral": "okay, average, nothing special, meh, decent",
+        },
     }
 
     # Color palette for code highlights (subtle pastels)
@@ -77,29 +83,55 @@ class ManualCoderTool(BaseTool):
         "#E5DBFF",  # Soft violet
     ]
 
-    def _save_progress(self):
-        """Auto-save coding progress to file"""
+    def _generate_session_name(self) -> str:
+        """Generate auto session name based on timestamp"""
+        now = datetime.now()
+        return f"session_{now.strftime('%Y%m%d_%H%M%S')}"
+
+    def _get_session_file(self, name: str) -> Path:
+        """Get path for a session file"""
+        return SESSIONS_DIR / f"{name}.json"
+
+    def _save_session(self, name: str = None) -> str:
+        """Save coding session to file. Returns session name."""
         try:
-            AUTOSAVE_DIR.mkdir(exist_ok=True)
+            SESSIONS_DIR.mkdir(exist_ok=True)
+            if not name:
+                name = st.session_state.get("mc_current_session", self._generate_session_name())
+
             save_data = {
+                "name": name,
+                "saved_at": datetime.now().isoformat(),
                 "coding_data": st.session_state.get("mc_coding_data", {}),
                 "current_row": st.session_state.get("mc_current_row", 0),
+                "total_rows": len(st.session_state.get("mc_df", [])) if st.session_state.get("mc_df") is not None else 0,
                 "codes": st.session_state.get("mc_codes", []),
                 "text_col": st.session_state.get("mc_text_col"),
                 "highlights": st.session_state.get("mc_highlights", {}),
+                "coded_count": self._count_coded_rows(),
             }
             # Convert int keys to strings for JSON
             save_data["coding_data"] = {str(k): v for k, v in save_data["coding_data"].items()}
-            with open(AUTOSAVE_FILE, "w") as f:
-                json.dump(save_data, f)
-        except Exception as e:
-            pass  # Silent fail for auto-save
 
-    def _load_progress(self) -> bool:
-        """Load saved progress if available. Returns True if loaded."""
+            with open(self._get_session_file(name), "w") as f:
+                json.dump(save_data, f, indent=2)
+
+            st.session_state["mc_current_session"] = name
+            return name
+        except Exception as e:
+            return None
+
+    def _save_progress(self):
+        """Auto-save current session"""
+        if st.session_state.get("mc_current_session"):
+            self._save_session(st.session_state["mc_current_session"])
+
+    def _load_session(self, name: str) -> bool:
+        """Load a saved session. Returns True if loaded."""
         try:
-            if AUTOSAVE_FILE.exists():
-                with open(AUTOSAVE_FILE, "r") as f:
+            session_file = self._get_session_file(name)
+            if session_file.exists():
+                with open(session_file, "r") as f:
                     save_data = json.load(f)
                 # Convert string keys back to int
                 coding_data = {int(k): v for k, v in save_data.get("coding_data", {}).items()}
@@ -108,17 +140,41 @@ class ManualCoderTool(BaseTool):
                 st.session_state["mc_codes"] = save_data.get("codes", [])
                 st.session_state["mc_text_col"] = save_data.get("text_col")
                 st.session_state["mc_highlights"] = save_data.get("highlights", {})
+                st.session_state["mc_current_session"] = name
                 return True
         except Exception as e:
             pass
         return False
 
-    def _clear_autosave(self):
-        """Clear the autosave file"""
+    def _list_sessions(self) -> List[Dict[str, Any]]:
+        """List all saved sessions with metadata"""
+        sessions = []
         try:
-            if AUTOSAVE_FILE.exists():
-                AUTOSAVE_FILE.unlink()
-        except Exception:
+            if SESSIONS_DIR.exists():
+                for f in sorted(SESSIONS_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+                    try:
+                        with open(f, "r") as file:
+                            data = json.load(file)
+                            sessions.append({
+                                "name": f.stem,
+                                "saved_at": data.get("saved_at", ""),
+                                "coded_count": data.get("coded_count", 0),
+                                "total_rows": data.get("total_rows", 0),
+                                "current_row": data.get("current_row", 0),
+                            })
+                    except:
+                        pass
+        except:
+            pass
+        return sessions
+
+    def _delete_session(self, name: str):
+        """Delete a saved session"""
+        try:
+            session_file = self._get_session_file(name)
+            if session_file.exists():
+                session_file.unlink()
+        except:
             pass
 
     def _init_session_state(self):
@@ -129,9 +185,6 @@ class ManualCoderTool(BaseTool):
             st.session_state["mc_codes"] = []
         if "mc_coding_data" not in st.session_state:
             st.session_state["mc_coding_data"] = {}
-            # Try to load saved progress on first init
-            if "mc_loaded_autosave" not in st.session_state:
-                st.session_state["mc_loaded_autosave"] = self._load_progress()
         if "mc_current_row" not in st.session_state:
             st.session_state["mc_current_row"] = 0
         if "mc_text_col" not in st.session_state:
@@ -150,6 +203,12 @@ class ManualCoderTool(BaseTool):
             st.session_state["mc_horizontal_codes"] = True  # horizontal code buttons layout (default)
         if "mc_autosave_enabled" not in st.session_state:
             st.session_state["mc_autosave_enabled"] = True  # autosave enabled by default
+        if "mc_buttons_above" not in st.session_state:
+            st.session_state["mc_buttons_above"] = False  # buttons below text by default
+        if "mc_immersive_mode" not in st.session_state:
+            st.session_state["mc_immersive_mode"] = False  # immersive coding mode
+        if "mc_current_session" not in st.session_state:
+            st.session_state["mc_current_session"] = None  # current session name
 
     def _add_code(self, row_idx: int, code: str):
         """Add a code to a specific row (allows duplicates)"""
@@ -261,6 +320,7 @@ class ManualCoderTool(BaseTool):
         # Sample data selector
         if st.session_state.get("mc_use_sample"):
             sample_options = {
+                "mixed_feedback": "Mixed Feedback (15 items, varying lengths)",
                 "product_reviews": "Product Reviews (20 reviews with sentiment)",
                 "healthcare_interviews": "Healthcare Interviews (15 worker experiences)",
                 "support_tickets": "Support Tickets (20 customer issues)",
@@ -295,10 +355,14 @@ class ManualCoderTool(BaseTool):
                 )
 
         elif st.session_state.get("mc_use_sample"):
-            selected = st.session_state.get("mc_sample_choice", "product_reviews")
+            selected = st.session_state.get("mc_sample_choice", "mixed_feedback")
             df = pd.DataFrame(get_sample_data(selected))
             info = get_dataset_info()[selected]
             st.success(f"Using sample data: {info['name']} ({info['rows']} rows)")
+
+            # Auto-select text column from dataset info
+            if "text_column" in info:
+                st.session_state["mc_text_col"] = info["text_column"]
 
             # Load sample codes if not already set
             if selected in self.SAMPLE_CODES and not st.session_state.get("mc_codes"):
@@ -440,43 +504,38 @@ class ManualCoderTool(BaseTool):
 
         st.caption(f"{len(codes)} code(s) defined")
 
-        # Step 3: Select Text Column
-        st.header("3. Select Text Column")
-
+        # Step 3: Select Text Column (collapsible once set)
         text_columns = df.columns.tolist()
         default_col = st.session_state.get("mc_text_col")
         if default_col not in text_columns:
             default_col = text_columns[0] if text_columns else None
 
-        text_col = st.selectbox(
-            "Column to display for coding",
-            options=text_columns,
-            index=text_columns.index(default_col) if default_col in text_columns else 0,
-            key="mc_text_col_select"
-        )
+        # Auto-set if only one text-like column or already set
+        if default_col and default_col in text_columns:
+            text_col = default_col
+            with st.expander(f"Text Column: **{text_col}** (click to change)"):
+                text_col = st.selectbox(
+                    "Column to display for coding",
+                    options=text_columns,
+                    index=text_columns.index(default_col),
+                    key="mc_text_col_select"
+                )
+        else:
+            st.header("3. Select Text Column")
+            text_col = st.selectbox(
+                "Column to display for coding",
+                options=text_columns,
+                index=0,
+                key="mc_text_col_select"
+            )
         st.session_state["mc_text_col"] = text_col
 
-        # Preview data
-        st.dataframe(df.head(), height=150)
-
-        # Show autosave restore message (stable location - before Start Coding button)
-        if st.session_state.get("mc_loaded_autosave") and not st.session_state.get("mc_autosave_dismissed"):
-            coded_count = self._count_coded_rows()
-            if coded_count > 0:
-                col_msg, col_btn1, col_btn2 = st.columns([3, 1, 1])
-                with col_msg:
-                    st.success(f"✅ Restored {coded_count} coded rows from autosave")
-                with col_btn1:
-                    if st.button("Clear", key="mc_clear_autosave", type="secondary"):
-                        self._clear_autosave()
-                        st.session_state["mc_coding_data"] = {}
-                        st.session_state["mc_current_row"] = 0
-                        st.session_state["mc_autosave_dismissed"] = True
-                        st.rerun()
-                with col_btn2:
-                    if st.button("OK", key="mc_dismiss_autosave", type="primary"):
-                        st.session_state["mc_autosave_dismissed"] = True
-                        st.rerun()
+        # Preview data (collapsed if column already selected)
+        if default_col and default_col in text_columns:
+            with st.expander("Preview data"):
+                st.dataframe(df.head(), height=150)
+        else:
+            st.dataframe(df.head(), height=150)
 
         return ToolConfig(
             is_valid=True,
@@ -486,6 +545,117 @@ class ManualCoderTool(BaseTool):
                 "text_col": text_col
             }
         )
+
+    def _show_immersive_dialog(self, df, codes, text_col, total_rows):
+        """Show immersive coding dialog"""
+
+        @st.dialog("Immersive Coding", width="large")
+        def immersive_dialog():
+            current_row = st.session_state["mc_current_row"]
+            light_mode = st.session_state.get("mc_light_mode", True)
+
+            # Header with close button
+            head_col1, head_col2, head_col3 = st.columns([2, 1, 1])
+            with head_col1:
+                coded_count = self._count_coded_rows()
+                st.markdown(f"**Row {current_row + 1} of {total_rows}** | {coded_count} coded")
+            with head_col2:
+                if st.button("Save", key="mc_dlg_save", use_container_width=True):
+                    if not st.session_state.get("mc_current_session"):
+                        st.session_state["mc_current_session"] = self._generate_session_name()
+                    self._save_session()
+                    st.toast("Saved!")
+            with head_col3:
+                if st.button("Exit", key="mc_dlg_close", use_container_width=True):
+                    st.session_state["mc_immersive_mode"] = False
+                    st.rerun()
+
+            # Colors
+            if light_mode:
+                current_bg = "#FFFEF5"
+                current_text = "#1a1a1a"
+            else:
+                current_bg = "#1a1a2e"
+                current_text = "#eee"
+
+            # Current text display
+            text_content = str(df.iloc[current_row][text_col])
+            highlighted_text = self._highlight_text(text_content)
+            applied_codes = self._get_applied_codes(current_row)
+
+            # Applied codes badges
+            codes_badge = ""
+            if applied_codes:
+                codes_badge = " ".join([
+                    f'<span style="background-color: {self._get_code_color(c)}; '
+                    f'padding: 2px 8px; border-radius: 4px; font-size: 0.9em; margin-right: 4px;">{c}</span>'
+                    for c in applied_codes
+                ])
+
+            # Main text area
+            st.markdown(
+                f'<div style="background-color: {current_bg}; color: {current_text}; '
+                f'padding: 20px; border-radius: 10px; border-left: 5px solid #4CAF50; '
+                f'margin: 10px 0; font-size: 1.1em; min-height: 120px; max-height: 300px; overflow-y: auto;">'
+                f'{codes_badge}<br/><br/>{highlighted_text}</div>',
+                unsafe_allow_html=True
+            )
+
+            # Code buttons
+            num_codes = len(codes)
+            if num_codes > 0:
+                code_cols = st.columns(num_codes)
+                for i, code in enumerate(codes):
+                    color = self._get_code_color(code)
+                    with code_cols[i]:
+                        st.markdown(f'<div style="background:{color}; height:5px; border-radius:3px; margin-bottom:3px;"></div>', unsafe_allow_html=True)
+                        if st.button(code, key=f"mc_dlg_code_{current_row}_{code}", use_container_width=True):
+                            self._add_code(current_row, code)
+                            st.rerun()
+
+            # Navigation
+            is_disabled_prev = current_row <= 0
+            is_disabled_next = current_row >= total_rows - 1
+
+            nav1, nav2, nav3, nav4 = st.columns([1, 1, 1, 1])
+            with nav1:
+                if st.button("◀◀", disabled=is_disabled_prev, key="mc_dlg_prev5", use_container_width=True):
+                    st.session_state["mc_current_row"] = max(0, current_row - 5)
+                    st.rerun()
+            with nav2:
+                if st.button("◀ Prev", disabled=is_disabled_prev, key="mc_dlg_prev", use_container_width=True):
+                    st.session_state["mc_current_row"] = max(0, current_row - 1)
+                    st.rerun()
+            with nav3:
+                if st.button("Next ▶", disabled=is_disabled_next, key="mc_dlg_next", type="primary", use_container_width=True):
+                    st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 1)
+                    self._save_progress()
+                    st.rerun()
+            with nav4:
+                if st.button("▶▶", disabled=is_disabled_next, key="mc_dlg_next5", use_container_width=True):
+                    st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 5)
+                    st.rerun()
+
+            # Applied codes with removal
+            if applied_codes:
+                st.markdown("**Applied:**")
+                for i, code in enumerate(applied_codes):
+                    color = self._get_code_color(code)
+                    col_code, col_rm = st.columns([6, 1])
+                    with col_code:
+                        st.markdown(f'<span style="background-color: {color}; padding: 3px 8px; border-radius: 4px;">{i+1}. {code}</span>', unsafe_allow_html=True)
+                    with col_rm:
+                        if st.button("×", key=f"mc_dlg_rm_{current_row}_{i}"):
+                            self._remove_code_at(current_row, i)
+                            st.rerun()
+
+            # Progress
+            coded_count = self._count_coded_rows()
+            progress = coded_count / total_rows if total_rows > 0 else 0
+            st.progress(progress)
+
+        # Open the dialog
+        immersive_dialog()
 
     async def execute(
         self,
@@ -517,6 +687,60 @@ class ManualCoderTool(BaseTool):
         codes = st.session_state["mc_codes"]
         text_col = st.session_state["mc_text_col"]
         total_rows = len(df)
+        immersive_mode = st.session_state.get("mc_immersive_mode", False)
+
+        # Session management bar (always visible)
+        session_col1, session_col2, session_col3, session_col4 = st.columns([2, 1, 1, 1])
+        with session_col1:
+            current_session = st.session_state.get("mc_current_session")
+            coded_count = self._count_coded_rows()
+            if current_session:
+                st.markdown(f"**Session:** `{current_session}` ({coded_count}/{total_rows} coded)")
+            else:
+                st.markdown(f"**New Session** ({coded_count}/{total_rows} coded)")
+        with session_col2:
+            if st.button("Save Session", key="mc_save_session", use_container_width=True):
+                if not st.session_state.get("mc_current_session"):
+                    st.session_state["mc_current_session"] = self._generate_session_name()
+                name = self._save_session()
+                if name:
+                    st.toast(f"Saved: {name}")
+        with session_col3:
+            if st.button("Load Session", key="mc_show_load", use_container_width=True):
+                st.session_state["mc_show_sessions"] = not st.session_state.get("mc_show_sessions", False)
+        with session_col4:
+            if st.button("Immersive Mode", key="mc_open_immersive", type="primary", use_container_width=True):
+                st.session_state["mc_immersive_mode"] = True
+
+        # Session browser popup
+        if st.session_state.get("mc_show_sessions"):
+            sessions = self._list_sessions()
+            if sessions:
+                st.markdown("---")
+                st.markdown("##### Saved Sessions")
+                for sess in sessions[:10]:  # Show last 10
+                    s_col1, s_col2, s_col3 = st.columns([3, 1, 1])
+                    with s_col1:
+                        saved_time = sess.get("saved_at", "")[:16].replace("T", " ")
+                        st.markdown(f"`{sess['name']}` - {sess['coded_count']}/{sess['total_rows']} coded ({saved_time})")
+                    with s_col2:
+                        if st.button("Load", key=f"mc_load_{sess['name']}", use_container_width=True):
+                            if self._load_session(sess['name']):
+                                st.session_state["mc_show_sessions"] = False
+                                st.toast(f"Loaded: {sess['name']}")
+                                st.rerun()
+                    with s_col3:
+                        if st.button("Delete", key=f"mc_del_{sess['name']}", use_container_width=True):
+                            self._delete_session(sess['name'])
+                            st.rerun()
+                st.markdown("---")
+            else:
+                st.info("No saved sessions found")
+                st.session_state["mc_show_sessions"] = False
+
+        # Immersive mode dialog
+        if immersive_mode:
+            self._show_immersive_dialog(df, codes, text_col, total_rows)
 
         # Word highlighter configuration (outside fragment)
         with st.expander("Word Highlighter - Define words to highlight for each code"):
@@ -549,7 +773,7 @@ class ManualCoderTool(BaseTool):
             light_mode = st.session_state.get("mc_light_mode", True)
 
             # All options in one compact row
-            opt_col1, opt_col2, opt_col3, opt_col4 = st.columns([1, 1, 1, 1])
+            opt_col1, opt_col2, opt_col3, opt_col4, opt_col5 = st.columns([1, 1, 1, 1, 1])
             with opt_col1:
                 new_light_mode = st.toggle("Light mode", value=light_mode, key="mc_theme_toggle")
                 if new_light_mode != light_mode:
@@ -562,9 +786,15 @@ class ManualCoderTool(BaseTool):
                     st.session_state["mc_horizontal_codes"] = new_horiz
                     st.rerun()
             with opt_col3:
+                old_above = st.session_state.get("mc_buttons_above", False)
+                new_above = st.toggle("Buttons above text", value=old_above, key="mc_above_toggle")
+                if new_above != old_above:
+                    st.session_state["mc_buttons_above"] = new_above
+                    st.rerun()
+            with opt_col4:
                 auto_adv = st.toggle("Auto-advance", value=st.session_state.get("mc_auto_advance", False), key="mc_auto")
                 st.session_state["mc_auto_advance"] = auto_adv
-            with opt_col4:
+            with opt_col5:
                 ctx = st.number_input("Context", min_value=0, max_value=5,
                                      value=st.session_state.get("mc_context_rows", 2), key="mc_ctx")
                 st.session_state["mc_context_rows"] = ctx
@@ -585,21 +815,14 @@ class ManualCoderTool(BaseTool):
 
             # Check layout mode
             horizontal_mode = st.session_state.get("mc_horizontal_codes", False)
+            buttons_above = st.session_state.get("mc_buttons_above", False)
 
-            # Main layout depends on mode
-            if horizontal_mode:
-                # Full width for text in horizontal mode
-                col_text = st.container()
-            else:
-                # Text on left, codes on right
-                col_text, col_codes = st.columns([5, 1])
-
-            with col_text:
+            # Helper function to render text display
+            def render_text_display():
                 # Calculate visible range
                 start_row = max(0, current_row - context_rows)
                 end_row = min(total_rows, current_row + context_rows + 1)
 
-                # Fixed height container to prevent button jumping
                 text_container_html = []
                 for row_idx in range(start_row, end_row):
                     is_current = row_idx == current_row
@@ -633,15 +856,14 @@ class ManualCoderTool(BaseTool):
                             f'{highlighted_text}</div>'
                         )
 
-                # Render in fixed height container with scroll
+                # Render in container with min-height (expands for long text)
                 st.markdown(
-                    f'<div style="height: 350px; overflow-y: auto; padding-right: 10px;">{"".join(text_container_html)}</div>',
+                    f'<div style="min-height: 300px; padding-right: 10px;">{"".join(text_container_html)}</div>',
                     unsafe_allow_html=True
                 )
 
-            if horizontal_mode:
-                # Horizontal layout: codes in a row below text, then Next button
-                applied_codes = self._get_applied_codes(current_row)
+            # Helper function to render horizontal controls (code buttons, Next, navigation)
+            def render_horizontal_controls():
                 is_disabled = current_row >= total_rows - 1
 
                 # Code buttons in columns with color indicators
@@ -677,22 +899,21 @@ class ManualCoderTool(BaseTool):
                 def go_next():
                     st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
 
-                nav1, nav2, nav_spacer, nav3, nav4 = st.columns([1, 1, 3, 1, 1])
+                nav1, nav2, nav3, nav4 = st.columns([1, 1, 1, 1])
                 with nav1:
                     st.button("◀◀", disabled=current_row <= 0, key="mc_prev5_h",
                               on_click=lambda: st.session_state.update({"mc_current_row": max(0, current_row - 5)}))
                 with nav2:
                     st.button("◀ Prev", disabled=current_row <= 0, key="mc_prev_h", on_click=go_prev)
-                with nav_spacer:
-                    # Autosave indicator
-                    autosave_enabled = st.session_state.get("mc_autosave_enabled", True)
-                    if autosave_enabled:
-                        st.markdown('<div style="text-align:center; color:#888; font-size:0.85em;">💾 Autosave enabled</div>', unsafe_allow_html=True)
                 with nav3:
                     st.button("Next ▶", disabled=current_row >= total_rows - 1, key="mc_next_h", on_click=go_next)
                 with nav4:
                     st.button("▶▶", disabled=current_row >= total_rows - 1, key="mc_next5_h",
                               on_click=lambda: st.session_state.update({"mc_current_row": min(total_rows - 1, current_row + 5)}))
+
+            # Helper function to render Applied codes and progress (always below text)
+            def render_applied_and_progress():
+                applied_codes = self._get_applied_codes(current_row)
 
                 # Applied codes with reordering
                 if applied_codes:
@@ -722,8 +943,23 @@ class ManualCoderTool(BaseTool):
                 st.caption(f"**{coded_count}/{total_rows}** coded")
                 st.progress(progress)
 
+            # Main layout depends on mode
+            if horizontal_mode:
+                # Horizontal mode: buttons above or below text, Applied always at bottom
+                if buttons_above:
+                    render_horizontal_controls()
+                    render_text_display()
+                else:
+                    render_text_display()
+                    render_horizontal_controls()
+                # Applied codes always below text
+                render_applied_and_progress()
+
             else:
-                # Vertical layout in sidebar column (original)
+                # Vertical layout: text on left, codes on right
+                col_text, col_codes = st.columns([5, 1])
+                with col_text:
+                    render_text_display()
                 with col_codes:
                     st.markdown("##### Codes")
 
@@ -780,16 +1016,12 @@ class ManualCoderTool(BaseTool):
                     def go_next_v():
                         st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
 
-                    nav1, nav2, nav_spacer, nav3, nav4 = st.columns([1, 1, 2, 1, 1])
+                    nav1, nav2, nav3, nav4 = st.columns([1, 1, 1, 1])
                     with nav1:
                         st.button("◀◀", disabled=current_row <= 0, key="mc_prev5_v",
                                   on_click=lambda: st.session_state.update({"mc_current_row": max(0, current_row - 5)}))
                     with nav2:
                         st.button("◀ Prev", disabled=current_row <= 0, key="mc_prev_v", on_click=go_prev_v)
-                    with nav_spacer:
-                        autosave_enabled = st.session_state.get("mc_autosave_enabled", True)
-                        if autosave_enabled:
-                            st.markdown('<div style="text-align:center; color:#888; font-size:0.85em;">💾 Autosave</div>', unsafe_allow_html=True)
                     with nav3:
                         st.button("Next ▶", disabled=current_row >= total_rows - 1, key="mc_next_v", on_click=go_next_v)
                     with nav4:

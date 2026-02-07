@@ -360,6 +360,39 @@ RESEARCH_ABSTRACTS = {
 
 
 # ==========================================
+# MIXED LENGTH SAMPLES (for testing layout)
+# ==========================================
+
+# Mixed Feedback - Varying text lengths for testing
+MIXED_FEEDBACK = {
+    "id": [f"FB{i:03d}" for i in range(1, 16)],
+    "feedback": [
+        "Great!",
+        "Not satisfied.",
+        "The product works exactly as described. Happy with my purchase.",
+        "OK",
+        "I've been using this service for about three months now and I have to say the experience has been quite mixed. On one hand, the core functionality works well and the interface is intuitive. However, there have been several instances where the system went down during peak hours, which was frustrating. Customer support was helpful when I reached out, but the wait times were longer than expected. Overall, I think there's a lot of potential here, but some reliability improvements would make a big difference.",
+        "Love it!",
+        "The delivery was fast and the packaging was secure. The item itself meets my expectations.",
+        "Terrible experience from start to finish. First, the website kept crashing when I tried to place my order. Then, when I finally managed to complete the purchase, the confirmation email never arrived. I had to contact support multiple times just to verify my order went through. When the product finally arrived two weeks late, it was the wrong color. The return process was equally painful - I had to pay for return shipping even though it was their mistake. I've requested a full refund and will never shop here again. Save yourself the headache and buy elsewhere.",
+        "5 stars",
+        "Works well for basic tasks but lacks advanced features that competitors offer.",
+        "Meh.",
+        "This exceeded all my expectations! I was initially skeptical because of the low price point, but the quality is surprisingly good. The material feels durable, the stitching is solid, and it looks exactly like the pictures. I've already recommended it to several friends and family members. Will definitely be purchasing more items from this seller in the future.",
+        "Average product, average price, average experience. Nothing special but nothing wrong either.",
+        "NO",
+        "After extensive research comparing multiple options, I decided to try this product based on the positive reviews. I'm pleased to report that it lives up to the hype. Setup was straightforward, performance is excellent, and the customer service team answered all my pre-purchase questions promptly and thoroughly.",
+    ],
+    "rating": [5, 2, 4, 3, 3, 5, 4, 1, 5, 3, 2, 5, 3, 1, 4],
+    "date": [
+        "2024-01-15", "2024-01-14", "2024-01-13", "2024-01-12", "2024-01-11",
+        "2024-01-10", "2024-01-09", "2024-01-08", "2024-01-07", "2024-01-06",
+        "2024-01-05", "2024-01-04", "2024-01-03", "2024-01-02", "2024-01-01",
+    ]
+}
+
+
+# ==========================================
 # DOCUMENT PROCESSING SAMPLES
 # ==========================================
 
@@ -430,6 +463,7 @@ def get_sample_data(name: str) -> Dict[str, List[Any]]:
         "social_media_posts": SOCIAL_MEDIA_POSTS,
         "research_abstracts": RESEARCH_ABSTRACTS,
         "legal_cases": LEGAL_CASES,
+        "mixed_feedback": MIXED_FEEDBACK,
     }
     return datasets.get(name, {})
 
@@ -446,6 +480,7 @@ def get_available_datasets() -> List[str]:
         "social_media_posts",
         "research_abstracts",
         "legal_cases",
+        "mixed_feedback",
     ]
 
 
@@ -456,54 +491,70 @@ def get_dataset_info() -> Dict[str, Dict[str, str]]:
             "name": "Product Reviews",
             "description": "20 product reviews with sentiment, category, and ratings",
             "use_case": "Sentiment analysis, review classification",
-            "rows": 20
+            "rows": 20,
+            "text_column": "text"
         },
         "healthcare_interviews": {
             "name": "Healthcare Worker Interviews",
             "description": "15 interview responses from healthcare workers about their experiences",
             "use_case": "Thematic analysis, qualitative coding",
-            "rows": 15
+            "rows": 15,
+            "text_column": "response"
         },
         "support_tickets": {
             "name": "Customer Support Tickets",
             "description": "20 support tickets with subject, description, priority, and channel",
             "use_case": "Issue classification, priority detection",
-            "rows": 20
+            "rows": 20,
+            "text_column": "description"
         },
         "learning_experience": {
             "name": "Student Learning Experience",
             "description": "20 student responses about online/hybrid learning",
             "use_case": "Educational research, satisfaction analysis",
-            "rows": 20
+            "rows": 20,
+            "text_column": "response"
         },
         "exit_interviews": {
             "name": "Employee Exit Interviews",
             "description": "15 exit interview responses with reasons for leaving",
             "use_case": "HR analytics, retention analysis",
-            "rows": 15
+            "rows": 15,
+            "text_column": "reason_for_leaving"
         },
         "news_articles": {
             "name": "News Articles",
             "description": "20 news articles with headlines, content, and sources",
             "use_case": "Topic classification, summarization",
-            "rows": 20
+            "rows": 20,
+            "text_column": "content"
         },
         "social_media_posts": {
             "name": "Social Media Posts",
             "description": "20 social media posts for content moderation",
             "use_case": "Content moderation, spam detection",
-            "rows": 20
+            "rows": 20,
+            "text_column": "content"
         },
         "research_abstracts": {
             "name": "Research Paper Abstracts",
             "description": "15 research paper abstracts across multiple disciplines",
             "use_case": "Multi-label classification, topic extraction",
-            "rows": 15
+            "rows": 15,
+            "text_column": "abstract"
         },
         "legal_cases": {
             "name": "Legal Case Summaries",
             "description": "10 legal case summaries with type and status",
             "use_case": "Entity extraction, case classification",
-            "rows": 10
+            "rows": 10,
+            "text_column": "summary"
+        },
+        "mixed_feedback": {
+            "name": "Mixed Feedback (Varying Lengths)",
+            "description": "15 feedback items with short, medium, and long texts",
+            "use_case": "Testing layout with varying text lengths",
+            "rows": 15,
+            "text_column": "feedback"
         },
     }
