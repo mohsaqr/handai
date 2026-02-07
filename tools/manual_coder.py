@@ -546,11 +546,11 @@ class ManualCoderTool(BaseTool):
             }
         )
 
-    def _show_immersive_dialog(self, df, codes, text_col, total_rows):
-        """Show immersive coding dialog"""
-
-        @st.dialog("Immersive Coding", width="large")
-        def immersive_dialog():
+    def _render_immersive_mode(self, df, codes, text_col, total_rows):
+        """Render full-page immersive coding interface"""
+        # Use fragment for fast updates without full page reload
+        @st.fragment
+        def immersive_interface():
             current_row = st.session_state["mc_current_row"]
             light_mode = st.session_state.get("mc_light_mode", True)
             context_rows = st.session_state.get("mc_context_rows", 2)
@@ -702,8 +702,8 @@ class ManualCoderTool(BaseTool):
             progress = coded_count / total_rows if total_rows > 0 else 0
             st.progress(progress)
 
-        # Open the dialog
-        immersive_dialog()
+        # Render the fragment
+        immersive_interface()
 
     async def execute(
         self,
@@ -786,9 +786,10 @@ class ManualCoderTool(BaseTool):
                 st.info("No saved sessions found")
                 st.session_state["mc_show_sessions"] = False
 
-        # Immersive mode dialog
+        # Immersive mode - full page takeover
         if immersive_mode:
-            self._show_immersive_dialog(df, codes, text_col, total_rows)
+            self._render_immersive_mode(df, codes, text_col, total_rows)
+            return  # Don't show regular interface
 
         # Word highlighter configuration (outside fragment)
         with st.expander("Word Highlighter - Define words to highlight for each code"):
