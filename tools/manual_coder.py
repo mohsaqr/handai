@@ -358,8 +358,8 @@ class ManualCoderTool(BaseTool):
                 key="mc_sample_choice"
             )
 
-        # Load data
-        df = None
+        # Load data - check if already loaded from session first
+        df = st.session_state.get("mc_df")
 
         if uploaded_file:
             file_ext = uploaded_file.name.split(".")[-1].lower()
@@ -399,7 +399,8 @@ class ManualCoderTool(BaseTool):
                 if selected in self.SAMPLE_HIGHLIGHTS:
                     st.session_state["mc_highlights"] = self.SAMPLE_HIGHLIGHTS[selected]
 
-        if df is None:
+        # If still no df, show error
+        if df is None or (hasattr(df, 'empty') and df.empty):
             return ToolConfig(
                 is_valid=False,
                 error_message="Please upload a file or use sample data"
@@ -573,15 +574,14 @@ class ManualCoderTool(BaseTool):
             }
         )
 
-    def _render_immersive_mode(self, df, codes, text_col, total_rows):
-        """Render full-page immersive coding interface"""
+    def _render_immersive_content(self, df, codes, text_col, total_rows):
+        """Render content for immersive coding dialog"""
         current_row = st.session_state["mc_current_row"]
         light_mode = st.session_state.get("mc_light_mode", True)
         context_rows = st.session_state.get("mc_context_rows", 2)
-        auto_advance = st.session_state.get("mc_auto_advance", False)
 
         # Header row
-        head_col1, head_col2, head_col3, head_col4 = st.columns([2, 1, 1, 1])
+        head_col1, head_col2, head_col3 = st.columns([2, 1, 1])
         with head_col1:
             coded_count = self._count_coded_rows()
             progress_pct = coded_count / total_rows if total_rows > 0 else 0
@@ -593,28 +593,9 @@ class ManualCoderTool(BaseTool):
                 self._save_session()
                 st.toast("Saved!")
         with head_col3:
-            if st.button("Options", key="mc_imm_options", use_container_width=True):
-                st.session_state["mc_imm_show_options"] = not st.session_state.get("mc_imm_show_options", False)
-        with head_col4:
-            if st.button("Exit", key="mc_imm_exit", use_container_width=True):
+            if st.button("Close", key="mc_imm_exit", use_container_width=True):
                 st.session_state["mc_immersive_mode"] = False
                 st.rerun()
-
-        # Options panel (collapsible)
-        if st.session_state.get("mc_imm_show_options"):
-            opt1, opt2, opt3 = st.columns(3)
-            with opt1:
-                new_light = st.toggle("Light mode", value=light_mode, key="mc_imm_light")
-                if new_light != light_mode:
-                    st.session_state["mc_light_mode"] = new_light
-            with opt2:
-                new_ctx = st.number_input("Context rows", min_value=0, max_value=5, value=context_rows, key="mc_imm_ctx")
-                if new_ctx != context_rows:
-                    st.session_state["mc_context_rows"] = new_ctx
-            with opt3:
-                new_auto = st.toggle("Auto-advance", value=auto_advance, key="mc_imm_auto")
-                if new_auto != auto_advance:
-                    st.session_state["mc_auto_advance"] = new_auto
 
         # Colors
         if light_mode:
@@ -824,10 +805,12 @@ class ManualCoderTool(BaseTool):
                 st.info("No saved sessions found")
                 st.session_state["mc_show_sessions"] = False
 
-        # Immersive mode - full page takeover
+        # Immersive mode - modal dialog
         if immersive_mode:
-            self._render_immersive_mode(df, codes, text_col, total_rows)
-            return  # Don't show regular interface
+            @st.dialog("Immersive Coding", width="large")
+            def show_immersive():
+                self._render_immersive_content(df, codes, text_col, total_rows)
+            show_immersive()
 
         # Word highlighter configuration (outside fragment)
         with st.expander("Word Highlighter - Define words to highlight for each code"):
