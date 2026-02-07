@@ -174,6 +174,19 @@ def render():
 
             st.caption("Results will be auto-saved to this location during processing")
 
+            st.markdown("---")
+            st.subheader("Manual Coder")
+
+            mc_autosave = st.toggle(
+                "Autosave enabled",
+                value=st.session_state.get("mc_autosave_enabled", True),
+                key="settings_mc_autosave",
+                help="Automatically save coding progress when clicking Next"
+            )
+            st.session_state["mc_autosave_enabled"] = mc_autosave
+
+            st.caption("Saves progress to .manual_coder_saves/ when navigating")
+
         with col2:
             st.subheader("Export/Import Settings")
 

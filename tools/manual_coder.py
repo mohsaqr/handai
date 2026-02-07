@@ -148,6 +148,8 @@ class ManualCoderTool(BaseTool):
             st.session_state["mc_light_mode"] = True  # light mode for highlight visibility
         if "mc_horizontal_codes" not in st.session_state:
             st.session_state["mc_horizontal_codes"] = True  # horizontal code buttons layout (default)
+        if "mc_autosave_enabled" not in st.session_state:
+            st.session_state["mc_autosave_enabled"] = True  # autosave enabled by default
 
     def _add_code(self, row_idx: int, code: str):
         """Add a code to a specific row (allows duplicates)"""
@@ -634,25 +636,6 @@ class ManualCoderTool(BaseTool):
                             unsafe_allow_html=True
                         )
 
-                # Navigation buttons - grouped at ends
-                def go_prev():
-                    st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 1)
-
-                def go_next():
-                    st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
-
-                nav1, nav2, nav_spacer, nav3, nav4 = st.columns([1, 1, 3, 1, 1])
-                with nav1:
-                    st.button("◀◀", disabled=current_row <= 0, key="mc_prev5",
-                              on_click=lambda: st.session_state.update({"mc_current_row": max(0, current_row - 5)}))
-                with nav2:
-                    st.button("◀ Prev", disabled=current_row <= 0, key="mc_prev", on_click=go_prev)
-                with nav3:
-                    st.button("Next ▶", disabled=current_row >= total_rows - 1, key="mc_next", on_click=go_next)
-                with nav4:
-                    st.button("▶▶", disabled=current_row >= total_rows - 1, key="mc_next5",
-                              on_click=lambda: st.session_state.update({"mc_current_row": min(total_rows - 1, current_row + 5)}))
-
             if horizontal_mode:
                 # Horizontal layout: codes in a row below text, then Next button
                 applied_codes = self._get_applied_codes(current_row)
@@ -679,6 +662,9 @@ class ManualCoderTool(BaseTool):
                 # Next button below codes
                 if st.button("Next ▶", key="mc_next_horiz", type="primary", use_container_width=True, disabled=is_disabled):
                     st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 1)
+                    # Autosave on Next
+                    if st.session_state.get("mc_autosave_enabled", True):
+                        self._save_progress()
                     st.rerun()
 
                 # Navigation buttons after Next
@@ -694,6 +680,11 @@ class ManualCoderTool(BaseTool):
                               on_click=lambda: st.session_state.update({"mc_current_row": max(0, current_row - 5)}))
                 with nav2:
                     st.button("◀ Prev", disabled=current_row <= 0, key="mc_prev_h", on_click=go_prev)
+                with nav_spacer:
+                    # Autosave indicator
+                    autosave_enabled = st.session_state.get("mc_autosave_enabled", True)
+                    if autosave_enabled:
+                        st.markdown('<div style="text-align:center; color:#888; font-size:0.85em;">💾 Autosave enabled</div>', unsafe_allow_html=True)
                 with nav3:
                     st.button("Next ▶", disabled=current_row >= total_rows - 1, key="mc_next_h", on_click=go_next)
                 with nav4:
@@ -755,6 +746,8 @@ class ManualCoderTool(BaseTool):
                     is_disabled = current_row >= total_rows - 1
                     if st.button("Next ▶", key="mc_next_top", type="primary", use_container_width=True, disabled=is_disabled):
                         st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 1)
+                        if st.session_state.get("mc_autosave_enabled", True):
+                            self._save_progress()
                         st.rerun()
 
                     # Code buttons with color indicators
@@ -773,7 +766,32 @@ class ManualCoderTool(BaseTool):
                     # Big Next button at BOTTOM
                     if st.button("Next ▶", key="mc_next_bottom", type="primary", use_container_width=True, disabled=is_disabled):
                         st.session_state["mc_current_row"] = min(total_rows - 1, current_row + 1)
+                        if st.session_state.get("mc_autosave_enabled", True):
+                            self._save_progress()
                         st.rerun()
+
+                    # Navigation buttons
+                    def go_prev_v():
+                        st.session_state["mc_current_row"] = max(0, st.session_state["mc_current_row"] - 1)
+
+                    def go_next_v():
+                        st.session_state["mc_current_row"] = min(total_rows - 1, st.session_state["mc_current_row"] + 1)
+
+                    nav1, nav2, nav_spacer, nav3, nav4 = st.columns([1, 1, 2, 1, 1])
+                    with nav1:
+                        st.button("◀◀", disabled=current_row <= 0, key="mc_prev5_v",
+                                  on_click=lambda: st.session_state.update({"mc_current_row": max(0, current_row - 5)}))
+                    with nav2:
+                        st.button("◀ Prev", disabled=current_row <= 0, key="mc_prev_v", on_click=go_prev_v)
+                    with nav_spacer:
+                        autosave_enabled = st.session_state.get("mc_autosave_enabled", True)
+                        if autosave_enabled:
+                            st.markdown('<div style="text-align:center; color:#888; font-size:0.85em;">💾 Autosave</div>', unsafe_allow_html=True)
+                    with nav3:
+                        st.button("Next ▶", disabled=current_row >= total_rows - 1, key="mc_next_v", on_click=go_next_v)
+                    with nav4:
+                        st.button("▶▶", disabled=current_row >= total_rows - 1, key="mc_next5_v",
+                                  on_click=lambda: st.session_state.update({"mc_current_row": min(total_rows - 1, current_row + 5)}))
 
                     # Show applied codes in order with reordering
                     if applied_codes:
@@ -807,9 +825,6 @@ class ManualCoderTool(BaseTool):
 
         # Render the fragment
         coding_interface()
-
-        # Obsessive autosave - save on EVERY render
-        self._save_progress()
 
         # Export section (outside fragment)
         st.divider()
