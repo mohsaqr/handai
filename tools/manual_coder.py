@@ -179,6 +179,8 @@ class ManualCoderTool(BaseTool):
 
     def _init_session_state(self):
         """Initialize session state keys for the tool"""
+        first_init = "mc_initialized" not in st.session_state
+
         if "mc_df" not in st.session_state:
             st.session_state["mc_df"] = None
         if "mc_codes" not in st.session_state:
@@ -209,6 +211,16 @@ class ManualCoderTool(BaseTool):
             st.session_state["mc_immersive_mode"] = False  # immersive coding mode
         if "mc_current_session" not in st.session_state:
             st.session_state["mc_current_session"] = None  # current session name
+
+        # Auto-load most recent session on first init (page refresh)
+        if first_init:
+            st.session_state["mc_initialized"] = True
+            sessions = self._list_sessions()
+            if sessions:
+                # Load the most recent session
+                most_recent = sessions[0]["name"]
+                if self._load_session(most_recent):
+                    st.toast(f"Resumed: {most_recent}")
 
     def _add_code(self, row_idx: int, code: str):
         """Add a code to a specific row (allows duplicates)"""
