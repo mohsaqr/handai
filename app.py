@@ -40,7 +40,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Import pages
-from pages import home, transform, generate, process_documents, history, settings, models, qualitative, consensus, codebook_generator, automator, manual_coder
+from pages import home, transform, generate, process_documents, history, settings, models, qualitative, consensus, codebook_generator, automator, manual_coder, ai_coder
 
 # Define pages for navigation with explicit URL paths
 page_home = st.Page(home.render, title="Home", icon=":material/home:", url_path="home")
@@ -52,12 +52,13 @@ page_qualitative = st.Page(qualitative.render, title="Qualitative Coder", icon="
 page_consensus = st.Page(consensus.render, title="Consensus Coder", icon=":material/groups:", url_path="consensus")
 page_codebook = st.Page(codebook_generator.render, title="Codebook Generator", icon=":material/book:", url_path="codebook-generator")
 page_manual_coder = st.Page(manual_coder.render, title="Manual Coder", icon=":material/touch_app:", url_path="manual-coder")
+page_ai_coder = st.Page(ai_coder.render, title="AI Coder", icon=":material/smart_toy:", url_path="ai-coder")
 page_models = st.Page(models.render, title="LLM Providers", icon=":material/model_training:", url_path="llm-providers")
 page_history = st.Page(history.render, title="History", icon=":material/history:", url_path="history")
 page_settings = st.Page(settings.render, title="Settings", icon=":material/settings:", url_path="settings")
 
 pages = {
-    "Main": [page_home, page_transform, page_generate, page_process_docs, page_automator, page_qualitative, page_consensus, page_codebook, page_manual_coder],
+    "Main": [page_home, page_transform, page_generate, page_process_docs, page_automator, page_qualitative, page_consensus, page_codebook, page_manual_coder, page_ai_coder],
     "System": [page_models, page_history, page_settings],
 }
 
@@ -71,6 +72,7 @@ st.session_state["_pages"] = {
     "consensus": page_consensus,
     "codebook-generator": page_codebook,
     "manual-coder": page_manual_coder,
+    "ai-coder": page_ai_coder,
     "llm-providers": page_models,
     "history": page_history,
     "settings": page_settings,

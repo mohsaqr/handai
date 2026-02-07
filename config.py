@@ -8,7 +8,7 @@ import platform
 
 # App Info
 APP_NAME = "Handai"
-APP_VERSION = "4.0"
+APP_VERSION = "6.0"
 APP_DESCRIPTION = "AI Data Transformer & Generator"
 
 # Database + config storage (writable per-user location)

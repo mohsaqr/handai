@@ -148,9 +148,18 @@ def render():
          "- Export coded data with one-hot encoding or text format\n"
          "- Sample datasets included for practice\n\n"
          "*Best for: human coding, inter-rater reliability studies, training coders*"),
+        ("ai-coder", ":material/smart_toy:", "AI Coder",
+         "AI-assisted manual coding with inter-rater reliability analytics.",
+         "- All features of Manual Coder plus AI suggestions\n"
+         "- Per-row or batch AI processing modes\n"
+         "- Three display modes: AI First, Side-by-side, Inline Badges\n"
+         "- Inter-rater reliability: Cohen's Kappa, Jaccard, Precision/Recall\n"
+         "- Confusion matrix and disagreement analysis\n"
+         "- Export with AI codes and confidence scores\n\n"
+         "*Best for: AI-assisted coding, human-AI comparison, reliability studies*"),
     ]
 
-    row2 = st.columns(4)
+    row2 = st.columns(5)
     for col, (key, icon, title, tagline, details) in zip(row2, qual_tools):
         with col:
             with st.container(border=True):

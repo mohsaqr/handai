@@ -9,6 +9,7 @@ from .transform import TransformTool
 from .generate import GenerateTool
 from .process_documents import ProcessDocumentsTool
 from .manual_coder import ManualCoderTool
+from .ai_coder import AICoderTool
 
 __all__ = [
     "BaseTool",
@@ -17,4 +18,5 @@ __all__ = [
     "GenerateTool",
     "ProcessDocumentsTool",
     "ManualCoderTool",
+    "AICoderTool",
 ]

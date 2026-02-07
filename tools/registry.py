@@ -153,6 +153,7 @@ def register_default_tools():
     from .codebook_generator import CodebookGeneratorTool
     from .automator import AutomatorTool
     from .manual_coder import ManualCoderTool
+    from .ai_coder import AICoderTool
 
     # Only register if not already registered
     if not ToolRegistry.tool_exists("transform"):
@@ -178,3 +179,6 @@ def register_default_tools():
 
     if not ToolRegistry.tool_exists("manual_coder"):
         ToolRegistry.register(ManualCoderTool())
+
+    if not ToolRegistry.tool_exists("ai_coder"):
+        ToolRegistry.register(AICoderTool())
