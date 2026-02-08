@@ -33,10 +33,11 @@ def render():
     ensure_prompts_registered()
 
     # Tabs for settings categories
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         ":material/tune: Model Defaults",
         ":material/speed: Performance",
         ":material/folder: Storage",
+        ":material/code: Coding Tools",
         ":material/edit_note: System Prompts"
     ])
 
@@ -174,19 +175,6 @@ def render():
 
             st.caption("Results will be auto-saved to this location during processing")
 
-            st.markdown("---")
-            st.subheader("Manual Coder")
-
-            mc_autosave = st.toggle(
-                "Autosave enabled",
-                value=st.session_state.get("mc_autosave_enabled", True),
-                key="settings_mc_autosave",
-                help="Automatically save coding progress when clicking Next"
-            )
-            st.session_state["mc_autosave_enabled"] = mc_autosave
-
-            st.caption("Saves progress to .manual_coder_saves/ when navigating")
-
         with col2:
             st.subheader("Export/Import Settings")
 
@@ -234,9 +222,119 @@ def render():
                 st.warning("This action cannot be undone!")
 
     # ==========================================
-    # TAB: System Prompts
+    # TAB: Coding Tools
     # ==========================================
     with tab4:
+        st.header("Coding Tools Settings")
+        st.caption("Display and behavior settings for AI Coder and Manual Coder")
+
+        # === DISPLAY SETTINGS ===
+        st.subheader("Display")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            light_mode = st.toggle(
+                "Light mode",
+                value=st.session_state.get("coding_light_mode", True),
+                key="settings_coding_light_mode",
+                help="Use light theme for coding interface"
+            )
+            st.session_state["coding_light_mode"] = light_mode
+
+            context_rows = st.slider(
+                "Context rows",
+                min_value=0, max_value=5,
+                value=st.session_state.get("coding_context_rows", 2),
+                key="settings_coding_context_rows",
+                help="Number of surrounding rows to show"
+            )
+            st.session_state["coding_context_rows"] = context_rows
+
+        with col2:
+            auto_advance = st.toggle(
+                "Auto-advance after coding",
+                value=st.session_state.get("coding_auto_advance", False),
+                key="settings_coding_auto_advance",
+                help="Move to next row after applying a code"
+            )
+            st.session_state["coding_auto_advance"] = auto_advance
+
+        st.divider()
+
+        # === LAYOUT SETTINGS ===
+        st.subheader("Layout")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            horizontal = st.toggle(
+                "Horizontal code buttons",
+                value=st.session_state.get("coding_horizontal_codes", False),
+                key="settings_coding_horizontal",
+                help="Show codes in a horizontal row instead of sidebar"
+            )
+            st.session_state["coding_horizontal_codes"] = horizontal
+
+        with col2:
+            buttons_above = st.toggle(
+                "Buttons above text",
+                value=st.session_state.get("coding_buttons_above", False),
+                key="settings_coding_buttons_above",
+                help="Place code buttons above the text display"
+            )
+            st.session_state["coding_buttons_above"] = buttons_above
+
+        st.divider()
+
+        # === AI CODER SPECIFIC ===
+        st.subheader("AI Coder")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            ai_mode = st.selectbox(
+                "Default processing mode",
+                options=["per_row", "batch"],
+                format_func=lambda x: "Per-row" if x == "per_row" else "Batch",
+                index=0 if st.session_state.get("aic_default_mode", "per_row") == "per_row" else 1,
+                key="settings_aic_default_mode",
+                help="Per-row: AI suggests as you navigate. Batch: Pre-process all rows."
+            )
+            st.session_state["aic_default_mode"] = ai_mode
+
+        with col2:
+            ai_display = st.selectbox(
+                "Default display mode",
+                options=["ai_first", "inline_badges"],
+                format_func=lambda x: "AI First" if x == "ai_first" else "Inline Badges",
+                index=0 if st.session_state.get("aic_default_display", "ai_first") == "ai_first" else 1,
+                key="settings_aic_default_display",
+                help="AI First: Show suggestions above text. Inline: Show confidence on buttons."
+            )
+            st.session_state["aic_default_display"] = ai_display
+
+        aic_autosave = st.toggle(
+            "Autosave enabled",
+            value=st.session_state.get("aic_autosave_enabled", True),
+            key="settings_aic_autosave",
+            help="Auto-save AI Coder sessions on navigation"
+        )
+        st.session_state["aic_autosave_enabled"] = aic_autosave
+
+        st.divider()
+
+        # === MANUAL CODER SPECIFIC ===
+        st.subheader("Manual Coder")
+        mc_autosave = st.toggle(
+            "Autosave enabled",
+            value=st.session_state.get("mc_autosave_enabled", True),
+            key="settings_mc_autosave",
+            help="Auto-save Manual Coder sessions on navigation"
+        )
+        st.session_state["mc_autosave_enabled"] = mc_autosave
+
+    # ==========================================
+    # TAB: System Prompts
+    # ==========================================
+    with tab5:
         st.header("System Prompts")
         st.caption("Customize AI system prompts used by various tools. Changes can be temporary (session only) or permanent (saved to database).")
 

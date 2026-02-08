@@ -172,8 +172,23 @@ class AICoderTool(BaseTool):
                     "display": st.session_state.get("aic_ai_display", "ai_first"),
                     "provider": st.session_state.get("aic_ai_provider", ""),
                     "model": st.session_state.get("aic_ai_model", ""),
+                    # Advanced AI Settings
+                    "custom_prompt_enabled": st.session_state.get("aic_custom_prompt_enabled", False),
+                    "custom_prompt": st.session_state.get("aic_custom_prompt", ""),
+                    "code_definitions": st.session_state.get("aic_code_definitions", {}),
+                    "thresholds_enabled": st.session_state.get("aic_thresholds_enabled", False),
+                    "threshold_auto_accept": st.session_state.get("aic_threshold_auto_accept", 0.90),
+                    "threshold_flag": st.session_state.get("aic_threshold_flag", 0.50),
+                    "threshold_skip": st.session_state.get("aic_threshold_skip", 0.20),
+                    "ai_context_rows": st.session_state.get("aic_ai_context_rows", 0),
+                    "training_enabled": st.session_state.get("aic_training_enabled", False),
+                    "training_examples_count": st.session_state.get("aic_training_examples_count", 5),
                 },
                 "ai_suggestions": {str(k): v for k, v in st.session_state.get("aic_ai_suggestions", {}).items()},
+                "automation_data": {
+                    "flagged_rows": list(st.session_state.get("aic_flagged_rows", set())),
+                    "auto_accepted_rows": list(st.session_state.get("aic_auto_accepted_rows", set())),
+                },
             }
 
             with open(self._get_session_file(name), "w") as f:
@@ -215,9 +230,26 @@ class AICoderTool(BaseTool):
                 st.session_state["aic_ai_provider"] = ai_config.get("provider", "")
                 st.session_state["aic_ai_model"] = ai_config.get("model", "")
 
+                # Advanced AI Settings
+                st.session_state["aic_custom_prompt_enabled"] = ai_config.get("custom_prompt_enabled", False)
+                st.session_state["aic_custom_prompt"] = ai_config.get("custom_prompt", "")
+                st.session_state["aic_code_definitions"] = ai_config.get("code_definitions", {})
+                st.session_state["aic_thresholds_enabled"] = ai_config.get("thresholds_enabled", False)
+                st.session_state["aic_threshold_auto_accept"] = ai_config.get("threshold_auto_accept", 0.90)
+                st.session_state["aic_threshold_flag"] = ai_config.get("threshold_flag", 0.50)
+                st.session_state["aic_threshold_skip"] = ai_config.get("threshold_skip", 0.20)
+                st.session_state["aic_ai_context_rows"] = ai_config.get("ai_context_rows", 0)
+                st.session_state["aic_training_enabled"] = ai_config.get("training_enabled", False)
+                st.session_state["aic_training_examples_count"] = ai_config.get("training_examples_count", 5)
+
                 # AI suggestions
                 ai_suggestions = save_data.get("ai_suggestions", {})
                 st.session_state["aic_ai_suggestions"] = {int(k): v for k, v in ai_suggestions.items()}
+
+                # Automation data
+                automation_data = save_data.get("automation_data", {})
+                st.session_state["aic_flagged_rows"] = set(automation_data.get("flagged_rows", []))
+                st.session_state["aic_auto_accepted_rows"] = set(automation_data.get("auto_accepted_rows", []))
 
                 # Restore sample dataset if it was used
                 sample_dataset = data.get("sample_dataset")
@@ -300,22 +332,23 @@ class AICoderTool(BaseTool):
             st.session_state["aic_current_row"] = 0
         if "aic_text_col" not in st.session_state:
             st.session_state["aic_text_col"] = None
+        # Use global coding settings as defaults
         if "aic_auto_advance" not in st.session_state:
-            st.session_state["aic_auto_advance"] = False
+            st.session_state["aic_auto_advance"] = st.session_state.get("coding_auto_advance", False)
         if "aic_highlights" not in st.session_state:
             st.session_state["aic_highlights"] = {}
         if "aic_context_rows" not in st.session_state:
-            st.session_state["aic_context_rows"] = 2
+            st.session_state["aic_context_rows"] = st.session_state.get("coding_context_rows", 2)
         if "aic_codebook" not in st.session_state:
             st.session_state["aic_codebook"] = None
         if "aic_light_mode" not in st.session_state:
-            st.session_state["aic_light_mode"] = True
+            st.session_state["aic_light_mode"] = st.session_state.get("coding_light_mode", True)
         if "aic_horizontal_codes" not in st.session_state:
-            st.session_state["aic_horizontal_codes"] = True
+            st.session_state["aic_horizontal_codes"] = st.session_state.get("coding_horizontal_codes", False)
         if "aic_autosave_enabled" not in st.session_state:
-            st.session_state["aic_autosave_enabled"] = True
+            st.session_state["aic_autosave_enabled"] = st.session_state.get("aic_autosave_enabled", True)
         if "aic_buttons_above" not in st.session_state:
-            st.session_state["aic_buttons_above"] = False
+            st.session_state["aic_buttons_above"] = st.session_state.get("coding_buttons_above", False)
         if "aic_immersive_trigger" not in st.session_state:
             st.session_state["aic_immersive_trigger"] = False
         if "aic_immersive_active" not in st.session_state:
@@ -327,11 +360,11 @@ class AICoderTool(BaseTool):
         if "aic_session_restored" not in st.session_state:
             st.session_state["aic_session_restored"] = False
 
-        # AI-specific state
+        # AI-specific state - use global defaults
         if "aic_ai_mode" not in st.session_state:
-            st.session_state["aic_ai_mode"] = "per_row"  # "per_row" | "batch"
+            st.session_state["aic_ai_mode"] = st.session_state.get("aic_default_mode", "per_row")
         if "aic_ai_display" not in st.session_state:
-            st.session_state["aic_ai_display"] = "ai_first"  # "ai_first" | "side_by_side" | "inline_badges"
+            st.session_state["aic_ai_display"] = st.session_state.get("aic_default_display", "ai_first")
         if "aic_ai_suggestions" not in st.session_state:
             st.session_state["aic_ai_suggestions"] = {}  # {row_idx: {codes, confidence, reasoning}}
         if "aic_ai_batch_status" not in st.session_state:
@@ -342,6 +375,40 @@ class AICoderTool(BaseTool):
             st.session_state["aic_ai_model"] = ""
         if "aic_batch_progress" not in st.session_state:
             st.session_state["aic_batch_progress"] = 0
+
+        # Advanced AI Settings - Custom Prompt
+        if "aic_custom_prompt_enabled" not in st.session_state:
+            st.session_state["aic_custom_prompt_enabled"] = False
+        if "aic_custom_prompt" not in st.session_state:
+            st.session_state["aic_custom_prompt"] = ""
+
+        # Advanced AI Settings - Code Definitions
+        if "aic_code_definitions" not in st.session_state:
+            st.session_state["aic_code_definitions"] = {}  # {code: {definition, examples, keywords}}
+
+        # Advanced AI Settings - Confidence Thresholds
+        if "aic_thresholds_enabled" not in st.session_state:
+            st.session_state["aic_thresholds_enabled"] = False
+        if "aic_threshold_auto_accept" not in st.session_state:
+            st.session_state["aic_threshold_auto_accept"] = 0.90
+        if "aic_threshold_flag" not in st.session_state:
+            st.session_state["aic_threshold_flag"] = 0.50
+        if "aic_threshold_skip" not in st.session_state:
+            st.session_state["aic_threshold_skip"] = 0.20
+        if "aic_flagged_rows" not in st.session_state:
+            st.session_state["aic_flagged_rows"] = set()
+        if "aic_auto_accepted_rows" not in st.session_state:
+            st.session_state["aic_auto_accepted_rows"] = set()
+
+        # Advanced AI Settings - AI Context Window
+        if "aic_ai_context_rows" not in st.session_state:
+            st.session_state["aic_ai_context_rows"] = 0  # 0-3 rows before/after for AI prompt
+
+        # Advanced AI Settings - Training Mode
+        if "aic_training_enabled" not in st.session_state:
+            st.session_state["aic_training_enabled"] = False
+        if "aic_training_examples_count" not in st.session_state:
+            st.session_state["aic_training_examples_count"] = 5
 
         # Auto-load most recent session on first init
         if first_init:
@@ -471,9 +538,16 @@ class AICoderTool(BaseTool):
             provider_entry["base_url"]
         )
 
-        # Build prompt
-        codes_list = "\n".join([f"- {c}" for c in codes])
-        system_prompt = AI_CODER_SYSTEM_PROMPT.format(codes_list=codes_list)
+        # Build prompt using advanced settings
+        system_prompt = self._build_ai_prompt()
+
+        # Build context text (includes surrounding rows if configured)
+        df = st.session_state.get("aic_df")
+        text_col = st.session_state.get("aic_text_col")
+        if df is not None and text_col:
+            context_text = self._build_context_text(df, text_col, row_idx)
+        else:
+            context_text = text
 
         # Check if JSON mode is supported
         use_json_mode = supports_json_mode(provider_enum, model)
@@ -482,7 +556,7 @@ class AICoderTool(BaseTool):
             output, error = await call_llm_simple(
                 client=client,
                 system_prompt=system_prompt,
-                user_content=f"TEXT TO ANALYZE:\n{text}",
+                user_content=f"TEXT TO ANALYZE:\n{context_text}",
                 model=model,
                 temperature=0.3,
                 max_tokens=500,
@@ -561,6 +635,10 @@ class AICoderTool(BaseTool):
                 "confidence": confidence,
                 "reasoning": result.get("reasoning", "")
             }
+
+            # Apply confidence thresholds
+            suggestion = self._apply_confidence_thresholds(row_idx, suggestion)
+
             # Cache the result
             if "aic_ai_suggestions" not in st.session_state:
                 st.session_state["aic_ai_suggestions"] = {}
@@ -582,6 +660,9 @@ class AICoderTool(BaseTool):
 
         # Clear ALL previous suggestions to force fresh batch
         st.session_state["aic_ai_suggestions"] = {}
+        # Also clear threshold tracking
+        st.session_state["aic_flagged_rows"] = set()
+        st.session_state["aic_auto_accepted_rows"] = set()
 
         semaphore = asyncio.Semaphore(5)  # Max 5 concurrent requests
 
@@ -631,6 +712,162 @@ class AICoderTool(BaseTool):
             for code in suggestion["codes"]:
                 if code not in self._get_applied_codes(row_idx):
                     self._add_code(row_idx, code)
+
+    def _build_ai_prompt(self) -> str:
+        """Build complete AI prompt with code definitions, custom prompt, and training examples"""
+        codes = st.session_state.get("aic_codes", [])
+        code_definitions = st.session_state.get("aic_code_definitions", {})
+        custom_prompt_enabled = st.session_state.get("aic_custom_prompt_enabled", False)
+        custom_prompt = st.session_state.get("aic_custom_prompt", "")
+        training_enabled = st.session_state.get("aic_training_enabled", False)
+
+        # Build codes list with definitions
+        codes_section = "AVAILABLE CODES:\n"
+        for code in codes:
+            codes_section += f"- {code}"
+            if code in code_definitions:
+                defn = code_definitions[code]
+                if defn.get("definition"):
+                    codes_section += f"\n  Definition: {defn['definition']}"
+                if defn.get("examples"):
+                    codes_section += f"\n  Examples: {defn['examples']}"
+                if defn.get("keywords"):
+                    codes_section += f"\n  Keywords: {defn['keywords']}"
+            codes_section += "\n"
+
+        # Build training examples section
+        training_section = ""
+        if training_enabled:
+            training_section = self._build_training_examples()
+
+        # Use custom prompt or default
+        if custom_prompt_enabled and custom_prompt.strip():
+            # Replace placeholders in custom prompt
+            prompt = custom_prompt.replace("{codes_list}", codes_section)
+            if training_section:
+                prompt = prompt.replace("{training_examples}", training_section)
+            else:
+                prompt = prompt.replace("{training_examples}", "")
+        else:
+            # Default prompt
+            prompt = f"""Analyze the text and suggest codes.
+
+{codes_section}
+{training_section}
+OUTPUT FORMAT (JSON only):
+{{
+  "codes": ["Code1", "Code2"],
+  "confidence": {{"Code1": 0.95, "Code2": 0.72}},
+  "reasoning": "Brief explanation"
+}}
+
+RULES:
+- Only suggest from available codes
+- Order by confidence (highest first)
+- Include codes with confidence >= 0.3
+- Return valid JSON only
+"""
+
+        return prompt
+
+    def _build_context_text(self, df: pd.DataFrame, text_col: str, row_idx: int) -> str:
+        """Build text with N surrounding rows for context"""
+        ai_context_rows = st.session_state.get("aic_ai_context_rows", 0)
+
+        if ai_context_rows == 0:
+            return str(df.iloc[row_idx][text_col])
+
+        total_rows = len(df)
+        start_idx = max(0, row_idx - ai_context_rows)
+        end_idx = min(total_rows, row_idx + ai_context_rows + 1)
+
+        context_parts = []
+        for idx in range(start_idx, end_idx):
+            text = str(df.iloc[idx][text_col])
+            if idx == row_idx:
+                context_parts.append(f"[CURRENT ROW {idx + 1}]: {text}")
+            else:
+                context_parts.append(f"[Row {idx + 1}]: {text}")
+
+        return "\n\n".join(context_parts)
+
+    def _build_training_examples(self) -> str:
+        """Format few-shot examples from manually coded rows"""
+        training_count = st.session_state.get("aic_training_examples_count", 5)
+        coding_data = st.session_state.get("aic_coding_data", {})
+        df = st.session_state.get("aic_df")
+        text_col = st.session_state.get("aic_text_col")
+
+        if df is None or not text_col or not coding_data:
+            return ""
+
+        # Get rows that have been coded
+        coded_rows = [(idx, codes) for idx, codes in coding_data.items() if codes]
+        if not coded_rows:
+            return ""
+
+        # Take up to training_count examples
+        examples = coded_rows[:training_count]
+
+        training_section = "TRAINING EXAMPLES (learn from these human-coded samples):\n"
+        for row_idx, codes in examples:
+            if row_idx < len(df):
+                text = str(df.iloc[row_idx][text_col])
+                # Truncate long texts
+                if len(text) > 200:
+                    text = text[:200] + "..."
+                training_section += f"\nText: \"{text}\"\nCodes: {codes}\n"
+
+        training_section += "\nUse these examples to understand the coding patterns.\n\n"
+        return training_section
+
+    def _apply_confidence_thresholds(self, row_idx: int, suggestion: dict) -> dict:
+        """Apply confidence thresholds to filter, auto-accept, or flag suggestions"""
+        if not st.session_state.get("aic_thresholds_enabled", False):
+            return suggestion
+
+        if not suggestion or suggestion.get("error") or not suggestion.get("codes"):
+            return suggestion
+
+        threshold_auto_accept = st.session_state.get("aic_threshold_auto_accept", 0.90)
+        threshold_flag = st.session_state.get("aic_threshold_flag", 0.50)
+        threshold_skip = st.session_state.get("aic_threshold_skip", 0.20)
+
+        confidence_dict = suggestion.get("confidence", {})
+        codes = suggestion.get("codes", [])
+
+        # Calculate average confidence
+        if codes and confidence_dict:
+            avg_confidence = sum(confidence_dict.get(c, 0) for c in codes) / len(codes)
+        else:
+            avg_confidence = 0
+
+        # Skip if below skip threshold
+        if avg_confidence < threshold_skip:
+            suggestion["skipped"] = True
+            suggestion["threshold_action"] = "skip"
+            return suggestion
+
+        # Auto-accept if above auto-accept threshold
+        if avg_confidence >= threshold_auto_accept:
+            # Apply codes automatically
+            for code in codes:
+                if code not in self._get_applied_codes(row_idx):
+                    if row_idx not in st.session_state["aic_coding_data"]:
+                        st.session_state["aic_coding_data"][row_idx] = []
+                    st.session_state["aic_coding_data"][row_idx].append(code)
+            st.session_state["aic_auto_accepted_rows"].add(row_idx)
+            suggestion["auto_accepted"] = True
+            suggestion["threshold_action"] = "auto_accept"
+            return suggestion
+
+        # Flag if below flag threshold
+        if avg_confidence < threshold_flag:
+            st.session_state["aic_flagged_rows"].add(row_idx)
+            suggestion["flagged"] = True
+            suggestion["threshold_action"] = "flag"
+
+        return suggestion
 
     def render_config(self) -> ToolConfig:
         """Render AI coder configuration UI"""
@@ -963,6 +1200,153 @@ class AICoderTool(BaseTool):
             )
             st.session_state["aic_ai_display"] = ai_display
 
+            # AI Behavior Settings
+            with st.expander("AI Behavior", expanded=False):
+                # AI Context Window
+                ai_context = st.slider(
+                    "AI context window (surrounding rows)",
+                    min_value=0, max_value=3,
+                    value=st.session_state.get("aic_ai_context_rows", 0),
+                    key="aic_ai_context_slider",
+                    help="Number of rows before/after to include in AI prompt for context"
+                )
+                st.session_state["aic_ai_context_rows"] = ai_context
+                if ai_context > 0:
+                    st.caption(f"AI will see {ai_context} row(s) before and after each text.")
+
+                st.divider()
+
+                # Training Mode
+                st.markdown("**Training Mode (Few-Shot Learning)**")
+                training_enabled = st.checkbox(
+                    "Enable training examples",
+                    value=st.session_state.get("aic_training_enabled", False),
+                    key="aic_training_checkbox",
+                    help="Include your manually coded examples in the AI prompt"
+                )
+                st.session_state["aic_training_enabled"] = training_enabled
+
+                if training_enabled:
+                    training_count = st.slider(
+                        "Number of examples",
+                        min_value=1, max_value=10,
+                        value=st.session_state.get("aic_training_examples_count", 5),
+                        key="aic_training_count_slider",
+                        help="How many coded examples to include in the prompt"
+                    )
+                    st.session_state["aic_training_examples_count"] = training_count
+
+                    coded_count = self._count_coded_rows()
+                    if coded_count > 0:
+                        st.caption(f"✓ {coded_count} coded rows available as training examples")
+                    else:
+                        st.caption("⚠️ Code some rows first to use as training examples")
+
+            # Confidence Thresholds
+            with st.expander("Confidence Thresholds", expanded=False):
+                thresholds_enabled = st.checkbox(
+                    "Enable automatic threshold actions",
+                    value=st.session_state.get("aic_thresholds_enabled", False),
+                    key="aic_thresholds_checkbox",
+                    help="Automatically accept high-confidence, flag low-confidence, skip very low."
+                )
+                st.session_state["aic_thresholds_enabled"] = thresholds_enabled
+
+                if thresholds_enabled:
+                    thresh_col1, thresh_col2, thresh_col3 = st.columns(3)
+                    with thresh_col1:
+                        auto_accept = st.slider(
+                            "Auto-accept ≥",
+                            min_value=0.0, max_value=1.0,
+                            value=st.session_state.get("aic_threshold_auto_accept", 0.90),
+                            step=0.05,
+                            key="aic_thresh_auto",
+                            help="Auto-apply codes with confidence ≥ this value"
+                        )
+                        st.session_state["aic_threshold_auto_accept"] = auto_accept
+                    with thresh_col2:
+                        flag_thresh = st.slider(
+                            "Flag <",
+                            min_value=0.0, max_value=1.0,
+                            value=st.session_state.get("aic_threshold_flag", 0.50),
+                            step=0.05,
+                            key="aic_thresh_flag",
+                            help="Flag rows with confidence < this value for review"
+                        )
+                        st.session_state["aic_threshold_flag"] = flag_thresh
+                    with thresh_col3:
+                        skip_thresh = st.slider(
+                            "Skip <",
+                            min_value=0.0, max_value=1.0,
+                            value=st.session_state.get("aic_threshold_skip", 0.20),
+                            step=0.05,
+                            key="aic_thresh_skip",
+                            help="Skip suggestions with confidence < this value"
+                        )
+                        st.session_state["aic_threshold_skip"] = skip_thresh
+
+                    # Show threshold stats
+                    flagged = len(st.session_state.get("aic_flagged_rows", set()))
+                    auto_accepted = len(st.session_state.get("aic_auto_accepted_rows", set()))
+                    if flagged > 0 or auto_accepted > 0:
+                        st.caption(f"📊 {auto_accepted} auto-accepted, {flagged} flagged for review")
+
+            # Custom Prompt & Code Definitions
+            with st.expander("Prompt Customization", expanded=False):
+                # Custom System Prompt
+                st.markdown("**Custom System Prompt**")
+                custom_prompt_enabled = st.checkbox(
+                    "Enable custom prompt",
+                    value=st.session_state.get("aic_custom_prompt_enabled", False),
+                    key="aic_custom_prompt_checkbox",
+                    help="Use a custom prompt instead of the default. Use {codes_list} and {training_examples} as placeholders."
+                )
+                st.session_state["aic_custom_prompt_enabled"] = custom_prompt_enabled
+
+                if custom_prompt_enabled:
+                    custom_prompt = st.text_area(
+                        "System prompt",
+                        value=st.session_state.get("aic_custom_prompt", ""),
+                        height=150,
+                        placeholder="Enter your custom prompt. Use {codes_list} for code list and {training_examples} for training examples.",
+                        key="aic_custom_prompt_textarea"
+                    )
+                    st.session_state["aic_custom_prompt"] = custom_prompt
+                    st.caption("Placeholders: `{codes_list}`, `{training_examples}`")
+
+                st.divider()
+
+                # Code Definitions
+                st.markdown("**Code Definitions**")
+                st.caption("Add definitions, examples, and keywords for each code to improve AI accuracy.")
+
+                code_definitions = st.session_state.get("aic_code_definitions", {})
+                for code in codes:
+                    with st.expander(f"📝 {code}", expanded=False):
+                        if code not in code_definitions:
+                            code_definitions[code] = {"definition": "", "examples": "", "keywords": ""}
+
+                        code_definitions[code]["definition"] = st.text_input(
+                            "Definition",
+                            value=code_definitions[code].get("definition", ""),
+                            key=f"aic_def_{code}",
+                            placeholder=f"What does '{code}' mean?"
+                        )
+                        code_definitions[code]["examples"] = st.text_input(
+                            "Examples",
+                            value=code_definitions[code].get("examples", ""),
+                            key=f"aic_ex_{code}",
+                            placeholder="Example texts that should get this code"
+                        )
+                        code_definitions[code]["keywords"] = st.text_input(
+                            "Keywords",
+                            value=code_definitions[code].get("keywords", ""),
+                            key=f"aic_kw_{code}",
+                            placeholder="Keywords that indicate this code (comma-separated)"
+                        )
+
+                st.session_state["aic_code_definitions"] = code_definitions
+
             # Batch mode controls
             if ai_mode == "batch":
                 col_batch, col_progress = st.columns([1, 2])
@@ -1068,6 +1452,15 @@ class AICoderTool(BaseTool):
                 current_text = "#eee"
                 context_bg = "#2a2a3e"
                 context_text = "#bbb"
+
+            # Show threshold status indicators
+            is_flagged = current_row in st.session_state.get("aic_flagged_rows", set())
+            is_auto_accepted = current_row in st.session_state.get("aic_auto_accepted_rows", set())
+
+            if is_auto_accepted:
+                st.success("✓ Auto-accepted (high confidence)")
+            elif is_flagged:
+                st.warning("⚠️ Flagged for review (low confidence)")
 
             # AI Suggestion display (if ai_first mode)
             suggestion = st.session_state.get("aic_ai_suggestions", {}).get(current_row, {})
@@ -1287,10 +1680,21 @@ class AICoderTool(BaseTool):
             current_session = st.session_state.get("aic_current_session")
             coded_count = self._count_coded_rows()
             ai_count = len(st.session_state.get("aic_ai_suggestions", {}))
+
+            # Build session info string
+            session_info = f"{coded_count}/{total_rows} coded, {ai_count} AI"
+
+            # Add threshold stats if enabled
+            if st.session_state.get("aic_thresholds_enabled", False):
+                flagged_count = len(st.session_state.get("aic_flagged_rows", set()))
+                auto_accepted_count = len(st.session_state.get("aic_auto_accepted_rows", set()))
+                if flagged_count > 0 or auto_accepted_count > 0:
+                    session_info += f" | ✓{auto_accepted_count} ⚠️{flagged_count}"
+
             if current_session:
-                st.markdown(f"**Session:** `{current_session}` ({coded_count}/{total_rows} coded, {ai_count} AI)")
+                st.markdown(f"**Session:** `{current_session}` ({session_info})")
             else:
-                st.markdown(f"**New Session** ({coded_count}/{total_rows} coded, {ai_count} AI)")
+                st.markdown(f"**New Session** ({session_info})")
         with session_col2:
             if st.button("Save", key="aic_save_session", use_container_width=True):
                 st.session_state["aic_show_save_dialog"] = True
@@ -1462,6 +1866,15 @@ class AICoderTool(BaseTool):
             # Get AI suggestion for current row
             suggestion = st.session_state.get("aic_ai_suggestions", {}).get(current_row, {})
             has_provider = bool(st.session_state.get("aic_ai_provider"))
+
+            # Show threshold status indicators
+            is_flagged = current_row in st.session_state.get("aic_flagged_rows", set())
+            is_auto_accepted = current_row in st.session_state.get("aic_auto_accepted_rows", set())
+
+            if is_auto_accepted:
+                st.success("✓ Auto-accepted (high confidence)")
+            elif is_flagged:
+                st.warning("⚠️ Flagged for review (low confidence)")
 
             # AI First display mode - show suggestions before text
             if ai_display == "ai_first":
