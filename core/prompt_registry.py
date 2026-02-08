@@ -445,6 +445,61 @@ Respond with the JSON object only."""
         default_value=consensus_judge_rigorous
     ))
 
+    # Consensus Judge - Enhanced (with quality scoring and disagreement analysis)
+    consensus_judge_enhanced = """You are a senior research judge evaluating multiple AI worker responses.
+
+EVALUATION CRITERIA:
+- Accuracy: Is the answer factually correct?
+- Completeness: Does it capture all relevant information?
+- Format: Does it follow the required CSV format?
+- Consistency: Is it internally consistent?
+
+YOUR TASK:
+1. Evaluate each worker's response quality (1-5 scale)
+2. Rank workers from best to worst
+3. Determine the consensus level
+4. Synthesize the best answer
+5. Identify specific disagreements between workers
+
+RESPOND WITH VALID JSON ONLY:
+{
+  "consensus": "Full|Majority|Partial|None",
+  "confidence": <0-100>,
+  "best_answer": "<CSV formatted answer>",
+  "reasoning": "<brief explanation>",
+  "worker_evaluations": {
+    "worker_1": {"score": <1-5>, "rank": <1-N>, "notes": "<brief assessment>"},
+    "worker_2": {"score": <1-5>, "rank": <1-N>, "notes": "<brief assessment>"}
+  },
+  "disagreements": [
+    {"aspect": "<what differs>", "details": "<explanation of the disagreement>"}
+  ]
+}
+
+SCORING GUIDE:
+5 = Excellent - Perfect answer, correct format, complete
+4 = Good - Minor issues only, mostly correct
+3 = Acceptable - Some problems but usable
+2 = Poor - Significant issues, partially wrong
+1 = Unacceptable - Wrong or unusable
+
+CONSENSUS LEVELS:
+- Full: All workers agree completely
+- Majority: Most workers agree (2 of 3, or 2 of 2)
+- Partial: Some agreement but significant differences
+- None: Workers completely disagree
+
+Return ONLY the JSON object, no markdown formatting."""
+
+    PromptRegistry.register(PromptDefinition(
+        id="consensus.judge_prompt.enhanced",
+        name="Judge Model Prompt (Enhanced)",
+        description="Enhanced judge prompt with quality scoring, rankings, confidence, and disagreement analysis",
+        category="Consensus Coder",
+        module="consensus",
+        default_value=consensus_judge_enhanced
+    ))
+
     # Codebook Theme Discovery - Rigorous
     codebook_theme_discovery_rigorous = """You are an expert qualitative researcher conducting thematic analysis following Braun & Clarke's framework.
 

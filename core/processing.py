@@ -944,6 +944,8 @@ class ConsensusConfig:
     save_path: Optional[str]
     realtime_progress: bool
     include_reasoning: bool
+    enable_quality_scoring: bool = False
+    enable_disagreement_analysis: bool = False
 
 
 class ConsensusProcessor:
@@ -1060,7 +1062,24 @@ Data: {row_data}
 --- INSTRUCTIONS ---
 Analyze the worker proposals above."""
 
-                json_instruction = """
+                # Build JSON instruction based on enabled features
+                use_enhanced = self.config.enable_quality_scoring or self.config.enable_disagreement_analysis
+                if use_enhanced:
+                    json_instruction = """
+CRITICAL: Return a VALID JSON object only. No markdown.
+Required keys:
+- "consensus": "Full|Majority|Partial|None"
+- "confidence": 0-100 (your confidence in the decision)
+- "best_answer": CSV format only
+- "reasoning": brief explanation"""
+                    if self.config.enable_quality_scoring:
+                        json_instruction += """
+- "worker_evaluations": {"worker_1": {"score": 1-5, "rank": 1-N, "notes": "brief"}, ...}"""
+                    if self.config.enable_disagreement_analysis:
+                        json_instruction += """
+- "disagreements": [{"aspect": "what differs", "details": "explanation"}, ...]"""
+                else:
+                    json_instruction = """
 CRITICAL: Return a VALID JSON object only. No markdown.
 Keys: "consensus" (Yes/No/Partial), "best_answer" (CSV format only), "reasoning" (brief)."""
 
@@ -1107,15 +1126,62 @@ Keys: "consensus" (Yes/No/Partial), "best_answer" (CSV format only), "reasoning"
                         results["judge_consensus"] = parsed.get("consensus", "Partial")
                         results["judge_best_answer"] = parsed.get("best_answer", judge_output[:500])
                         results["judge_reasoning"] = parsed.get("reasoning", "N/A")
+
+                        # Extract enhanced fields when enabled
+                        if use_enhanced:
+                            results["judge_confidence"] = parsed.get("confidence", 50)
+
+                        if self.config.enable_quality_scoring:
+                            worker_evals = parsed.get("worker_evaluations", {})
+                            for w_name in worker_clients.keys():
+                                eval_data = worker_evals.get(w_name, {})
+                                results[f"{w_name}_score"] = eval_data.get("score", 3)
+                                results[f"{w_name}_rank"] = eval_data.get("rank", 0)
+
+                        if self.config.enable_disagreement_analysis:
+                            disagreements = parsed.get("disagreements", [])
+                            if disagreements:
+                                # Create summary of disagreements
+                                summary_parts = []
+                                for d in disagreements[:3]:  # Limit to first 3
+                                    aspect = d.get("aspect", "unknown")
+                                    summary_parts.append(aspect)
+                                results["disagreement_summary"] = "; ".join(summary_parts)
+                                results["disagreements_raw"] = json.dumps(disagreements)
+                            else:
+                                results["disagreement_summary"] = ""
+                                results["disagreements_raw"] = "[]"
                     else:
                         results["judge_consensus"] = "Partial"
                         results["judge_best_answer"] = judge_output[:500] if len(judge_output) > 500 else judge_output
                         results["judge_reasoning"] = "Could not parse structured response"
 
+                        # Set defaults for enhanced fields
+                        if use_enhanced:
+                            results["judge_confidence"] = 50
+                        if self.config.enable_quality_scoring:
+                            for w_name in worker_clients.keys():
+                                results[f"{w_name}_score"] = 3
+                                results[f"{w_name}_rank"] = 0
+                        if self.config.enable_disagreement_analysis:
+                            results["disagreement_summary"] = ""
+                            results["disagreements_raw"] = "[]"
+
                 except Exception as e:
                     results["judge_consensus"] = "Error"
                     results["judge_best_answer"] = f"Judge Error: {e}"
                     results["judge_reasoning"] = str(e)
+
+                    # Set defaults for enhanced fields on error
+                    if use_enhanced:
+                        results["judge_confidence"] = 0
+                    if self.config.enable_quality_scoring:
+                        for w_name in worker_clients.keys():
+                            results[f"{w_name}_score"] = 0
+                            results[f"{w_name}_rank"] = 0
+                    if self.config.enable_disagreement_analysis:
+                        results["disagreement_summary"] = "Error"
+                        results["disagreements_raw"] = "[]"
 
                 results["judge_latency"] = round(time.time() - start_judge, 3)
 

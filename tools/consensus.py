@@ -219,6 +219,24 @@ class ConsensusTool(BaseTool):
 
         include_reasoning = st.checkbox("Include Judge Reasoning", value=True, key="consensus_reasoning")
 
+        # Enhanced judge features
+        st.markdown("**Enhanced Judge Features**")
+        col_opt1, col_opt2 = st.columns(2)
+        with col_opt1:
+            enable_quality_scoring = st.checkbox(
+                "Enable Quality Scoring",
+                value=False,
+                key="consensus_quality_scoring",
+                help="Judge rates each worker's output (1-5 stars) and ranks them"
+            )
+        with col_opt2:
+            enable_disagreement_analysis = st.checkbox(
+                "Enable Disagreement Analysis",
+                value=False,
+                key="consensus_disagreement",
+                help="Judge provides detailed explanation of where/why workers differ"
+            )
+
         if not worker_prompt or not worker_prompt.strip():
             return ToolConfig(is_valid=False, error_message="Please enter worker instructions",
                             config_data={"df": df, "data_source": data_source, "selected_cols": selected_cols})
@@ -236,6 +254,8 @@ class ConsensusTool(BaseTool):
             "worker_prompt": worker_prompt,
             "judge_prompt": judge_prompt,
             "include_reasoning": include_reasoning,
+            "enable_quality_scoring": enable_quality_scoring,
+            "enable_disagreement_analysis": enable_disagreement_analysis,
             "max_concurrency": st.session_state.get("max_concurrency", 5),
             "auto_retry": st.session_state.get("auto_retry", True),
             "max_retries": st.session_state.get("max_retries", 3),
@@ -307,6 +327,8 @@ class ConsensusTool(BaseTool):
             save_path=config["save_path"],
             realtime_progress=config.get("realtime_progress", True) if not is_test else True,
             include_reasoning=config["include_reasoning"],
+            enable_quality_scoring=config.get("enable_quality_scoring", False),
+            enable_disagreement_analysis=config.get("enable_disagreement_analysis", False),
         )
 
         processor = ConsensusProcessor(consensus_config, run.run_id, session_id)
@@ -346,6 +368,22 @@ class ConsensusTool(BaseTool):
                 target_df["judge_reasoning"] = [r.get("judge_reasoning", "N/A") for r in result.results]
             target_df["judge_latency_s"] = [r.get("judge_latency", 0) for r in result.results]
 
+            # Enhanced judge features columns
+            enable_quality = config.get("enable_quality_scoring", False)
+            enable_disagreement = config.get("enable_disagreement_analysis", False)
+
+            if enable_quality or enable_disagreement:
+                target_df["judge_confidence"] = [r.get("judge_confidence", 50) for r in result.results]
+
+            if enable_quality:
+                for i in range(num_workers):
+                    w_key = f"worker_{i+1}"
+                    target_df[f"{w_key}_score"] = [r.get(f"{w_key}_score", 3) for r in result.results]
+                    target_df[f"{w_key}_rank"] = [r.get(f"{w_key}_rank", 0) for r in result.results]
+
+            if enable_disagreement:
+                target_df["disagreement_summary"] = [r.get("disagreement_summary", "") for r in result.results]
+
             return ToolResult(
                 success=True,
                 data=target_df,
@@ -356,6 +394,11 @@ class ConsensusTool(BaseTool):
                     "avg_latency": f"{result.avg_latency:.2f}s",
                     "duration": f"{result.total_duration:.1f}s",
                     "num_workers": num_workers,
+                    "enable_quality_scoring": enable_quality,
+                    "enable_disagreement_analysis": enable_disagreement,
+                },
+                metadata={
+                    "raw_results": result.results,  # Store raw results for analytics
                 }
             )
 
@@ -389,6 +432,26 @@ class ConsensusTool(BaseTool):
         st.divider()
         st.subheader("Inter-Rater Agreement Analysis")
         _render_analytics(result.data, stats.get("num_workers", 2))
+
+        # Enhanced Judge Analytics (Quality Scoring & Disagreement Analysis)
+        enable_quality = stats.get("enable_quality_scoring", False)
+        enable_disagreement = stats.get("enable_disagreement_analysis", False)
+
+        if enable_quality or enable_disagreement:
+            st.divider()
+            st.subheader("Enhanced Judge Analytics")
+
+            # Get raw results from metadata for detailed analytics
+            raw_results = result.metadata.get("raw_results", []) if result.metadata else []
+
+            if raw_results:
+                from core.comparison_analytics import calculate_quality_metrics, render_quality_metrics
+                quality_metrics = calculate_quality_metrics(raw_results)
+                render_quality_metrics(quality_metrics, stats.get("num_workers", 2))
+            else:
+                # Fallback: render from DataFrame columns
+                _render_quality_analytics_from_df(result.data, stats.get("num_workers", 2),
+                                                  enable_quality, enable_disagreement)
 
         # Result inspector
         st.divider()
@@ -544,3 +607,129 @@ def _render_analytics(df: pd.DataFrame, num_workers: int):
         jc1.metric("Avg Jaccard Index", f"{np.mean(jaccard_scores):.3f}", help="0=no overlap, 1=perfect")
         jc2.metric("Min", f"{min(jaccard_scores):.3f}")
         jc3.metric("Max", f"{max(jaccard_scores):.3f}")
+
+
+def _render_quality_analytics_from_df(df: pd.DataFrame, num_workers: int,
+                                       enable_quality: bool, enable_disagreement: bool):
+    """Render quality analytics directly from DataFrame columns (fallback)."""
+
+    # Confidence statistics
+    if "judge_confidence" in df.columns:
+        st.markdown("### Judge Confidence Statistics")
+        confidence = df["judge_confidence"].dropna()
+        if len(confidence) > 0:
+            cols = st.columns(5)
+            cols[0].metric("Mean", f"{confidence.mean():.1f}%")
+            cols[1].metric("Median", f"{confidence.median():.1f}%")
+            cols[2].metric("Min", f"{confidence.min():.1f}%")
+            cols[3].metric("Max", f"{confidence.max():.1f}%")
+            cols[4].metric("Std Dev", f"{confidence.std():.1f}")
+
+    # Quality scores
+    if enable_quality:
+        score_cols = [c for c in df.columns if c.endswith("_score") and c.startswith("worker_")]
+        if score_cols:
+            st.markdown("### Model Quality Leaderboard")
+
+            avg_scores = {}
+            for col in score_cols:
+                worker_name = col.replace("_score", "")
+                scores = pd.to_numeric(df[col], errors='coerce').dropna()
+                if len(scores) > 0:
+                    avg_scores[worker_name] = scores.mean()
+
+            if avg_scores:
+                try:
+                    import plotly.graph_objects as go
+
+                    sorted_workers = sorted(avg_scores.items(), key=lambda x: x[1], reverse=True)
+                    worker_names = [w[0].replace("_", " ").title() for w in sorted_workers]
+                    scores = [w[1] for w in sorted_workers]
+
+                    fig = go.Figure(data=[go.Bar(
+                        x=worker_names,
+                        y=scores,
+                        marker_color=['#4CAF50', '#2196F3', '#FF9800'][:len(scores)],
+                        text=[f"{s:.2f}" for s in scores],
+                        textposition='auto',
+                    )])
+                    fig.update_layout(
+                        xaxis_title="Worker",
+                        yaxis_title="Average Score (1-5)",
+                        yaxis_range=[0, 5.5],
+                        height=300
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                except ImportError:
+                    for name, score in avg_scores.items():
+                        st.metric(name.replace("_", " ").title(), f"{score:.2f} / 5")
+
+        # Rank distribution
+        rank_cols = [c for c in df.columns if c.endswith("_rank") and c.startswith("worker_")]
+        if rank_cols:
+            st.markdown("### Rank Distribution")
+
+            rank_data = {}
+            for col in rank_cols:
+                worker_name = col.replace("_rank", "")
+                ranks = pd.to_numeric(df[col], errors='coerce').dropna()
+                rank_counts = ranks[ranks > 0].value_counts().to_dict()
+                rank_data[worker_name] = {int(k): int(v) for k, v in rank_counts.items()}
+
+            if rank_data:
+                try:
+                    import plotly.graph_objects as go
+
+                    workers = list(rank_data.keys())
+                    max_rank = num_workers
+                    colors = ['#4CAF50', '#FFC107', '#F44336', '#9E9E9E']
+
+                    fig = go.Figure()
+                    for rank in range(1, max_rank + 1):
+                        counts = [rank_data.get(w, {}).get(rank, 0) for w in workers]
+                        rank_label = f"{rank}{'st' if rank == 1 else 'nd' if rank == 2 else 'rd' if rank == 3 else 'th'}"
+                        fig.add_trace(go.Bar(
+                            name=rank_label,
+                            x=[w.replace("_", " ").title() for w in workers],
+                            y=counts,
+                            marker_color=colors[rank - 1] if rank <= len(colors) else colors[-1],
+                        ))
+
+                    fig.update_layout(
+                        barmode='group',
+                        xaxis_title="Worker",
+                        yaxis_title="Count",
+                        height=300,
+                        legend_title="Rank"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                except ImportError:
+                    for worker, ranks in rank_data.items():
+                        st.write(f"**{worker.replace('_', ' ').title()}**: {ranks}")
+
+    # Disagreement summary
+    if enable_disagreement and "disagreement_summary" in df.columns:
+        st.markdown("### Disagreement Hotspots")
+        summaries = df["disagreement_summary"].dropna()
+        non_empty = summaries[summaries.str.len() > 0]
+
+        if len(non_empty) > 0:
+            from collections import Counter
+            all_aspects = []
+            for s in non_empty:
+                aspects = [a.strip() for a in str(s).split(";") if a.strip()]
+                all_aspects.extend(aspects)
+
+            if all_aspects:
+                aspect_counts = Counter(all_aspects)
+                total = len(df)
+                hotspot_data = []
+                for aspect, count in aspect_counts.most_common(10):
+                    hotspot_data.append({
+                        "Aspect": aspect,
+                        "Occurrences": count,
+                        "Frequency": f"{count / total * 100:.1f}%"
+                    })
+                st.dataframe(pd.DataFrame(hotspot_data), use_container_width=True)
+        else:
+            st.info("No disagreements detected in this run.")
