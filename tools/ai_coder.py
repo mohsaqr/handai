@@ -1706,8 +1706,7 @@ RULES:
             if st.button("Analytics", key="aic_show_analytics", use_container_width=True):
                 st.session_state["aic_show_analytics_panel"] = not st.session_state.get("aic_show_analytics_panel", False)
         with session_col5:
-            if st.button("Immersive", key="aic_open_immersive", type="primary", use_container_width=True):
-                st.session_state["aic_immersive_trigger"] = True
+            pass  # Immersive mode disabled
 
         # Save dialog
         if st.session_state.get("aic_show_save_dialog"):

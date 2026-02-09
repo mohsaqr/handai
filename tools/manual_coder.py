@@ -839,9 +839,7 @@ class ManualCoderTool(BaseTool):
                 st.session_state["mc_show_sessions"] = not st.session_state.get("mc_show_sessions", False)
                 st.session_state["mc_show_save_dialog"] = False
         with session_col4:
-            if st.button("Immersive", key="mc_open_immersive", type="primary", use_container_width=True):
-                st.session_state["mc_immersive_trigger"] = True
-                # No st.rerun() - button click triggers rerun automatically
+            pass  # Immersive mode disabled
 
         # Save dialog with session naming
         if st.session_state.get("mc_show_save_dialog"):

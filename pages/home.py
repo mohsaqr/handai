@@ -142,7 +142,6 @@ def render():
          "*Best for: grounded theory, codebook development, thematic framework creation*"),
         ("manual-coder", ":material/touch_app:", "Manual Coder",
          "Code qualitative data manually with clickable codes and keyboard shortcuts.",
-         "- Fast, distraction-free immersive coding mode\n"
          "- Clickable code buttons with customizable highlights\n"
          "- Session save/load with auto-restore on refresh\n"
          "- Export coded data with one-hot encoding or text format\n"
