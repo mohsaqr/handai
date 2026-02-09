@@ -10,6 +10,7 @@ from .generate import GenerateTool
 from .process_documents import ProcessDocumentsTool
 from .manual_coder import ManualCoderTool
 from .ai_coder import AICoderTool
+from .model_comparison import ModelComparisonTool
 
 __all__ = [
     "BaseTool",
@@ -19,4 +20,5 @@ __all__ = [
     "ProcessDocumentsTool",
     "ManualCoderTool",
     "AICoderTool",
+    "ModelComparisonTool",
 ]
