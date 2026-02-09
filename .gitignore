@@ -30,12 +30,22 @@ Thumbs.db
 
 # Manual coder autosave
 .manual_coder_saves/
+.manual_coder_sessions/
+
+# Streamlit
+.streamlit/
+
+# Hypothesis (property-based testing)
+.hypothesis/
+
+# GitHub workflows (if local only)
+.github/
+
+# Tutorial files
+Short_tna_tutorial*
+
+# Local experiments
+loza/
 
 # Electron desktop
-desktop/node_modules/
-desktop/dist/
-desktop/python/**
-!desktop/python/README.md
-!desktop/python/**/.keep
-desktop/python_sources/**
-!desktop/python_sources/README.md
+desktop/
