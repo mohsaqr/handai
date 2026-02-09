@@ -1244,40 +1244,6 @@ class ManualCoderTool(BaseTool):
         # Render the fragment
         coding_interface()
 
-        # Keyboard shortcuts for navigation (n=next, p=prev)
-        import streamlit.components.v1 as components
-        components.html("""
-            <script>
-            // Keyboard navigation for Manual Coder
-            document.addEventListener('keydown', function(e) {
-                // Don't trigger if user is typing in an input field
-                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-                    return;
-                }
-
-                if (e.key === 'n' || e.key === 'N') {
-                    // Find and click Next button
-                    const buttons = window.parent.document.querySelectorAll('button');
-                    for (let btn of buttons) {
-                        if (btn.textContent.includes('Next') && !btn.disabled) {
-                            btn.click();
-                            break;
-                        }
-                    }
-                } else if (e.key === 'p' || e.key === 'P') {
-                    // Find and click Prev button
-                    const buttons = window.parent.document.querySelectorAll('button');
-                    for (let btn of buttons) {
-                        if (btn.textContent.includes('Prev') && !btn.disabled) {
-                            btn.click();
-                            break;
-                        }
-                    }
-                }
-            });
-            </script>
-        """, height=0)
-
         # Export section (outside fragment)
         st.divider()
         st.subheader("Export Results")
