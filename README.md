@@ -13,8 +13,8 @@ AI-Powered Data Transformation & Qualitative Analysis Suite
 **Qualitative Analysis**
 - **Qualitative Coder** - AI-powered coding of interviews and surveys
 - **Consensus Coder** - Multi-model consensus with inter-rater reliability analytics
-- **Manual Coder** - Human coding interface with session management
-- **AI Coder** - AI-assisted coding with human review
+- **Manual Coder** - Human coding interface with multi-column selection and session management
+- **AI Coder** - AI-assisted coding with multi-column selection and human review
 - **Model Comparison** - Compare outputs across multiple LLMs
 - **Codebook Generator** - Auto-generate codebooks from data
 

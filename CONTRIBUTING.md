@@ -166,6 +166,7 @@ Use prefixed keys to avoid conflicts:
 ```python
 # Good - prefixed with tool abbreviation
 st.session_state["mc_current_row"]  # Manual Coder
+st.session_state["aic_text_cols"]   # AI Coder
 st.session_state["tf_data"]         # Transform
 
 # Bad - generic names

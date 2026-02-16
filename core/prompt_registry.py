@@ -204,6 +204,53 @@ def register_all_prompts():
     from tools.consensus import DEFAULT_WORKER_PROMPT, DEFAULT_JUDGE_PROMPT
     from tools.codebook_generator import SAMPLE_QUALITATIVE_DATA  # We'll extract prompts inline
     from core.document_templates import MASTER_SYSTEM_PROMPT
+    from tools.ai_coder import AI_CODER_SYSTEM_PROMPT
+
+    # Transform Data
+    transform_default_prompt = """Analyze each row and perform the requested transformation.
+
+RULES:
+1. Return ONLY the transformed output for each row
+2. Be consistent in format and judgment across all rows
+3. Follow the user's instructions precisely
+4. If data is ambiguous, make your best reasonable inference
+5. Output ONLY the requested format - no explanations or additional text"""
+
+    PromptRegistry.register(PromptDefinition(
+        id="transform.default_prompt",
+        name="Default Transform Prompt",
+        description="Default system prompt for row-by-row data transformation tasks",
+        category="Transform Data",
+        module="transform",
+        default_value=transform_default_prompt
+    ))
+
+    # AI Coder
+    PromptRegistry.register(PromptDefinition(
+        id="ai_coder.default_prompt",
+        name="Default AI Coder Prompt",
+        description="Default system prompt for AI-assisted qualitative coding suggestions",
+        category="AI Coder",
+        module="ai_coder",
+        default_value=AI_CODER_SYSTEM_PROMPT
+    ))
+
+    # Model Comparison
+    model_comparison_default_prompt = """Analyze the provided data and classify it.
+
+Respond with ONLY the classification result, no explanations.
+Examples of valid responses: "positive", "negative", "neutral"
+
+Be consistent and precise in your classification."""
+
+    PromptRegistry.register(PromptDefinition(
+        id="model_comparison.default_prompt",
+        name="Default Comparison Prompt",
+        description="Default system prompt for model comparison tasks",
+        category="Model Comparison",
+        module="model_comparison",
+        default_value=model_comparison_default_prompt
+    ))
 
     # Qualitative Coder
     PromptRegistry.register(PromptDefinition(

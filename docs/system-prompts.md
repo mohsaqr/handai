@@ -29,6 +29,24 @@ Each tool has two prompt variants:
 - **Standard** - Concise, minimal prompts for general use
 - **Rigorous** - Detailed, methodologically-grounded prompts with explicit frameworks and quality standards
 
+### Transform Data
+
+| Prompt ID | Name | Description |
+|-----------|------|-------------|
+| `transform.default_prompt` | Default Transform Prompt | Default system prompt for row-by-row data transformation tasks |
+
+### AI Coder
+
+| Prompt ID | Name | Description |
+|-----------|------|-------------|
+| `ai_coder.default_prompt` | Default AI Coder Prompt | Default system prompt for AI-assisted qualitative coding suggestions |
+
+### Model Comparison
+
+| Prompt ID | Name | Description |
+|-----------|------|-------------|
+| `model_comparison.default_prompt` | Default Comparison Prompt | Default system prompt for model comparison tasks |
+
 ### Qualitative Coder
 
 | Prompt ID | Name | Description |

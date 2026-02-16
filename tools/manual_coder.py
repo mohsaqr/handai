@@ -83,6 +83,28 @@ class ManualCoderTool(BaseTool):
         "#E5DBFF",  # Soft violet
     ]
 
+    def _get_row_text(self, df, text_cols, row_idx):
+        """Get combined text from selected columns for a row"""
+        if not text_cols:
+            return ""
+        if len(text_cols) == 1:
+            return str(df.iloc[row_idx][text_cols[0]])
+        parts = []
+        for col in text_cols:
+            parts.append(f"[{col}]: {df.iloc[row_idx][col]}")
+        return "\n".join(parts)
+
+    def _get_row_text_html(self, df, text_cols, row_idx):
+        """Get combined text from selected columns for a row, formatted as HTML"""
+        if not text_cols:
+            return ""
+        if len(text_cols) == 1:
+            return str(df.iloc[row_idx][text_cols[0]])
+        parts = []
+        for col in text_cols:
+            parts.append(f"<b>{col}:</b> {df.iloc[row_idx][col]}")
+        return "<br/>".join(parts)
+
     def _generate_session_name(self) -> str:
         """Generate auto session name based on timestamp"""
         now = datetime.now()
@@ -106,7 +128,7 @@ class ManualCoderTool(BaseTool):
                 "current_row": st.session_state.get("mc_current_row", 0),
                 "total_rows": len(st.session_state.get("mc_df", [])) if st.session_state.get("mc_df") is not None else 0,
                 "codes": st.session_state.get("mc_codes", []),
-                "text_col": st.session_state.get("mc_text_col"),
+                "text_cols": st.session_state.get("mc_text_cols", []),
                 "highlights": st.session_state.get("mc_highlights", {}),
                 "coded_count": self._count_coded_rows(),
                 "sample_dataset": st.session_state.get("mc_sample_choice") if st.session_state.get("mc_use_sample") else None,
@@ -139,7 +161,12 @@ class ManualCoderTool(BaseTool):
                 st.session_state["mc_coding_data"] = coding_data
                 st.session_state["mc_current_row"] = save_data.get("current_row", 0)
                 st.session_state["mc_codes"] = save_data.get("codes", [])
-                st.session_state["mc_text_col"] = save_data.get("text_col")
+                # Backward compat: handle old text_col (string) or new text_cols (list)
+                text_cols = save_data.get("text_cols")
+                if text_cols is None:
+                    old_col = save_data.get("text_col")
+                    text_cols = [old_col] if old_col else []
+                st.session_state["mc_text_cols"] = text_cols
                 st.session_state["mc_highlights"] = save_data.get("highlights", {})
                 st.session_state["mc_current_session"] = name
 
@@ -225,8 +252,8 @@ class ManualCoderTool(BaseTool):
             st.session_state["mc_coding_data"] = {}
         if "mc_current_row" not in st.session_state:
             st.session_state["mc_current_row"] = 0
-        if "mc_text_col" not in st.session_state:
-            st.session_state["mc_text_col"] = None
+        if "mc_text_cols" not in st.session_state:
+            st.session_state["mc_text_cols"] = []
         if "mc_auto_advance" not in st.session_state:
             st.session_state["mc_auto_advance"] = False
         if "mc_highlights" not in st.session_state:
@@ -441,7 +468,7 @@ class ManualCoderTool(BaseTool):
 
                     # Auto-select text column from dataset info
                     if "text_column" in info:
-                        st.session_state["mc_text_col"] = info["text_column"]
+                        st.session_state["mc_text_cols"] = [info["text_column"]]
 
                     # Load sample codes (only if not restored)
                     if selected in self.SAMPLE_CODES:
@@ -583,34 +610,37 @@ class ManualCoderTool(BaseTool):
 
         st.caption(f"{len(codes)} code(s) defined")
 
-        # Step 3: Select Text Column (collapsible once set)
-        text_columns = df.columns.tolist()
-        default_col = st.session_state.get("mc_text_col")
-        if default_col not in text_columns:
-            default_col = text_columns[0] if text_columns else None
+        # Step 3: Select Text Columns (collapsible once set)
+        all_columns = df.columns.tolist()
+        default_cols = st.session_state.get("mc_text_cols", [])
+        # Filter out any columns that no longer exist in the data
+        default_cols = [c for c in default_cols if c in all_columns]
+        if not default_cols:
+            default_cols = [all_columns[0]] if all_columns else []
 
-        # Auto-set if only one text-like column or already set
-        if default_col and default_col in text_columns:
-            text_col = default_col
-            with st.expander(f"Text Column: **{text_col}** (click to change)"):
-                text_col = st.selectbox(
-                    "Column to display for coding",
-                    options=text_columns,
-                    index=text_columns.index(default_col),
-                    key="mc_text_col_select"
+        if default_cols:
+            label = ", ".join(default_cols)
+            with st.expander(f"Text Columns: **{label}** (click to change)"):
+                text_cols = st.multiselect(
+                    "Columns to display for coding",
+                    options=all_columns,
+                    default=default_cols,
+                    key="mc_text_cols_select"
                 )
         else:
-            st.header("3. Select Text Column")
-            text_col = st.selectbox(
-                "Column to display for coding",
-                options=text_columns,
-                index=0,
-                key="mc_text_col_select"
+            st.header("3. Select Text Columns")
+            text_cols = st.multiselect(
+                "Columns to display for coding",
+                options=all_columns,
+                default=default_cols,
+                key="mc_text_cols_select"
             )
-        st.session_state["mc_text_col"] = text_col
+        if not text_cols:
+            text_cols = default_cols
+        st.session_state["mc_text_cols"] = text_cols
 
-        # Preview data (collapsed if column already selected)
-        if default_col and default_col in text_columns:
+        # Preview data (collapsed if columns already selected)
+        if default_cols:
             with st.expander("Preview data"):
                 st.dataframe(df.head(), height=150)
         else:
@@ -621,11 +651,11 @@ class ManualCoderTool(BaseTool):
             config_data={
                 "df": df,
                 "codes": codes,
-                "text_col": text_col
+                "text_cols": text_cols
             }
         )
 
-    def _show_immersive_dialog(self, df, codes, text_col, total_rows):
+    def _show_immersive_dialog(self, df, codes, text_cols, total_rows):
         """Show immersive coding as a dialog"""
         @st.dialog("Immersive Coding", width="large")
         def immersive_dialog():
@@ -667,7 +697,7 @@ class ManualCoderTool(BaseTool):
             text_html = []
             for row_idx in range(start_row, end_row):
                 is_current = row_idx == current_row
-                text_content = str(df.iloc[row_idx][text_col])
+                text_content = self._get_row_text_html(df, text_cols, row_idx)
                 highlighted_text = self._highlight_text(text_content)
                 row_codes = self._get_applied_codes(row_idx)
 
@@ -805,7 +835,7 @@ class ManualCoderTool(BaseTool):
 
         df = st.session_state["mc_df"]
         codes = st.session_state["mc_codes"]
-        text_col = st.session_state["mc_text_col"]
+        text_cols = st.session_state.get("mc_text_cols", [])
         total_rows = len(df)
 
         # Handle immersive dialog button actions (must be before dialog check)
@@ -923,7 +953,7 @@ class ManualCoderTool(BaseTool):
         if trigger or active:
             st.session_state["mc_immersive_trigger"] = False  # Consume trigger
             st.session_state["mc_immersive_active"] = True    # Mark as active
-            self._show_immersive_dialog(df, codes, text_col, total_rows)
+            self._show_immersive_dialog(df, codes, text_cols, total_rows)
 
         # Word highlighter configuration (outside fragment)
         with st.expander("Word Highlighter - Define words to highlight for each code"):
@@ -1009,7 +1039,7 @@ class ManualCoderTool(BaseTool):
                 text_container_html = []
                 for row_idx in range(start_row, end_row):
                     is_current = row_idx == current_row
-                    text_content = str(df.iloc[row_idx][text_col])
+                    text_content = self._get_row_text_html(df, text_cols, row_idx)
                     highlighted_text = self._highlight_text(text_content)
 
                     # Show applied codes for this row

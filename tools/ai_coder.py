@@ -162,7 +162,7 @@ class AICoderTool(BaseTool):
                     "current_row": st.session_state.get("aic_current_row", 0),
                     "total_rows": len(st.session_state.get("aic_df", [])) if st.session_state.get("aic_df") is not None else 0,
                     "codes": st.session_state.get("aic_codes", []),
-                    "text_col": st.session_state.get("aic_text_col"),
+                    "text_cols": st.session_state.get("aic_text_cols", []),
                     "highlights": st.session_state.get("aic_highlights", {}),
                     "coded_count": self._count_coded_rows(),
                     "sample_dataset": st.session_state.get("aic_sample_choice") if st.session_state.get("aic_use_sample") else None,
@@ -219,7 +219,12 @@ class AICoderTool(BaseTool):
                 st.session_state["aic_coding_data"] = coding_data
                 st.session_state["aic_current_row"] = data.get("current_row", 0)
                 st.session_state["aic_codes"] = data.get("codes", [])
-                st.session_state["aic_text_col"] = data.get("text_col")
+                # Backward compat: handle old text_col (string) or new text_cols (list)
+                text_cols = data.get("text_cols")
+                if text_cols is None:
+                    old_col = data.get("text_col")
+                    text_cols = [old_col] if old_col else []
+                st.session_state["aic_text_cols"] = text_cols
                 st.session_state["aic_highlights"] = data.get("highlights", {})
                 st.session_state["aic_current_session"] = name
 
@@ -330,8 +335,8 @@ class AICoderTool(BaseTool):
             st.session_state["aic_coding_data"] = {}
         if "aic_current_row" not in st.session_state:
             st.session_state["aic_current_row"] = 0
-        if "aic_text_col" not in st.session_state:
-            st.session_state["aic_text_col"] = None
+        if "aic_text_cols" not in st.session_state:
+            st.session_state["aic_text_cols"] = []
         # Use global coding settings as defaults
         if "aic_auto_advance" not in st.session_state:
             st.session_state["aic_auto_advance"] = st.session_state.get("coding_auto_advance", False)
@@ -543,9 +548,9 @@ class AICoderTool(BaseTool):
 
         # Build context text (includes surrounding rows if configured)
         df = st.session_state.get("aic_df")
-        text_col = st.session_state.get("aic_text_col")
-        if df is not None and text_col:
-            context_text = self._build_context_text(df, text_col, row_idx)
+        text_cols = st.session_state.get("aic_text_cols", [])
+        if df is not None and text_cols:
+            context_text = self._build_context_text(df, text_cols, row_idx)
         else:
             context_text = text
 
@@ -649,7 +654,7 @@ class AICoderTool(BaseTool):
         except Exception as e:
             return {"codes": [], "confidence": {}, "reasoning": f"Error: {str(e)}", "error": True}
 
-    async def _process_batch(self, df: pd.DataFrame, text_col: str, progress_callback=None):
+    async def _process_batch(self, df: pd.DataFrame, text_cols: list, progress_callback=None):
         """Process all rows in batch mode"""
         import asyncio
 
@@ -673,7 +678,7 @@ class AICoderTool(BaseTool):
 
         tasks = []
         for row_idx in range(total_rows):
-            text = str(df.iloc[row_idx][text_col])
+            text = self._get_row_text(df, text_cols, row_idx)
             tasks.append(process_row(row_idx, text))
 
         st.session_state["aic_batch_debug"] = f"Created {len(tasks)} tasks"
@@ -770,12 +775,34 @@ RULES:
 
         return prompt
 
-    def _build_context_text(self, df: pd.DataFrame, text_col: str, row_idx: int) -> str:
+    def _get_row_text(self, df: pd.DataFrame, text_cols: list, row_idx: int) -> str:
+        """Get combined text from selected columns for a row"""
+        if not text_cols:
+            return ""
+        if len(text_cols) == 1:
+            return str(df.iloc[row_idx][text_cols[0]])
+        parts = []
+        for col in text_cols:
+            parts.append(f"[{col}]: {df.iloc[row_idx][col]}")
+        return "\n".join(parts)
+
+    def _get_row_text_html(self, df: pd.DataFrame, text_cols: list, row_idx: int) -> str:
+        """Get combined text from selected columns for a row, formatted as HTML"""
+        if not text_cols:
+            return ""
+        if len(text_cols) == 1:
+            return str(df.iloc[row_idx][text_cols[0]])
+        parts = []
+        for col in text_cols:
+            parts.append(f"<b>{col}:</b> {df.iloc[row_idx][col]}")
+        return "<br/>".join(parts)
+
+    def _build_context_text(self, df: pd.DataFrame, text_cols: list, row_idx: int) -> str:
         """Build text with N surrounding rows for context"""
         ai_context_rows = st.session_state.get("aic_ai_context_rows", 0)
 
         if ai_context_rows == 0:
-            return str(df.iloc[row_idx][text_col])
+            return self._get_row_text(df, text_cols, row_idx)
 
         total_rows = len(df)
         start_idx = max(0, row_idx - ai_context_rows)
@@ -783,7 +810,7 @@ RULES:
 
         context_parts = []
         for idx in range(start_idx, end_idx):
-            text = str(df.iloc[idx][text_col])
+            text = self._get_row_text(df, text_cols, idx)
             if idx == row_idx:
                 context_parts.append(f"[CURRENT ROW {idx + 1}]: {text}")
             else:
@@ -796,9 +823,9 @@ RULES:
         training_count = st.session_state.get("aic_training_examples_count", 5)
         coding_data = st.session_state.get("aic_coding_data", {})
         df = st.session_state.get("aic_df")
-        text_col = st.session_state.get("aic_text_col")
+        text_cols = st.session_state.get("aic_text_cols", [])
 
-        if df is None or not text_col or not coding_data:
+        if df is None or not text_cols or not coding_data:
             return ""
 
         # Get rows that have been coded
@@ -812,7 +839,7 @@ RULES:
         training_section = "TRAINING EXAMPLES (learn from these human-coded samples):\n"
         for row_idx, codes in examples:
             if row_idx < len(df):
-                text = str(df.iloc[row_idx][text_col])
+                text = self._get_row_text(df, text_cols, row_idx)
                 # Truncate long texts
                 if len(text) > 200:
                     text = text[:200] + "..."
@@ -956,7 +983,7 @@ RULES:
                     st.toast(f"Loaded: {info['name']} ({info['rows']} rows)")
 
                     if "text_column" in info:
-                        st.session_state["aic_text_col"] = info["text_column"]
+                        st.session_state["aic_text_cols"] = [info["text_column"]]
 
                     if selected in self.SAMPLE_CODES:
                         st.session_state["aic_codes"] = self.SAMPLE_CODES[selected]
@@ -1062,32 +1089,36 @@ RULES:
 
         st.caption(f"{len(codes)} code(s) defined")
 
-        # Step 3: Select Text Column
-        text_columns = df.columns.tolist()
-        default_col = st.session_state.get("aic_text_col")
-        if default_col not in text_columns:
-            default_col = text_columns[0] if text_columns else None
+        # Step 3: Select Text Columns
+        all_columns = df.columns.tolist()
+        default_cols = st.session_state.get("aic_text_cols", [])
+        # Filter out any columns that no longer exist in the data
+        default_cols = [c for c in default_cols if c in all_columns]
+        if not default_cols:
+            default_cols = [all_columns[0]] if all_columns else []
 
-        if default_col and default_col in text_columns:
-            text_col = default_col
-            with st.expander(f"Text Column: **{text_col}** (click to change)"):
-                text_col = st.selectbox(
-                    "Column to display for coding",
-                    options=text_columns,
-                    index=text_columns.index(default_col),
-                    key="aic_text_col_select"
+        if default_cols:
+            label = ", ".join(default_cols)
+            with st.expander(f"Text Columns: **{label}** (click to change)"):
+                text_cols = st.multiselect(
+                    "Columns to display for coding",
+                    options=all_columns,
+                    default=default_cols,
+                    key="aic_text_cols_select"
                 )
         else:
-            st.header("3. Select Text Column")
-            text_col = st.selectbox(
-                "Column to display for coding",
-                options=text_columns,
-                index=0,
-                key="aic_text_col_select"
+            st.header("3. Select Text Columns")
+            text_cols = st.multiselect(
+                "Columns to display for coding",
+                options=all_columns,
+                default=default_cols,
+                key="aic_text_cols_select"
             )
-        st.session_state["aic_text_col"] = text_col
+        if not text_cols:
+            text_cols = default_cols
+        st.session_state["aic_text_cols"] = text_cols
 
-        if default_col and default_col in text_columns:
+        if default_cols:
             with st.expander("Preview data"):
                 st.dataframe(df.head(), height=150)
         else:
@@ -1378,15 +1409,15 @@ RULES:
                                 st.error("No AI model selected! Please enter a model name above.")
                             elif df is None or df.empty:
                                 st.error("No data loaded! Please load data in step 1.")
-                            elif not text_col:
-                                st.error("No text column selected! Please select a column in step 2.")
+                            elif not text_cols:
+                                st.error("No text columns selected! Please select columns in step 3.")
                             else:
                                 st.info(f"Starting batch with provider: {provider}, model: {model}")
                                 with st.spinner(f"Processing {len(df)} rows with {provider}..."):
                                     loop = asyncio.new_event_loop()
                                     asyncio.set_event_loop(loop)
                                     try:
-                                        loop.run_until_complete(self._process_batch(df, text_col))
+                                        loop.run_until_complete(self._process_batch(df, text_cols))
                                     except Exception as e:
                                         st.error(f"Batch processing error: {str(e)}")
                                     finally:
@@ -1413,11 +1444,11 @@ RULES:
             config_data={
                 "df": df,
                 "codes": codes,
-                "text_col": text_col
+                "text_cols": text_cols
             }
         )
 
-    def _show_immersive_dialog(self, df, codes, text_col, total_rows):
+    def _show_immersive_dialog(self, df, codes, text_cols, total_rows):
         """Show immersive coding as a dialog with AI suggestions"""
         @st.dialog("AI-Assisted Coding", width="large")
         def immersive_dialog():
@@ -1495,7 +1526,7 @@ RULES:
             text_html = []
             for row_idx in range(start_row, end_row):
                 is_current = row_idx == current_row
-                text_content = str(df.iloc[row_idx][text_col])
+                text_content = self._get_row_text_html(df, text_cols, row_idx)
                 highlighted_text = self._highlight_text(text_content)
                 row_codes = self._get_applied_codes(row_idx)
 
@@ -1636,7 +1667,7 @@ RULES:
 
         df = st.session_state["aic_df"]
         codes = st.session_state["aic_codes"]
-        text_col = st.session_state["aic_text_col"]
+        text_cols = st.session_state.get("aic_text_cols", [])
         total_rows = len(df)
 
         # Handle immersive dialog button actions
@@ -1661,7 +1692,7 @@ RULES:
             current_row = st.session_state["aic_current_row"]
             should_fetch = force_fetch or (current_row not in st.session_state.get("aic_ai_suggestions", {}))
             if should_fetch:
-                text = str(df.iloc[current_row][text_col])
+                text = self._get_row_text(df, text_cols, current_row)
                 with st.spinner(f"Getting AI suggestion for row {current_row + 1}..."):
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
@@ -1785,7 +1816,7 @@ RULES:
         if trigger or active:
             st.session_state["aic_immersive_trigger"] = False
             st.session_state["aic_immersive_active"] = True
-            self._show_immersive_dialog(df, codes, text_col, total_rows)
+            self._show_immersive_dialog(df, codes, text_cols, total_rows)
 
         # Word highlighter
         with st.expander("Word Highlighter - Define words to highlight for each code"):
@@ -1925,7 +1956,7 @@ RULES:
                 text_container_html = []
                 for row_idx in range(start_row, end_row):
                     is_current = row_idx == current_row
-                    text_content = str(df.iloc[row_idx][text_col])
+                    text_content = self._get_row_text_html(df, text_cols, row_idx)
                     highlighted_text = self._highlight_text(text_content)
 
                     row_codes = self._get_applied_codes(row_idx)

@@ -119,10 +119,13 @@ See [system-prompts.md](system-prompts.md) for documentation on:
 
 | Category | Prompts | Description |
 |----------|---------|-------------|
+| Transform Data | 1 | Default transformation prompt |
+| AI Coder | 1 | Default AI coding suggestion prompt |
+| Model Comparison | 1 | Default comparison prompt |
 | Qualitative | 2 | Default + rigorous coding prompts |
-| Consensus | 4 | Worker + judge prompts (standard & rigorous) |
+| Consensus | 5 | Worker + judge prompts (standard, rigorous & enhanced) |
 | Codebook | 6 | Theme discovery, consolidation, code definition |
-| Generate | 2 | Column suggestion prompts |
+| Generate | 6 | Column suggestions + CSV generation prompts |
 | Documents | 2 | CSV output enforcement prompts |
 | Automator | 2 | Critical rules prompts |
 
