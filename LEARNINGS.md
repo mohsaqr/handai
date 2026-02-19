@@ -11,3 +11,7 @@
 - [testing]: All 488 tests pass via `pytest tests/ -x -q`. Tests are in `tests/` with unit tests under `tests/unit/`. The test suite covers coding tools, settings, automator, codebook, consensus, error classifier, LLM client, model comparison, models, and providers.
 - [project_docs]: Project markdown docs live in root (`README.md`, `CONTRIBUTING.md`, `AUTOMATOR_UX_CHANGES.md`, `OPENROUTER_INTEGRATION.md`) and `docs/` (`system-prompts.md`, `sample-data-and-prompts.md`, `CONSENSUS_ENHANCED_JUDGE.md`). When adding features, update `docs/system-prompts.md` and `docs/sample-data-and-prompts.md` for prompt-related changes.
 - [run_app]: The app runs via `.venv/bin/streamlit run app.py`. The `run.sh` script doesn't activate the venv, so running `streamlit` directly from shell fails with "command not found". Always use the venv path.
+
+### 2026-02-19
+- [coder_session_resume]: The "Load Session" button was trapped inside `render_results()`, which only renders after data is loaded AND "Start Coding" is clicked. Users couldn't resume sessions without first loading a new dataset. Fix: add "Resume Saved Session" section to `render_config()` (visible at top before data upload), save dataframe in session files for uploaded-file sessions, and set `*_coding_started = True` in `_load_session()`.
+- [db_migration]: Database path changed from local `./handai_data.db` to `~/Library/Application Support/Handai/handai_data.db`. Old sessions were stranded in the local file. Merged via direct SQLite INSERT from old to new DB.

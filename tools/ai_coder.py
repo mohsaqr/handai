@@ -152,11 +152,19 @@ class AICoderTool(BaseTool):
             if not name:
                 name = st.session_state.get("aic_current_session", self._generate_session_name())
 
+            # Save dataframe for uploaded-file sessions
+            df_data = {}
+            df = st.session_state.get("aic_df")
+            if df is not None and not st.session_state.get("aic_use_sample"):
+                df_data["dataframe"] = df.to_dict(orient="records")
+                df_data["dataframe_columns"] = df.columns.tolist()
+
             save_data = {
                 "name": name,
                 "tool": "ai_coder",
                 "version": "2.0",
                 "saved_at": datetime.now().isoformat(),
+                **df_data,
                 "data": {
                     "coding_data": {str(k): v for k, v in st.session_state.get("aic_coding_data", {}).items()},
                     "current_row": st.session_state.get("aic_current_row", 0),
@@ -264,7 +272,15 @@ class AICoderTool(BaseTool):
                     st.session_state["aic_last_sample"] = sample_dataset
                     df = pd.DataFrame(get_sample_data(sample_dataset))
                     st.session_state["aic_df"] = df
+                elif "dataframe" in save_data:
+                    # Restore dataframe from saved session (uploaded-file sessions)
+                    columns = save_data.get("dataframe_columns")
+                    df = pd.DataFrame(save_data["dataframe"], columns=columns)
+                    st.session_state["aic_df"] = df
+                    st.session_state["aic_use_sample"] = False
 
+                # Auto-start coding interface when session is loaded
+                st.session_state["aic_coding_started"] = True
                 return True
         except Exception as e:
             pass
@@ -899,6 +915,24 @@ RULES:
     def render_config(self) -> ToolConfig:
         """Render AI coder configuration UI"""
         self._init_session_state()
+
+        # Resume Session section - always visible at top
+        sessions = self._list_sessions()
+        if sessions and not st.session_state.get("aic_coding_started"):
+            with st.expander("Resume Saved Session", expanded=True):
+                for sess in sessions[:5]:
+                    sess_name = sess['name']
+                    s_col1, s_col2 = st.columns([4, 1])
+                    with s_col1:
+                        saved_time = sess.get("saved_at", "")[:16].replace("T", " ")
+                        ai_label = " (AI)" if sess.get("has_ai") else ""
+                        st.markdown(f"`{sess_name}`{ai_label} - {sess['coded_count']}/{sess['total_rows']} coded ({saved_time})")
+                    with s_col2:
+                        if st.button("Resume", key=f"aic_resume_{sess_name}", use_container_width=True, type="primary"):
+                            if self._load_session(sess_name):
+                                st.session_state["aic_session_restored"] = True
+                                st.toast(f"Resumed: {sess_name}")
+                                st.rerun()
 
         # Step 1: Load Data
         st.header("1. Load Data")

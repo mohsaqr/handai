@@ -133,6 +133,11 @@ class ManualCoderTool(BaseTool):
                 "coded_count": self._count_coded_rows(),
                 "sample_dataset": st.session_state.get("mc_sample_choice") if st.session_state.get("mc_use_sample") else None,
             }
+            # Save dataframe for uploaded-file sessions
+            df = st.session_state.get("mc_df")
+            if df is not None and not st.session_state.get("mc_use_sample"):
+                save_data["dataframe"] = df.to_dict(orient="records")
+                save_data["dataframe_columns"] = df.columns.tolist()
             # Convert int keys to strings for JSON
             save_data["coding_data"] = {str(k): v for k, v in save_data["coding_data"].items()}
 
@@ -176,10 +181,17 @@ class ManualCoderTool(BaseTool):
                     st.session_state["mc_use_sample"] = True
                     st.session_state["mc_sample_choice"] = sample_dataset
                     st.session_state["mc_last_sample"] = sample_dataset
-                    # Load the dataframe
                     df = pd.DataFrame(get_sample_data(sample_dataset))
                     st.session_state["mc_df"] = df
+                elif "dataframe" in save_data:
+                    # Restore dataframe from saved session (uploaded-file sessions)
+                    columns = save_data.get("dataframe_columns")
+                    df = pd.DataFrame(save_data["dataframe"], columns=columns)
+                    st.session_state["mc_df"] = df
+                    st.session_state["mc_use_sample"] = False
 
+                # Auto-start coding interface when session is loaded
+                st.session_state["mc_coding_started"] = True
                 return True
         except Exception as e:
             pass
@@ -376,6 +388,23 @@ class ManualCoderTool(BaseTool):
     def render_config(self) -> ToolConfig:
         """Render manual coder configuration UI"""
         self._init_session_state()
+
+        # Resume Session section - always visible at top
+        sessions = self._list_sessions()
+        if sessions and not st.session_state.get("mc_coding_started"):
+            with st.expander("Resume Saved Session", expanded=True):
+                for sess in sessions[:5]:
+                    sess_name = sess['name']
+                    s_col1, s_col2 = st.columns([4, 1])
+                    with s_col1:
+                        saved_time = sess.get("saved_at", "")[:16].replace("T", " ")
+                        st.markdown(f"`{sess_name}` - {sess['coded_count']}/{sess['total_rows']} coded ({saved_time})")
+                    with s_col2:
+                        if st.button("Resume", key=f"mc_resume_{sess_name}", use_container_width=True, type="primary"):
+                            if self._load_session(sess_name):
+                                st.session_state["mc_session_restored"] = True
+                                st.toast(f"Resumed: {sess_name}")
+                                st.rerun()
 
         # Step 1: Load Data
         st.header("1. Load Data")
