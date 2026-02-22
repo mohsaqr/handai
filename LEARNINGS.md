@@ -1,5 +1,14 @@
 # Learnings
 
+### 2026-02-22 (Tauri polish + export + Manual Coder UX)
+- [tauri_webview_download]: WKWebView (macOS system WebView used by Tauri) does not support the HTML `download` attribute on anchor tags. Blob URL + `a.click()` silently does nothing. Fix: detect Tauri via `"__TAURI_INTERNALS__" in window` (Tauri v2; v1 used `"__TAURI__"`) and invoke a Tauri command that calls `tauri_plugin_dialog::blocking_save_file()`.
+- [tauri_window_state]: `tauri-plugin-window-state` auto-restores window size/position on plugin init — no manual call needed. `AppHandleExt` only exposes `save_window_state`, not `restore_window_state`.
+- [tauri_async_blocking_dialog]: `blocking_save_file()` from tauri-plugin-dialog can be called directly inside an `async fn` Tauri command. It dispatches to the main thread internally; no `spawn_blocking` needed on macOS.
+- [tauri_db_path_production]: In Tauri production bundles, the CWD of the sidecar is unpredictable. Always pass `DATABASE_URL` explicitly via `.env("DATABASE_URL", path)` using `app.path().app_data_dir()` → `~/Library/Application Support/{bundle_id}/`.
+- [shared_export_util]: Centralising CSV build + download in `src/lib/export.ts` as an async function enables Tauri/browser branching with zero impact on call sites (use `void downloadCSV(...)`). Dynamic import of `@tauri-apps/api/core` inside the Tauri branch avoids bundling it in the browser build.
+- [tauri_detect_v2]: Use `"__TAURI_INTERNALS__" in window` to detect Tauri v2 at runtime. `"__TAURI__" in window` is Tauri v1. Both can coexist but v2 is the current standard.
+- [settings_deny_list]: Claude Code `settings.json` deny list blocks `git add/commit/push` by default. Removing those entries allows Claude to commit directly; `git merge/rebase/reset` remain blocked for safety.
+
 ### 2026-02-22 (web stability + desktop packaging)
 - [stability_db_log]: In Next.js API routes, DB log writes (Prisma) that follow a successful LLM call must be wrapped in their own try/catch. Without isolation, a DB failure bubbles to the outer catch and returns 500 to the client even though the LLM result is available — a silent data loss bug.
 - [stability_workers]: Use `Promise.allSettled` (not `Promise.all`) for parallel LLM worker arrays. Define a minimum success threshold (≥2). Individual worker failures should produce a partial result, not abort the entire analysis.
