@@ -1,5 +1,15 @@
 # Learnings
 
+### 2026-02-22 (web stability + desktop packaging)
+- [stability_db_log]: In Next.js API routes, DB log writes (Prisma) that follow a successful LLM call must be wrapped in their own try/catch. Without isolation, a DB failure bubbles to the outer catch and returns 500 to the client even though the LLM result is available — a silent data loss bug.
+- [stability_workers]: Use `Promise.allSettled` (not `Promise.all`) for parallel LLM worker arrays. Define a minimum success threshold (≥2). Individual worker failures should produce a partial result, not abort the entire analysis.
+- [stability_retry]: `withRetry` should classify non-retryable errors (401, 403, invalid_api_key, authentication) and throw immediately. Auth errors retrying 3× wastes ~3–9s and burns rate limit quota unnecessarily.
+- [validation_local]: Zod schemas for LLM routes should use `apiKey: z.string().default("")` not `.min(1)`. Local providers (Ollama, LM Studio) pass an empty string or provider-specific token; enforcing min(1) silently breaks local-only workflows.
+- [desktop_standalone]: `output: "standalone"` in `next.config.ts` produces `.next/standalone/server.js` — a self-contained Node.js server. This enables both Electron (uses built-in Node) and Tauri (sidecar) packaging without touching any app code. Has zero effect on web deployment.
+- [desktop_electron]: Electron's built-in Node.js (via `process.execPath`) can spawn the standalone Next.js server. No separate Node.js installation needed. Port 3947 avoids clashing with dev server on 3000. Pattern: `spawn(process.execPath, ['server.js'])` → poll port → `loadURL`.
+- [desktop_tauri_sidecar]: Tauri Phase A uses `tauri-plugin-shell` to spawn Node.js as a sidecar. Requires a platform-suffixed binary in `src-tauri/binaries/node-{target-triple}`. Bundle size ~85 MB (vs Electron ~160 MB). Phase B migration eliminates the sidecar by moving LLM calls to browser fetch + Prisma to tauri-plugin-sql.
+- [hydration_localstorage]: Reading localStorage in `useState` lazy init (with `typeof window !== 'undefined'` guard) causes React hydration mismatches because SSR takes the else branch and renders different HTML. Fix: always init state with safe server default, read localStorage only in `useEffect(() => {}, [])`, guard persist effects with `isMounted` flag.
+
 ### 2026-02-16
 - [prompt_registry]: System prompts are centrally managed in `core/prompt_registry.py` via `PromptRegistry` class. Each prompt has an ID, name, description, category, module, and default value. The Settings page groups them by category. New modules need explicit registration here to appear in the UI.
 - [prompt_registry]: Transform Data, AI Coder, and Model Comparison previously had no registered system prompts. Transform and Model Comparison use user-entered prompts via `st.text_area`; AI Coder builds prompts dynamically via `_build_ai_prompt()`. All three now have defaults registered.
@@ -11,6 +21,13 @@
 - [testing]: All 488 tests pass via `pytest tests/ -x -q`. Tests are in `tests/` with unit tests under `tests/unit/`. The test suite covers coding tools, settings, automator, codebook, consensus, error classifier, LLM client, model comparison, models, and providers.
 - [project_docs]: Project markdown docs live in root (`README.md`, `CONTRIBUTING.md`, `AUTOMATOR_UX_CHANGES.md`, `OPENROUTER_INTEGRATION.md`) and `docs/` (`system-prompts.md`, `sample-data-and-prompts.md`, `CONSENSUS_ENHANCED_JUDGE.md`). When adding features, update `docs/system-prompts.md` and `docs/sample-data-and-prompts.md` for prompt-related changes.
 - [run_app]: The app runs via `.venv/bin/streamlit run app.py`. The `run.sh` script doesn't activate the venv, so running `streamlit` directly from shell fails with "command not found". Always use the venv path.
+
+### 2026-02-22 (autosave)
+- [crash_recovery]: Dual-slot autosave pattern: write current to AUTOSAVE_KEY, rotate old AUTOSAVE_KEY → AUTOSAVE_PREV_KEY before overwriting. Restore checks primary then falls back to prev. Gives one level of undo against corrupt writes.
+- [beforeunload_ref]: `beforeunload` handler must read state via a `useRef` (stateRef) not closures, because it's registered once (`[]` dep array) and can't close over fresh state. A render-sync `useEffect` with no dep array keeps stateRef current after every render.
+- [recovery_ux]: Replace toast.info for autosave restore with persistent amber banner (`recovered` state). Banner shows session name, coded count, and relative time. Dismissed by user with ✗. Cleared by `doDataLoaded` when fresh data loads.
+- [pending_load_guard]: When `codedCount > 0`, intercept `handleDataLoaded` → set `pendingLoad` state → show Dialog confirmation. Cancel keeps session; "Load anyway" calls `doDataLoaded`. Protects against accidental drag-drop destroying work.
+- [autosave_indicator]: `autosaveTime` state + `timeAgo` ticker effect (15s interval) → "✓ Autosaved just now / 15s ago" in session bar. Shows only when `autosaveTime` is set (i.e. data loaded).
 
 ### 2026-02-22
 - [RunMode pattern]: Replaced boolean `testMode`/`isTestRun` with `RunMode = "preview" | "test" | "full"` across all batch tools. Preview = 3 rows (or 1 doc), Test = 10 rows, Full = all.
