@@ -1,6 +1,32 @@
-# Handai
+# Handai — Streamlit App (Python)
 
 AI-Powered Data Transformation & Qualitative Analysis Suite
+
+---
+
+## Two Versions of Handai
+
+Handai ships in two completely independent versions that share the same tools and LLM providers but are built on different technology stacks. **This repository is the Python/Streamlit version.**
+
+| | **Handai Streamlit** (this repo) | **Handai Web** |
+|---|---|---|
+| **Stack** | Python, Streamlit | Next.js 16, React 19, TypeScript |
+| **Repo** | [mohsaqr/handai](https://github.com/mohsaqr/handai) | [mohsaqr/handai_refactored](https://github.com/mohsaqr/handai_refactored) |
+| **Run** | `pip install -r requirements.txt && streamlit run app.py` → :8501 | `npm install && npm run dev` → :3000 |
+| **Desktop app** | Electron wrapper | Tauri (~10 MB native, instant launch) |
+| **Run history** | — | SQLite DB, History page, per-row drill-down |
+| **Web deploy** | — | Vercel / Docker / any Node host |
+| **Best for** | Python users, quick local analysis | Teams, web deployment, production, non-Python users |
+| **Tools** | All 11 tools | All 11 tools |
+| **Providers** | All 10 providers | All 10 providers |
+
+**Choose Handai Streamlit if you** are already in the Python ecosystem, want the simplest possible local setup (`pip install` + one command), or prefer Streamlit's approach.
+
+**Choose Handai Web if you** want to deploy it for a team, want the Tauri desktop app, prefer TypeScript/React, or need run history and CSV export from past sessions.
+
+Both versions are fully independent — you do not need to install or run both.
+
+---
 
 ## Features
 
