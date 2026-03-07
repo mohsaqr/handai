@@ -65,7 +65,7 @@ export default function RunDetailClient({ id }: { id: string }) {
                     if (data.error) throw new Error(data.error);
                     setRun(data.run);
                     setResults(data.results.map((r: any) => ({
-                        ...JSON.parse(r.inputJson),
+                        ...JSON.parse(r.inputJson ?? "{}"),
                         output: r.output,
                         status: r.status,
                         latency_ms: Math.round((r.latency ?? 0) * 1000),

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { DataTable } from "@/components/tools/DataTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,12 +8,24 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useActiveModel } from "@/lib/hooks";
-import { AlertCircle, Sparkles, Plus, Trash2, Download, Loader2, Minus, ExternalLink } from "lucide-react";
+import { AlertCircle, Sparkles, Plus, Trash2, Download, Loader2, Minus, ExternalLink, Upload, ClipboardPaste, Check, X } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import type { GenerateColumn, Row } from "@/types";
-import { generateRowDirect } from "@/lib/llm-browser";
-import { createRun } from "@/lib/db-tauri";
+import { generateRowDirect, processRowDirect } from "@/lib/llm-browser";
+import { createRun, saveResults } from "@/lib/db-tauri";
+import { getPrompt } from "@/lib/prompts";
+import { FileUploader } from "@/components/tools/FileUploader";
+import Papa from "papaparse";
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+interface SuggestedField {
+  name: string;
+  type: "text" | "number" | "boolean" | "list";
+  description: string;
+  checked: boolean;
+}
 
 // ─── Sample prompts ──────────────────────────────────────────────────────────
 const SAMPLE_PROMPTS: Record<string, string> = {
@@ -40,6 +52,42 @@ const VARIATION_LEVELS = [
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function inferColumnType(values: string[]): SuggestedField["type"] {
+  const nonEmpty = values.filter((v) => v.trim() !== "");
+  if (nonEmpty.length === 0) return "text";
+  const boolValues = new Set(["true", "false", "yes", "no", "0", "1"]);
+  if (nonEmpty.every((v) => boolValues.has(v.toLowerCase()))) return "boolean";
+  if (nonEmpty.every((v) => !isNaN(Number(v)) && v.trim() !== "")) return "number";
+  return "text";
+}
+
+function fieldsFromData(data: Record<string, unknown>[]): SuggestedField[] {
+  if (data.length === 0) return [];
+  const keys = Object.keys(data[0]);
+  const sample = data.slice(0, 5);
+  return keys.map((key) => {
+    const values = sample.map((row) => String(row[key] ?? ""));
+    return { name: key, type: inferColumnType(values), description: "", checked: true };
+  });
+}
+
+function parseJsonResponse(text: string): Array<{ name: string; type: string; description: string }> {
+  let cleaned = text.trim();
+  // Strip markdown fences
+  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) cleaned = fenceMatch[1].trim();
+  // Try array
+  const arrMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (arrMatch) {
+    try { return JSON.parse(arrMatch[0]); } catch { /* fall through */ }
+  }
+  try { return JSON.parse(cleaned); } catch { return []; }
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
+
 export default function GeneratePage() {
   const activeModel = useActiveModel();
 
@@ -60,6 +108,13 @@ export default function GeneratePage() {
   const [generatedRaw, setGeneratedRaw] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
 
+  // ── Suggested fields state ──
+  const [suggestedFields, setSuggestedFields] = useState<SuggestedField[]>([]);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [showCsvPaste, setShowCsvPaste] = useState(false);
+  const [csvPasteText, setCsvPasteText] = useState("");
+  const [showFileUploader, setShowFileUploader] = useState(false);
+
   const temperature = VARIATION_LEVELS[variationIdx].value;
 
   const addColumn = () => setColumns((prev) => [...prev, { name: "", type: "text" }]);
@@ -69,6 +124,116 @@ export default function GeneratePage() {
 
   const canGenerate = description.trim().length > 0 || structure === "define_columns";
 
+  // ── Suggested fields helpers ──
+
+  const updateSuggestion = useCallback((idx: number, updates: Partial<SuggestedField>) => {
+    setSuggestedFields((prev) => prev.map((f, i) => (i === idx ? { ...f, ...updates } : f)));
+  }, []);
+
+  const removeSuggestion = useCallback((idx: number) => {
+    setSuggestedFields((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  const addSuggestion = useCallback(() => {
+    setSuggestedFields((prev) => [...prev, { name: "", type: "text", description: "", checked: true }]);
+  }, []);
+
+  // ── Sync suggested fields → columns ──
+  useEffect(() => {
+    const checked = suggestedFields.filter((f) => f.checked && f.name.trim());
+    if (checked.length > 0) {
+      setColumns(checked.map((f) => ({ name: f.name, type: f.type, description: f.description })));
+      setStructure("define_columns");
+    }
+  }, [suggestedFields]);
+
+  // ── AI suggest fields ──
+  const suggestFields = async () => {
+    if (!activeModel) return toast.error("No model configured. Add an API key in Settings.");
+    if (!description.trim()) return toast.error("Enter a description first.");
+
+    setIsSuggesting(true);
+    try {
+      const systemPrompt = getPrompt("generate.column_suggestions");
+      let output: string;
+      if (isTauri) {
+        const res = await processRowDirect({
+          provider: activeModel.providerId,
+          model: activeModel.defaultModel,
+          apiKey: activeModel.apiKey || "",
+          baseUrl: activeModel.baseUrl,
+          systemPrompt,
+          userContent: description,
+        });
+        output = res.output;
+      } else {
+        const res = await fetch("/api/process-row", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: activeModel.providerId,
+            model: activeModel.defaultModel,
+            apiKey: activeModel.apiKey || "local",
+            baseUrl: activeModel.baseUrl,
+            systemPrompt,
+            userContent: description,
+          }),
+        });
+        const data = await res.json();
+        output = data.output ?? "";
+      }
+      const parsed = parseJsonResponse(output);
+      if (parsed.length === 0) {
+        toast.error("Could not parse AI suggestions. Try again.");
+        return;
+      }
+      const validTypes = new Set(COLUMN_TYPES);
+      const fields: SuggestedField[] = parsed.map((f) => ({
+        name: f.name || "",
+        type: validTypes.has(f.type as SuggestedField["type"]) ? (f.type as SuggestedField["type"]) : "text",
+        description: f.description || "",
+        checked: true,
+      }));
+      setSuggestedFields(fields);
+      setShowCsvPaste(false);
+      setShowFileUploader(false);
+      toast.success(`${fields.length} fields suggested`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error("Suggestion failed", { description: msg });
+    } finally {
+      setIsSuggesting(false);
+    }
+  };
+
+  // ── From CSV/Excel file ──
+  const handleTemplateFile = useCallback((data: Record<string, unknown>[], _fileName: string) => {
+    const fields = fieldsFromData(data);
+    if (fields.length === 0) {
+      toast.error("No columns found in file.");
+      return;
+    }
+    setSuggestedFields(fields);
+    setShowFileUploader(false);
+    setShowCsvPaste(false);
+    toast.success(`${fields.length} fields extracted`);
+  }, []);
+
+  // ── From pasted CSV text ──
+  const extractFromPastedCsv = useCallback(() => {
+    if (!csvPasteText.trim()) return toast.error("Paste some CSV text first.");
+    const result = Papa.parse<Record<string, string>>(csvPasteText, { header: true, preview: 5, skipEmptyLines: true });
+    if (!result.meta.fields || result.meta.fields.length === 0) {
+      return toast.error("Could not detect column headers.");
+    }
+    const fields = fieldsFromData(result.data as Record<string, unknown>[]);
+    setSuggestedFields(fields);
+    setCsvPasteText("");
+    setShowCsvPaste(false);
+    toast.success(`${fields.length} fields extracted`);
+  }, [csvPasteText]);
+
+  // ── Generate ──
   const generate = async (mode: RunMode) => {
     if (!activeModel) return toast.error("No model configured. Add an API key in Settings.");
     if (!description.trim() && structure !== "define_columns") return toast.error("Describe the data you want to generate first.");
@@ -110,7 +275,9 @@ export default function GeneratePage() {
         const rd = await runRes.json();
         localRunId = rd.id ?? null;
       }
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      console.warn("Run creation failed:", err);
+    }
 
     try {
       let data: { rows: Row[]; rawCsv?: string; count?: number; raw?: string; error?: string };
@@ -150,6 +317,30 @@ export default function GeneratePage() {
       } else {
         setGeneratedRaw(typeof data.raw === "string" ? data.raw : JSON.stringify(data.rows, null, 2));
       }
+
+      // Save results to history
+      if (localRunId) {
+        try {
+          const resultRows = (data.rows as Row[]).map((row, i) => ({
+            rowIndex: i,
+            input: row as Record<string, unknown>,
+            output: JSON.stringify(row),
+            status: "success" as const,
+          }));
+          if (isTauri) {
+            await saveResults(localRunId, resultRows);
+          } else {
+            await fetch("/api/results", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ runId: localRunId, results: resultRows }),
+            });
+          }
+        } catch (err) {
+          console.warn("Failed to save results to history:", err);
+        }
+      }
+
       setRunId(localRunId);
       toast.success(`Generated ${data.count ?? count} rows`);
     } catch (err: unknown) {
@@ -177,6 +368,9 @@ export default function GeneratePage() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  const checkedCount = suggestedFields.filter((f) => f.checked).length;
+  const hasSuggestions = suggestedFields.length > 0;
 
   return (
     <div className="max-w-4xl mx-auto space-y-0 pb-16">
@@ -222,9 +416,161 @@ export default function GeneratePage() {
 
       <div className="border-t" />
 
-      {/* ── 2. Configure Output ─────────────────────────────────────────── */}
+      {/* ── 2. Review Fields ─────────────────────────────────────────────── */}
+      {description.trim().length > 0 && (
+        <>
+        <div className="space-y-4 py-8">
+          <h2 className="text-2xl font-bold">2. Review Fields</h2>
+          <p className="text-sm text-muted-foreground -mt-2">
+            Get AI-suggested fields, extract from a file, or add manually. Checked fields define your schema.
+          </p>
+
+          {/* Action buttons */}
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              disabled={isSuggesting || !activeModel}
+              onClick={suggestFields}
+            >
+              {isSuggesting ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+              Suggest with AI
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={() => { setShowFileUploader(!showFileUploader); setShowCsvPaste(false); }}
+            >
+              <Upload className="h-3.5 w-3.5 mr-1.5" />
+              From CSV/Excel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs"
+              onClick={() => { setShowCsvPaste(!showCsvPaste); setShowFileUploader(false); }}
+            >
+              <ClipboardPaste className="h-3.5 w-3.5 mr-1.5" />
+              Paste CSV
+            </Button>
+          </div>
+
+          {/* File uploader (toggled) */}
+          {showFileUploader && (
+            <div className="max-w-md">
+              <FileUploader
+                onDataLoaded={handleTemplateFile}
+                accept={{
+                  "text/csv": [".csv"],
+                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+                  "application/vnd.ms-excel": [".xls"],
+                }}
+              />
+            </div>
+          )}
+
+          {/* CSV paste area (toggled) */}
+          {showCsvPaste && (
+            <div className="space-y-2">
+              <Textarea
+                placeholder={"Paste CSV text here (with header row):\nname,age,city\nAlice,30,NYC\nBob,25,LA"}
+                className="min-h-[100px] text-xs font-mono resize-y"
+                value={csvPasteText}
+                onChange={(e) => setCsvPasteText(e.target.value)}
+              />
+              <Button size="sm" className="text-xs" onClick={extractFromPastedCsv}>
+                Extract Fields
+              </Button>
+            </div>
+          )}
+
+          {/* Suggested fields checklist */}
+          {hasSuggestions && (
+            <div className="border rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 border-b bg-muted/20 flex items-center justify-between">
+                <span className="text-sm font-medium">Suggested Fields</span>
+                <span className="text-xs text-muted-foreground">
+                  {checkedCount} of {suggestedFields.length} selected
+                </span>
+              </div>
+              <div className="p-3 space-y-1.5">
+                {suggestedFields.map((field, idx) => (
+                  <div key={idx} className="flex gap-2 items-center">
+                    <input
+                      type="checkbox"
+                      checked={field.checked}
+                      onChange={(e) => updateSuggestion(idx, { checked: e.target.checked })}
+                      className="h-4 w-4 accent-primary shrink-0"
+                    />
+                    <Input
+                      placeholder="field_name"
+                      value={field.name}
+                      onChange={(e) => updateSuggestion(idx, { name: e.target.value })}
+                      className="flex-1 h-8 text-xs"
+                    />
+                    <Select
+                      value={field.type}
+                      onValueChange={(v) => updateSuggestion(idx, { type: v as SuggestedField["type"] })}
+                    >
+                      <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {COLUMN_TYPES.map((t) => (
+                          <SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      placeholder="Description"
+                      value={field.description}
+                      onChange={(e) => updateSuggestion(idx, { description: e.target.value })}
+                      className="flex-1 h-8 text-xs text-muted-foreground"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
+                      onClick={() => removeSuggestion(idx)}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <div className="px-3 pb-3 flex items-center gap-2">
+                <Button variant="outline" size="sm" className="text-xs" onClick={addSuggestion}>
+                  <Plus className="h-3 w-3 mr-1.5" /> Add Field
+                </Button>
+                <div className="flex-1" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setSuggestedFields((prev) => prev.map((f) => ({ ...f, checked: true })))}
+                >
+                  <Check className="h-3 w-3 mr-1" /> Select All
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => setSuggestedFields([])}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-t" />
+        </>
+      )}
+
+      {/* ── 3. Configure Output ─────────────────────────────────────────── */}
       <div className="space-y-0 py-8">
-      <h2 className="text-2xl font-bold mb-5">2. Configure Output</h2>
+      <h2 className="text-2xl font-bold mb-5">{description.trim().length > 0 ? "3" : "2"}. Configure Output</h2>
       <div className="grid grid-cols-2 gap-8">
         {/* Output Format */}
         <div className="space-y-3">
@@ -287,8 +633,8 @@ export default function GeneratePage() {
 
       </div>{/* end Configure Output section */}
 
-      {/* Define columns builder (shown when structure === define_columns) */}
-      {structure === "define_columns" && (
+      {/* Define columns builder (shown when define_columns AND no suggestions) */}
+      {structure === "define_columns" && !hasSuggestions && (
         <div className="pb-4 space-y-3">
           <div className="border rounded-lg overflow-hidden">
             <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Column Schema</div>
@@ -355,9 +701,9 @@ export default function GeneratePage() {
 
       <div className="border-t" />
 
-      {/* ── 3. Generation Settings ──────────────────────────────────────── */}
+      {/* ── 4. Generation Settings ──────────────────────────────────────── */}
       <div className="py-8 space-y-5">
-        <h2 className="text-2xl font-bold">3. Generation Settings</h2>
+        <h2 className="text-2xl font-bold">{description.trim().length > 0 ? "4" : "3"}. Generation Settings</h2>
 
         <div className="grid grid-cols-2 gap-8">
           {/* Row count */}
@@ -431,9 +777,9 @@ export default function GeneratePage() {
 
       <div className="border-t" />
 
-      {/* ── 4. Execute ──────────────────────────────────────────────────── */}
+      {/* ── 5. Execute ──────────────────────────────────────────────────── */}
       <div className="space-y-4 py-8">
-        <h2 className="text-2xl font-bold">4. Execute</h2>
+        <h2 className="text-2xl font-bold">{description.trim().length > 0 ? "5" : "4"}. Execute</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Button
             variant="outline"

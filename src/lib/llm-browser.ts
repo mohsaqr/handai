@@ -12,7 +12,8 @@ import { generateText } from "ai";
 import { getModel } from "./ai/providers";
 import { withRetry } from "./retry";
 import { cohenKappa, pairwiseAgreement } from "./analytics";
-import { getPrompt } from "./prompts";
+import { getPrompt, formatExtractionSchema } from "./prompts";
+import type { FieldDef } from "@/types";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -389,11 +390,15 @@ export async function automatorRowDirect(params: {
 
 // ── documentExtractDirect — mirrors /api/document-extract ─────────────────────
 
-const DEFAULT_EXTRACT_PROMPT = `You are a document extraction expert. Extract all meaningful information from the provided document text.
-Structure the output as a JSON array of objects, where each object represents one logical record or entry.
-Each record should have consistent field names across all records.
-Return ONLY a valid JSON array. No explanations. No markdown code blocks.
-Example: [{"field1": "value1", "field2": "value2"}, ...]`;
+const DEFAULT_EXTRACT_PROMPT = `You are a document data extraction engine. Extract all structured records from the document as a CSV table.
+
+OUTPUT RULES:
+1. Output ONLY raw CSV. Nothing else.
+2. Row 1: CSV header (design appropriate column names based on the document content).
+3. Rows 2+: one extracted record per row, values matching the header columns.
+4. Wrap fields containing commas or line breaks in double quotes.
+
+STRICTLY FORBIDDEN: markdown, code blocks, JSON, explanations, or prose.`;
 
 export async function documentExtractDirect(params: {
   file: File;
@@ -402,13 +407,30 @@ export async function documentExtractDirect(params: {
   apiKey: string;
   baseUrl?: string;
   systemPrompt?: string;
-}): Promise<{ records: Record<string, unknown>[]; fileName: string; charCount: number; count: number }> {
-  // Extract raw text using the browser-native document-browser utilities
+  fields?: FieldDef[];
+}): Promise<{
+  records: Record<string, unknown>[];
+  fileName: string;
+  charCount: number;
+  truncated: boolean;
+  count: number;
+}> {
   const { extractTextBrowser } = await import("./document-browser");
-  const rawText = await extractTextBrowser(params.file);
+  const { text: rawText, truncated, charCount } = await extractTextBrowser(params.file);
 
   if (!rawText.trim()) {
     throw new Error("Document appears to be empty or unreadable");
+  }
+
+  // Build effective prompt: fields schema takes priority over custom systemPrompt
+  let effectivePrompt: string;
+  if (params.fields && params.fields.length > 0) {
+    effectivePrompt = getPrompt("document.extraction").replace(
+      "{schema}",
+      formatExtractionSchema(params.fields)
+    );
+  } else {
+    effectivePrompt = params.systemPrompt ?? DEFAULT_EXTRACT_PROMPT;
   }
 
   const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
@@ -417,27 +439,77 @@ export async function documentExtractDirect(params: {
     () =>
       generateText({
         model: aiModel,
-        system: params.systemPrompt ?? DEFAULT_EXTRACT_PROMPT,
-        prompt: `Document: ${params.file.name}\n\n${rawText.slice(0, 50000)}`,
+        system: effectivePrompt,
+        prompt: `Document: ${params.file.name}\n\n${rawText}`,
         temperature: 0,
         maxOutputTokens: 4096,
       }),
     { maxAttempts: 3, baseDelayMs: 200 }
   );
 
-  let records: Record<string, unknown>[] = [];
+  // Parse CSV response (primary); fall back to JSON if model ignored instructions
+  let records: Record<string, unknown>[] = parseCsv(text);
+  if (records.length === 0) {
+    try {
+      const cleaned = text.replace(/^```(?:json)?\s*/im, "").replace(/\s*```\s*$/m, "").trim();
+      const parsed = JSON.parse(cleaned);
+      records = Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      records = [{ extracted_text: text }];
+    }
+  }
+
+  // Normalize records: ensure every defined field.name exists (fill with empty string)
+  if (params.fields && params.fields.length > 0) {
+    records = records.map((r) => {
+      const normalized: Record<string, unknown> = { ...r };
+      params.fields!.forEach((f) => {
+        if (!(f.name in normalized)) normalized[f.name] = "";
+      });
+      return normalized;
+    });
+  }
+
+  return { records, fileName: params.file.name, charCount, truncated, count: records.length };
+}
+
+// ── documentAnalyzeDirect — mirrors /api/document-analyze ─────────────────────
+
+export async function documentAnalyzeDirect(params: {
+  file: File;
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+}): Promise<{ fields: FieldDef[] }> {
+  const { extractTextBrowser } = await import("./document-browser");
+  const { text: rawText } = await extractTextBrowser(params.file);
+  const sampleText = rawText.slice(0, 3000);
+
+  if (!sampleText.trim()) return { fields: [] };
+
+  const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
+
+  const { text } = await withRetry(
+    () =>
+      generateText({
+        model: aiModel,
+        system: getPrompt("document.analysis"),
+        prompt: `Document: ${params.file.name}\n\n${sampleText}`,
+        temperature: 0,
+        maxOutputTokens: 1024,
+      }),
+    { maxAttempts: 2, baseDelayMs: 200 }
+  );
+
+  let fields: FieldDef[] = [];
   try {
     const cleaned = text.replace(/^```(?:json)?\s*/im, "").replace(/\s*```\s*$/m, "").trim();
     const parsed = JSON.parse(cleaned);
-    records = Array.isArray(parsed) ? parsed : [parsed];
+    fields = Array.isArray(parsed) ? (parsed as FieldDef[]) : [];
   } catch {
-    records = [{ extracted_text: text }];
+    // Graceful degradation
   }
 
-  return {
-    records,
-    fileName: params.file.name,
-    charCount: rawText.length,
-    count: records.length,
-  };
+  return { fields };
 }

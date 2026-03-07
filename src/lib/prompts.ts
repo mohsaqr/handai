@@ -1,7 +1,9 @@
 /**
- * Central prompt registry — port of Python's prompt_registry.py
+ * Central prompt registry.
  * Prompts can be overridden per-browser via localStorage.
  */
+
+import type { FieldDef } from "@/types";
 
 export interface PromptDef {
   id: string;
@@ -11,7 +13,7 @@ export interface PromptDef {
 }
 
 export const PROMPTS: Record<string, PromptDef> = {
-  // ── Transform ──────────────────────────────────────────────────────
+  // ── Transform ──────────────────────────────────────────────────────────────
   "transform.default": {
     id: "transform.default",
     name: "Transform — Default",
@@ -23,7 +25,7 @@ Apply the requested transformation to the input data and return ONLY the result.
 - Preserve original formatting unless explicitly asked to change it`,
   },
 
-  // ── Qualitative Coding ─────────────────────────────────────────────
+  // ── Qualitative Coding ─────────────────────────────────────────────────────
   "qualitative.default": {
     id: "qualitative.default",
     name: "Qualitative — Default",
@@ -43,7 +45,7 @@ Consider: participant perspective, emotional tone, implied meaning, and context.
 Return ONLY the applicable codes as a comma-separated list. No explanations.`,
   },
 
-  // ── Consensus Coder ────────────────────────────────────────────────
+  // ── Consensus Coder ────────────────────────────────────────────────────────
   "consensus.worker_default": {
     id: "consensus.worker_default",
     name: "Consensus — Worker (Default)",
@@ -91,7 +93,7 @@ When workers disagree, use your expertise to determine the correct interpretatio
 Return ONLY the final best answer in CSV format. No explanations. No metadata.`,
   },
 
-  // ── Codebook Generator ─────────────────────────────────────────────
+  // ── Codebook Generator ─────────────────────────────────────────────────────
   "codebook.discovery": {
     id: "codebook.discovery",
     name: "Codebook — Discovery",
@@ -132,7 +134,7 @@ Return a JSON array:
 Return ONLY the JSON array. No other text.`,
   },
 
-  // ── Generate Data ──────────────────────────────────────────────────
+  // ── Generate Data ──────────────────────────────────────────────────────────
   "generate.column_suggestions": {
     id: "generate.column_suggestions",
     name: "Generate — Column Suggestions",
@@ -170,7 +172,7 @@ Requirements:
 Return ONLY the CSV content. No explanations. No code blocks.`,
   },
 
-  // ── Automator ─────────────────────────────────────────────────────
+  // ── Automator ──────────────────────────────────────────────────────────────
   "automator.rules": {
     id: "automator.rules",
     name: "Automator — Step Rules",
@@ -186,7 +188,7 @@ IMPORTANT:
 - Use null for missing or unknown values`,
   },
 
-  // ── Abstract Screener ──────────────────────────────────────────────
+  // ── Abstract Screener ──────────────────────────────────────────────────────
   "screener.default": {
     id: "screener.default",
     name: "Screener — Default",
@@ -205,7 +207,7 @@ Return ONLY valid JSON (no markdown, no prose):
 - highlight_terms: 3–8 words or short phrases from the abstract that most influenced your decision`,
   },
 
-  // ── AI Coder ───────────────────────────────────────────────────────
+  // ── AI Coder ───────────────────────────────────────────────────────────────
   "ai_coder.suggestions": {
     id: "ai_coder.suggestions",
     name: "AI Coder — Suggestions",
@@ -214,6 +216,52 @@ Return ONLY valid JSON (no markdown, no prose):
 Return ONLY a JSON array of the suggested code names.
 Example: ["Positive Experience", "Quality Concern"]
 Only suggest codes that clearly apply. Do not invent new codes.`,
+  },
+
+  // ── Document Processing ────────────────────────────────────────────────────
+  "document.extraction": {
+    id: "document.extraction",
+    name: "Document — Extraction",
+    category: "document",
+    defaultValue: `You are a document data extraction engine. Read the document and output a structured CSV table.
+
+OUTPUT RULES — follow exactly:
+1. Output ONLY a raw CSV table. Nothing else.
+2. Row 1: the CSV header with column names matching the schema below.
+3. Rows 2+: one extracted record per row.
+4. Wrap a field in double quotes if it contains commas, line breaks, or double-quote characters.
+5. Leave a field blank (empty between commas) if not found in the document.
+
+STRICTLY FORBIDDEN:
+• Markdown of any kind (no **, no #, no _)
+• Code blocks or fences (no backticks)
+• JSON objects or arrays
+• Prose, explanations, summaries, or footnotes
+• Writing "null", "N/A", "not found", or "unknown" — leave the field blank instead
+
+FIELDS TO EXTRACT:
+{schema}`,
+  },
+
+  "document.analysis": {
+    id: "document.analysis",
+    name: "Document — Field Analysis",
+    category: "document",
+    defaultValue: `You are a data schema analyst. Examine this document sample and identify the most valuable fields to extract for tabular analysis.
+
+Return ONLY a JSON array. No markdown. No prose. No code blocks. No wrapper keys.
+
+Each element must have exactly these three properties:
+  "name"        — field identifier in snake_case (e.g. "invoice_date", "author_name")
+  "type"        — one of: "text", "number", "date", "boolean", "list"
+  "description" — what this field contains, in 15 words or fewer
+
+Guidelines:
+• Suggest 3–10 fields that appear consistently in this type of document
+• Prefer specific, atomic fields (e.g. "unit_price") over vague ones (e.g. "details")
+• Only suggest fields clearly present or directly inferable from the document
+
+Example: [{"name":"author_name","type":"text","description":"Full name of primary author"},{"name":"publication_year","type":"number","description":"Year the work was published"}]`,
   },
 };
 
@@ -229,12 +277,10 @@ export function getPrompt(id: string): string {
     console.warn(`Unknown prompt id: ${id}`);
     return "";
   }
-
   if (typeof window !== "undefined") {
     const override = localStorage.getItem(`${OVERRIDE_PREFIX}${id}`);
     if (override !== null) return override;
   }
-
   return def.defaultValue;
 }
 
@@ -252,4 +298,17 @@ export function clearPromptOverride(id: string): void {
 
 export function getPromptsByCategory(category: string): PromptDef[] {
   return Object.values(PROMPTS).filter((p) => p.category === category);
+}
+
+/**
+ * Formats a FieldDef[] schema as a numbered list with types and descriptions,
+ * plus a CSV header line. Used to fill the {schema} placeholder in document.extraction.
+ */
+export function formatExtractionSchema(fields: FieldDef[]): string {
+  const lines = fields.map(
+    (f, i) =>
+      `${i + 1}. ${f.name} (${f.type})${f.description ? ` — ${f.description}` : ""}`
+  );
+  const header = fields.map((f) => f.name).join(",");
+  return `${lines.join("\n")}\n\nCSV header: ${header}`;
 }

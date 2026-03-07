@@ -1,11 +1,23 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { ProviderConfig } from '@/types';
+import type { ProviderConfig, SystemSettings } from '@/types';
+
+export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
+  temperature: 0,
+  maxTokens: null,
+  maxConcurrency: 5,
+  autoRetry: true,
+  autoSavePath: '',
+};
 
 interface AppState {
   providers: Record<string, ProviderConfig>;
+  activeProviderId: string | null;
+  systemSettings: SystemSettings;
   setProviderKey: (providerId: string, apiKey: string) => void;
   setProviderConfig: (providerId: string, config: Partial<ProviderConfig>) => void;
+  setActiveProvider: (id: string | null) => void;
+  setSystemSettings: (s: Partial<SystemSettings>) => void;
 }
 
 const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
@@ -58,8 +70,8 @@ const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     providerId: 'ollama',
     apiKey: 'ollama',
     baseUrl: 'http://localhost:11434/v1',
-    defaultModel: 'gpt-oss:latest',
-    isEnabled: true,
+    defaultModel: 'llama3',
+    isEnabled: false,
     isLocal: true,
   },
   lmstudio: {
@@ -83,6 +95,8 @@ export const useAppStore = create<AppState>()(
   persist(
     (set) => ({
       providers: DEFAULT_PROVIDERS,
+      activeProviderId: null,
+      systemSettings: DEFAULT_SYSTEM_SETTINGS,
       setProviderKey: (providerId, apiKey) =>
         set((state) => ({
           providers: {
@@ -103,6 +117,11 @@ export const useAppStore = create<AppState>()(
             },
           },
         })),
+      setActiveProvider: (id) => set({ activeProviderId: id }),
+      setSystemSettings: (s) =>
+        set((state) => ({
+          systemSettings: { ...state.systemSettings, ...s },
+        })),
     }),
     {
       name: 'handai-storage',
@@ -114,6 +133,11 @@ export const useAppStore = create<AppState>()(
           providers: {
             ...DEFAULT_PROVIDERS,
             ...(saved?.providers ?? {}),
+          },
+          activeProviderId: saved?.activeProviderId ?? null,
+          systemSettings: {
+            ...DEFAULT_SYSTEM_SETTINGS,
+            ...(saved?.systemSettings ?? {}),
           },
         };
       },

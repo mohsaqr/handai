@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { PROMPTS, getPrompt, getPromptsByCategory } from '../prompts';
 
 describe('PROMPTS registry', () => {
-  it('contains all 16 expected prompt IDs', () => {
+  it('contains all 18 expected prompt IDs', () => {
     const expectedIds = [
       'transform.default',
       'qualitative.default',
@@ -20,11 +20,13 @@ describe('PROMPTS registry', () => {
       'automator.rules',
       'ai_coder.suggestions',
       'screener.default',
+      'document.extraction',
+      'document.analysis',
     ];
     for (const id of expectedIds) {
       expect(PROMPTS[id], `Missing prompt: ${id}`).toBeDefined();
     }
-    expect(Object.keys(PROMPTS)).toHaveLength(16);
+    expect(Object.keys(PROMPTS)).toHaveLength(18);
   });
 
   it('each entry has id matching its key', () => {
@@ -85,6 +87,14 @@ describe('getPromptsByCategory', () => {
     expect(prompts[0].id).toBe('screener.default');
   });
 
+  it('returns 2 document prompts', () => {
+    const prompts = getPromptsByCategory('document');
+    expect(prompts).toHaveLength(2);
+    const ids = prompts.map((p) => p.id);
+    expect(ids).toContain('document.extraction');
+    expect(ids).toContain('document.analysis');
+  });
+
   it('returns empty array for unknown category', () => {
     expect(getPromptsByCategory('nonexistent')).toEqual([]);
   });
@@ -101,9 +111,19 @@ describe('getPrompt', () => {
     expect(getPrompt('does.not.exist')).toBe('');
   });
 
-  it('returns non-empty strings for all 16 registered prompts', () => {
+  it('returns non-empty strings for all 18 registered prompts', () => {
     for (const id of Object.keys(PROMPTS)) {
       expect(getPrompt(id).length, `Empty prompt for: ${id}`).toBeGreaterThan(0);
     }
+  });
+
+  it('document.extraction contains {schema} placeholder', () => {
+    expect(getPrompt('document.extraction')).toContain('{schema}');
+  });
+
+  it('document.analysis contains type instructions', () => {
+    const prompt = getPrompt('document.analysis');
+    expect(prompt).toContain('"text"');
+    expect(prompt).toContain('"number"');
   });
 });

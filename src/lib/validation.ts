@@ -1,12 +1,6 @@
 import { z } from 'zod';
 
-// Shared sub-schemas
-const ProviderFields = z.object({
-  provider: z.string().min(1),
-  model: z.string().min(1),
-  apiKey: z.string().min(1, 'API Key is required'),
-  baseUrl: z.string().optional(),
-});
+// ── Shared sub-schemas ─────────────────────────────────────────────────────────
 
 const ProviderFieldsLocal = z.object({
   provider: z.string().min(1),
@@ -15,11 +9,11 @@ const ProviderFieldsLocal = z.object({
   baseUrl: z.string().optional(),
 });
 
-// /api/process-row
+// ── /api/process-row ──────────────────────────────────────────────────────────
 export const ProcessRowSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
-  apiKey: z.string().default(""), // empty string is valid for local providers (Ollama, LM Studio)
+  apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
   systemPrompt: z.string(),
   userContent: z.string(),
@@ -29,7 +23,7 @@ export const ProcessRowSchema = z.object({
   maxTokens: z.number().int().positive().optional(),
 });
 
-// /api/consensus-row
+// ── /api/consensus-row ────────────────────────────────────────────────────────
 export const ConsensusRowSchema = z.object({
   workers: z.array(ProviderFieldsLocal).min(2),
   judge: ProviderFieldsLocal,
@@ -42,14 +36,14 @@ export const ConsensusRowSchema = z.object({
   enableDisagreementAnalysis: z.boolean().optional(),
 });
 
-// /api/comparison-row
+// ── /api/comparison-row ───────────────────────────────────────────────────────
 export const ComparisonRowSchema = z.object({
   models: z.array(
     z.object({
       id: z.string(),
       provider: z.string().min(1),
       model: z.string().min(1),
-      apiKey: z.string().default(""), // local providers may omit
+      apiKey: z.string().default(""),
       baseUrl: z.string().optional(),
     })
   ).min(2),
@@ -58,7 +52,7 @@ export const ComparisonRowSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
 });
 
-// /api/automator-row
+// ── /api/automator-row ────────────────────────────────────────────────────────
 export const AutomatorRowSchema = z.object({
   row: z.record(z.string(), z.unknown()),
   steps: z.array(
@@ -77,15 +71,15 @@ export const AutomatorRowSchema = z.object({
   ).min(1),
   provider: z.string().min(1),
   model: z.string().min(1),
-  apiKey: z.string().default(""), // local providers may omit
+  apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
 });
 
-// /api/generate-row
+// ── /api/generate-row ─────────────────────────────────────────────────────────
 export const GenerateRowSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
-  apiKey: z.string().default(""), // local providers may omit
+  apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
   systemPrompt: z.string().optional(),
   rowCount: z.number().int().min(1).max(500),
@@ -100,19 +94,41 @@ export const GenerateRowSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
 });
 
-// /api/document-extract
+// ── Document shared sub-schemas ───────────────────────────────────────────────
+
+const FieldDefSchema = z.object({
+  name: z.string(),
+  type: z.enum(['text', 'number', 'date', 'boolean', 'list']),
+  description: z.string(),
+});
+
+const DocumentFileTypeEnum = z.enum(['pdf', 'docx', 'txt', 'md', 'json', 'html', 'csv']);
+
+// ── /api/document-extract ─────────────────────────────────────────────────────
 export const DocumentExtractSchema = z.object({
   fileContent: z.string().min(1),
-  fileType: z.enum(['pdf', 'docx', 'txt', 'md']),
+  fileType: DocumentFileTypeEnum,
   fileName: z.string().optional(),
   provider: z.string().min(1),
   model: z.string().min(1),
-  apiKey: z.string().default(""), // local providers may omit
+  apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
   systemPrompt: z.string().optional(),
+  fields: z.array(FieldDefSchema).optional(),
 });
 
-// /api/runs POST
+// ── /api/document-analyze ─────────────────────────────────────────────────────
+export const DocumentAnalyzeSchema = z.object({
+  fileContent: z.string().min(1),
+  fileType: DocumentFileTypeEnum,
+  fileName: z.string().optional(),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  apiKey: z.string().default(""),
+  baseUrl: z.string().optional(),
+});
+
+// ── /api/runs POST ────────────────────────────────────────────────────────────
 export const RunCreateSchema = z.object({
   sessionId: z.string().optional(),
   runType: z.string().default('full'),
@@ -130,7 +146,7 @@ export const RunCreateSchema = z.object({
   config: z.string().optional(),
 });
 
-// /api/results POST
+// ── /api/results POST ─────────────────────────────────────────────────────────
 export const ResultsBatchSchema = z.object({
   runId: z.string().min(1),
   results: z.array(

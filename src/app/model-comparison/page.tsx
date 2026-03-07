@@ -8,12 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { useAppStore } from "@/lib/store";
+import { useSystemSettings } from "@/lib/hooks";
 import { Download, Loader2, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import pLimit from "p-limit";
 import Link from "next/link";
 import { comparisonRowDirect } from "@/lib/llm-browser";
-import { createRun } from "@/lib/db-tauri";
+import { createRun, saveResults } from "@/lib/db-tauri";
 
 type Row = Record<string, unknown>;
 type RunMode = "preview" | "test" | "full";
@@ -39,12 +40,12 @@ export default function ModelComparisonPage() {
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
   const [results, setResults] = useState<Row[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
-  const [concurrency, setConcurrency] = useState(3);
-
   const abortRef = useRef(false);
   const startedAtRef = useRef<number>(0);
 
   const providers = useAppStore((state) => state.providers);
+  const systemSettings = useSystemSettings();
+  const [concurrency, setConcurrency] = useState(systemSettings.maxConcurrency);
   const allProviders = Object.values(providers);
   const allColumns = data.length > 0 ? Object.keys(data[0]) : [];
 
@@ -104,7 +105,7 @@ export default function ModelComparisonPage() {
           runType: "model-comparison",
           provider: selectedProviders.join(","),
           model: firstProvider?.defaultModel ?? "unknown",
-          temperature: 0,
+          temperature: systemSettings.temperature,
           systemPrompt,
           inputFile: dataName || "unnamed",
           inputRows: targetData.length,
@@ -118,7 +119,7 @@ export default function ModelComparisonPage() {
             runType: "model-comparison",
             provider: selectedProviders.join(","),
             model: firstProvider?.defaultModel ?? "unknown",
-            temperature: 0,
+            temperature: systemSettings.temperature,
             systemPrompt,
             inputFile: dataName || "unnamed",
             inputRows: targetData.length,
@@ -127,7 +128,9 @@ export default function ModelComparisonPage() {
         const rd = await runRes.json();
         localRunId = rd.id ?? null;
       }
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      console.warn("Run creation failed:", err);
+    }
 
     const tasks = targetData.map((row, idx) =>
       limit(async () => {
@@ -171,6 +174,35 @@ export default function ModelComparisonPage() {
 
     await Promise.all(tasks);
     setResults(newResults);
+
+    // Save results to history
+    if (localRunId) {
+      try {
+        const resultRows = newResults.map((r, i) => ({
+          rowIndex: i,
+          input: r as Record<string, unknown>,
+          output: JSON.stringify(
+            Object.fromEntries(
+              Object.entries(r).filter(([k]) => k.endsWith("_output"))
+            )
+          ),
+          status: r.error_msg ? "error" : "success",
+          errorMessage: r.error_msg as string | undefined,
+        }));
+        if (isTauri) {
+          await saveResults(localRunId, resultRows);
+        } else {
+          await fetch("/api/results", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ runId: localRunId, results: resultRows }),
+          });
+        }
+      } catch (err) {
+        console.warn("Failed to save results to history:", err);
+      }
+    }
+
     setRunId(localRunId);
     setIsProcessing(false);
     toast.success("Comparison complete!");

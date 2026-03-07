@@ -6,16 +6,32 @@
  *
  * The SQLite DB is initialised (migrations run) by tauri-plugin-sql on the Rust
  * side before the WebView loads. `Database.load()` opens the pooled connection.
+ *
+ * Note: This module is client-only and only functions when running in Tauri.
+ * In web mode, all functions throw errors (pages should check isTauri first).
  */
 
-import Database from "@tauri-apps/plugin-sql";
 import type { RunMeta } from "@/types";
 
 const DB_PATH = "sqlite:handai.db";
 
-let _db: Database | null = null;
-async function getDb(): Promise<Database> {
-  if (!_db) _db = await Database.load(DB_PATH);
+let _db: any = null;
+
+async function getDb(): Promise<any> {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    throw new Error("Database is only available in Tauri environment");
+  }
+
+  if (!_db) {
+    try {
+      // Lazy import Tauri plugin only when actually needed
+      const Database = (await import("@tauri-apps/plugin-sql")).default;
+      _db = await Database.load(DB_PATH);
+    } catch (err) {
+      console.error("Failed to initialize Tauri database:", err);
+      throw err;
+    }
+  }
   return _db;
 }
 

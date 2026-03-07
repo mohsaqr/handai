@@ -123,6 +123,26 @@ export interface GenerateColumn {
   description?: string;
 }
 
+/** A single field definition in a document extraction schema. */
+export interface FieldDef {
+  name: string;         // snake_case identifier, e.g. "author_name"
+  type: "text" | "number" | "date" | "boolean" | "list";
+  description: string;  // LLM hint, e.g. "Full name of the primary author"
+}
+
+/** Per-file processing status during a document extraction batch. */
+export type FileStatus = "pending" | "extracting" | "analyzing" | "done" | "error";
+
+/** State for a single file in the process-documents queue. */
+export interface FileState {
+  file: File;
+  status: FileStatus;
+  error?: string;
+  truncated?: boolean;
+  charCount?: number;
+  records?: Record<string, unknown>[];
+}
+
 export interface ModelEntry {
   id: string;
   provider: string;
@@ -136,4 +156,12 @@ export interface ComparisonResult {
   output: string;
   latency?: number;
   success: boolean;
+}
+
+export interface SystemSettings {
+  temperature: number;
+  maxTokens: number | null;
+  maxConcurrency: number;
+  autoRetry: boolean;
+  autoSavePath: string;
 }
