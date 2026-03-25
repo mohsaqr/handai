@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { DataTable } from "@/components/tools/DataTable";
+import { DataTable, ExportDropdown } from "@/components/tools/DataTable";
 import {
     ArrowLeft,
     Download,
@@ -223,6 +223,10 @@ export default function RunDetailClient({ id }: { id: string }) {
                         <Badge variant="secondary" className="text-[10px]">{results.length} Rows</Badge>
                     </CardHeader>
                     <CardContent className="p-0">
+                        <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between">
+                            <span>Results — {results.length} rows</span>
+                            <ExportDropdown data={results} filename="run_results" />
+                        </div>
                         <DataTable data={results} showAll />
                     </CardContent>
                 </Card>
