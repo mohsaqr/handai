@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -8,16 +8,17 @@ import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection"
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
-import { Plus, Minus, Trash2, Upload, Save, FolderOpen, BarChart2, Download, Check, Loader2, X, ChevronDown } from "lucide-react";
+import { useBatchProcessor } from "@/hooks/useBatchProcessor";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
+import { Plus, Trash2, Upload, Save, FolderOpen, BarChart2, Download, Check, Loader2, X, ChevronDown } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import pLimit from "p-limit";
 
 import { usePersistedPrompt } from "@/hooks/usePersistedPrompt";
 import { useColumnSelection } from "@/hooks/useColumnSelection";
-import { dispatchProcessRow, dispatchCreateRun, dispatchSaveResults, type ResultEntry } from "@/lib/llm-dispatch";
+import { dispatchProcessRow } from "@/lib/llm-dispatch";
 
 import { UploadPreview } from "@/components/tools/UploadPreview";
 import { ColumnSelector } from "@/components/tools/ColumnSelector";
@@ -26,6 +27,7 @@ import { NoModelWarning } from "@/components/tools/NoModelWarning";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { downloadCSV as downloadCSVFile, downloadXLSX } from "@/lib/export";
+import * as XLSX from "xlsx";
 import { AnalyticsPanel } from "./AnalyticsDialog";
 import type { CodeEntry } from "./ReviewPanel";
 
@@ -76,17 +78,21 @@ const AUTOSAVE_KEY = "aic_autosave";
 const SETTINGS_KEY = "aic_settings";
 
 // ─── Default prompt ──────────────────────────────────────────────────────────
-const DEFAULT_PROMPT = `Analyze the provided data and assign qualitative codes.
+const DEFAULT_PROMPT = `Read the text carefully and evaluate EVERY code in the codebook for applicability.
+
+Key principles:
+- A single text can express multiple themes — assign high probability to each code the text genuinely speaks to
+- Consider both explicit statements and implied/latent meaning
+- Multiple codes can have high probabilities simultaneously (they do not need to trade off against each other)
 
 Instructions:
-- Read the text carefully
-- For EVERY code in the codebook, estimate the probability (0-100) that it applies
-- Return a JSON object mapping each code label to its probability
-- Example: {"Burnout": 80, "Resilience": 10, "Team Support": 5, "Other": 5}
-- All probabilities must sum to 100
-- If no codes apply well, distribute low values
+- For EVERY code, estimate the probability (0-100) that it applies to this text
+- Probabilities must sum to 100
+- A text about burnout AND resilience should give high values to both (e.g. 45, 40) rather than forcing one to dominate
 
-Respond with ONLY the JSON object. Nothing else.`;
+Return ONLY a JSON object mapping each code to its probability.
+Example: {"Burnout": 45, "Resilience": 40, "Work-Life Impact": 10, "Other": 5}
+Nothing else.`;
 
 // ─── Sample codebooks (with highlights) ──────────────────────────────────────
 type SampleCodeEntry = Omit<CodeEntry, "id">;
@@ -313,69 +319,6 @@ function parseAIResponse(output: string, codebookCodes?: string[]): { codes: str
   return { codes, confidence };
 }
 
-// ─── Export functions ─────────────────────────────────────────────────────────
-function exportCSV(
-  data: Row[],
-  codes: string[],
-  codingData: Record<number, string[]>,
-  aiData: Record<number, AISuggestion>,
-  mode: "standard" | "onehot" | "onehotAI" | "withAI",
-  dataName: string
-) {
-  const rows: Record<string, unknown>[] = data.map((row, i) => {
-    const humanCodes = codingData[i] ?? [];
-    const ai = aiData[i];
-
-    if (mode === "standard") {
-      return { ...row, human_codes: humanCodes.join("; ") };
-    }
-    if (mode === "onehot") {
-      const oneHot: Record<string, unknown> = { ...row };
-      codes.forEach((c) => { oneHot[c] = humanCodes.includes(c) ? 1 : 0; });
-      return oneHot;
-    }
-    if (mode === "onehotAI") {
-      const oneHot: Record<string, unknown> = { ...row };
-      codes.forEach((c) => {
-        oneHot[`Human_${c}`] = humanCodes.includes(c) ? 1 : 0;
-        oneHot[`ai_${c}`] = ai?.confidence?.[c] ? +(ai.confidence[c] / 100).toFixed(4) : 0;
-      });
-      return oneHot;
-    }
-    // withAI — compare human codes against only the top AI code
-    const aiCodes = ai?.codes ?? [];
-    const topAiCode = aiCodes.length > 0 ? aiCodes[0] : "";
-    const agree = humanCodes.length > 0 && topAiCode
-      ? humanCodes.includes(topAiCode)
-      : false;
-    return {
-      ...row,
-      human_codes: humanCodes.join("; "),
-      ai_codes: topAiCode,
-      ai_probabilities: ai?.confidence
-        ? "{" + Object.entries(ai.confidence).sort(([,a],[,b]) => b - a).map(([k,v]) => `${k}(${Math.round(v)}%)`).join(",") + "}"
-        : "",
-      agreement: String(agree),
-    };
-  });
-
-  const headers = Object.keys(rows[0] ?? {});
-  const csvLines = [
-    headers.map((h) => `"${h}"`).join(","),
-    ...rows.map((r) =>
-      headers.map((h) => `"${String(r[h] ?? "").replace(/"/g, '""')}"`).join(",")
-    ),
-  ];
-  const blob = new Blob(["\uFEFF" + csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  const base = (dataName || "data").replace(/\.[^.]+$/, "");
-  a.download = `${base}_${mode}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 // ─── Build export row arrays ─────────────────────────────────────────────────
 function buildExportRows(
   data: Row[],
@@ -454,14 +397,10 @@ export default function AICoderPage() {
   const [codingData, setCodingData] = useState<Record<number, string[]>>({});
   const [aiData, setAiData] = useState<Record<number, AISuggestion>>({});
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [showBatch, setShowBatch] = useState(false);
   const [settings, setSettings] = useState<AICSettings>(DEFAULT_SETTINGS);
 
   // Batch processing state
-  const [batchProcessing, setBatchProcessing] = useState(false);
-  const [batchProgress, setBatchProgress] = useState({ completed: 0, total: 0 });
   const [batchConcurrency, setBatchConcurrency] = useState(3);
-  const batchAbortRef = useRef(false);
 
   // Sessions
   const [sessions, setSessions] = useState<AICSession[]>([]);
@@ -480,10 +419,12 @@ export default function AICoderPage() {
 
   // ── Derived values ─────────────────────────────────────────────────────────
   const codes = codebook.filter((e) => e.code.trim()).map((e) => e.code);
-  const highlightsMap: Record<string, string> = {};
-  codebook.forEach((e) => { if (e.highlights) highlightsMap[e.code] = e.highlights; });
+  const highlightsMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    codebook.forEach((e) => { if (e.highlights) map[e.code] = e.highlights; });
+    return map;
+  }, [codebook]);
   const totalRows = data.length;
-  const currentRow = data[currentIndex];
   const appliedCodes = codingData[currentIndex] || [];
   const currentSuggestion = aiData[currentIndex];
   const codedCount = Object.keys(codingData).filter((k) => (codingData[+k] || []).length > 0).length;
@@ -579,6 +520,16 @@ export default function AICoderPage() {
 
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("ai-coder");
+  useEffect(() => {
+    if (!restored) return;
+    setData(restored.data);
+    setDataName(restored.dataName);
+    setSystemPrompt(restored.systemPrompt);
+    toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+  }, [restored, setSystemPrompt]);
+
   // ── Autosave ────────────────────────────────────────────────────────────
   const doAutosave = useCallback(() => {
     if (data.length === 0) return;
@@ -660,91 +611,63 @@ export default function AICoderPage() {
     }
   }, [currentIndex, provider, codes, data, selectedCols, aiInstructions, systemSettings.temperature]);
 
-  // ── Batch AI processing ─────────────────────────────────────────────────
-  const runBatch = useCallback(async () => {
-    if (!provider) { toast.error("No model configured"); return; }
-    if (data.length === 0) { toast.error("No data loaded"); return; }
-    if (codes.length === 0) { toast.error("Define at least one code"); return; }
+  // ── Batch AI processing (via useBatchProcessor) ────────────────────────
+  const batch = useBatchProcessor({
+    toolId: "/ai-coder",
+    runType: "ai-coder",
+    activeModel: provider,
+    systemSettings,
+    data,
+    dataName,
+    systemPrompt: aiInstructions,
+    concurrency: batchConcurrency,
+    validate: () => {
+      if (codes.length === 0) return "Define at least one code";
+      return null;
+    },
+    processRow: async (row: Row) => {
+      const subset: Row = {};
+      if (selectedCols.length > 0) {
+        selectedCols.forEach((col) => (subset[col] = row[col]));
+      } else {
+        Object.assign(subset, row);
+      }
 
-    batchAbortRef.current = false;
-    setBatchProcessing(true);
-    setBatchProgress({ completed: 0, total: data.length });
+      const result = await dispatchProcessRow({
+        provider: provider!.providerId,
+        model: provider!.defaultModel,
+        apiKey: provider!.apiKey || "",
+        baseUrl: provider!.baseUrl,
+        systemPrompt: aiInstructions,
+        userContent: JSON.stringify(subset),
+        temperature: systemSettings.temperature,
+      });
 
-    const runId = await dispatchCreateRun({
-      runType: "ai-coder",
-      provider: provider.providerId,
-      model: provider.defaultModel,
-      temperature: systemSettings.temperature,
-      systemPrompt: aiInstructions,
-      inputFile: dataName || "unnamed",
-      inputRows: data.length,
-    });
-
-    const limit = pLimit(batchConcurrency);
-    const batchResults: Row[] = [...data];
-    const newAiData: Record<number, AISuggestion> = {};
-
-    const tasks = data.map((row, idx) =>
-      limit(async () => {
-        if (batchAbortRef.current) return;
-        try {
-          const subset: Row = {};
-          if (selectedCols.length > 0) {
-            selectedCols.forEach((col) => (subset[col] = row[col]));
-          } else {
-            Object.assign(subset, row);
-          }
-
-          const result = await dispatchProcessRow({
-            provider: provider.providerId,
-            model: provider.defaultModel,
-            apiKey: provider.apiKey || "",
-            baseUrl: provider.baseUrl,
-            systemPrompt: aiInstructions,
-            userContent: JSON.stringify(subset),
-            temperature: systemSettings.temperature,
-          });
-
-          const output = result.output.trim();
-          const { codes: parsedCodes, confidence } = parseAIResponse(output, codes);
+      const output = result.output.trim();
+      return { ...row, ai_codes: output, status: "success", latency_ms: result.latency };
+    },
+    buildResultEntry: (r: Row, i: number) => ({
+      rowIndex: i,
+      input: r as Record<string, unknown>,
+      output: (r.ai_codes as string) ?? "",
+      status: (r.status as string) ?? "success",
+      latency: r.latency_ms as number | undefined,
+      errorMessage: r.error_msg as string | undefined,
+    }),
+    onComplete: (results: Row[]) => {
+      const newAiData: Record<number, AISuggestion> = {};
+      results.forEach((r, idx) => {
+        if (r.status === "success" && r.ai_codes) {
+          const { codes: parsedCodes, confidence } = parseAIResponse(String(r.ai_codes), codes);
           newAiData[idx] = { codes: parsedCodes, confidence, reasoning: undefined };
-          batchResults[idx] = { ...row, ai_codes: output, status: "success", latency_ms: result.latency };
-        } catch (err) {
-          batchResults[idx] = { ...row, status: "error", error_msg: String(err) };
         }
-        setBatchProgress((prev) => ({ ...prev, completed: prev.completed + 1 }));
-      })
-    );
-
-    await Promise.all(tasks);
-
-    // Save results to history
-    if (runId) {
-      const resultEntries: ResultEntry[] = batchResults.map((r, i) => ({
-        rowIndex: i,
-        input: r as Record<string, unknown>,
-        output: (r.ai_codes as string) ?? "",
-        status: (r.status as string) ?? "success",
-        latency: r.latency_ms as number | undefined,
-        errorMessage: r.error_msg as string | undefined,
-      }));
-      await dispatchSaveResults(runId, resultEntries);
-    }
-
-    const scrollY = window.scrollY;
-    setAiData((prev) => ({ ...prev, ...newAiData }));
-    setBatchProcessing(false);
-    requestAnimationFrame(() => window.scrollTo(0, scrollY));
-
-    const errorCount = batchResults.filter((r) => r.status === "error").length;
-    if (errorCount > 0) {
-      toast.warning(`Batch done — ${errorCount} errors`);
-    } else {
-      toast.success(`AI suggestions ready for ${Object.keys(newAiData).length}/${data.length} rows`);
-    }
-
-    doAutosave();
-  }, [provider, data, codes, selectedCols, aiInstructions, systemSettings.temperature, batchConcurrency, dataName, doAutosave]);
+      });
+      const scrollY = window.scrollY;
+      setAiData((prev) => ({ ...prev, ...newAiData }));
+      requestAnimationFrame(() => window.scrollTo(0, scrollY));
+      doAutosave();
+    },
+  });
 
   // ── Get row HTML with highlighting ──────────────────────────────────────
   const getRowHtml = useCallback((row: Row, _rowIdx: number, isCurrent: boolean) => {
@@ -822,32 +745,59 @@ export default function AICoderPage() {
   const deleteCode = (id: string) =>
     setCodebook((prev) => prev.filter((e) => e.id !== id));
 
-  const importCodebookCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const importCodebook = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length < 2) { toast.error("CSV must have a header row and at least one data row"); return; }
-      const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
-      const codeIdx = headers.indexOf("code");
-      const descIdx = headers.indexOf("description");
-      const hlIdx = headers.indexOf("highlights");
-      if (codeIdx === -1) { toast.error("CSV must have a 'code' column"); return; }
-      const entries: CodeEntry[] = lines.slice(1).map((line) => {
-        const cols = parseCSVLine(line);
+
+    const buildEntries = (rows: Record<string, string>[]) => {
+      const entries: CodeEntry[] = rows.map((row) => {
+        const lowerRow: Record<string, string> = {};
+        Object.entries(row).forEach(([k, v]) => { lowerRow[k.trim().toLowerCase()] = String(v ?? "").trim(); });
+        if (!lowerRow.code) return null;
         return {
           id: crypto.randomUUID(),
-          code: (cols[codeIdx] ?? "").trim(),
-          description: descIdx !== -1 ? (cols[descIdx] ?? "").trim() : "",
-          highlights: hlIdx !== -1 ? (cols[hlIdx] ?? "").trim() : "",
+          code: lowerRow.code,
+          description: lowerRow.description ?? "",
+          highlights: lowerRow.highlights ?? "",
         };
-      }).filter((entry) => entry.code.length > 0);
+      }).filter((x): x is CodeEntry => x !== null && x.code.length > 0);
+      if (entries.length === 0) { toast.error("No valid codes found (need a 'code' column)"); return; }
       setCodebook(entries);
       toast.success(`Imported ${entries.length} codes`);
     };
-    reader.readAsText(file);
+
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    if (ext === "xlsx" || ext === "xls") {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const wb = XLSX.read(new Uint8Array(ev.target?.result as ArrayBuffer), { type: "array" });
+        const rows = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets[wb.SheetNames[0]]);
+        buildEntries(rows);
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target?.result as string;
+        const lines = text.split(/\r?\n/).filter(Boolean);
+        if (lines.length < 2) { toast.error("File must have a header row and at least one data row"); return; }
+        const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
+        const codeIdx = headers.indexOf("code");
+        const descIdx = headers.indexOf("description");
+        const hlIdx = headers.indexOf("highlights");
+        if (codeIdx === -1) { toast.error("File must have a 'code' column"); return; }
+        const rows = lines.slice(1).map((line) => {
+          const cols = parseCSVLine(line);
+          const row: Record<string, string> = {};
+          if (codeIdx !== -1) row.code = cols[codeIdx] ?? "";
+          if (descIdx !== -1) row.description = cols[descIdx] ?? "";
+          if (hlIdx !== -1) row.highlights = cols[hlIdx] ?? "";
+          return row;
+        });
+        buildEntries(rows);
+      };
+      reader.readAsText(file);
+    }
     e.target.value = "";
   };
 
@@ -910,7 +860,7 @@ export default function AICoderPage() {
   const ctxText = settings.lightMode ? "#555" : "#bbb";
 
   // ── Batch progress percentage ───────────────────────────────────────────
-  const batchPct = batchProgress.total > 0 ? Math.round((batchProgress.completed / batchProgress.total) * 100) : 0;
+  const batchPct = batch.progressPct;
 
   // ── Render ──────────────────────────────────────────────────────────────
   if (!isMounted) return null;
@@ -973,9 +923,9 @@ export default function AICoderPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <input ref={csvImportRef} type="file" accept=".csv,text/csv" className="hidden" onChange={importCodebookCSV} />
+            <input ref={csvImportRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={importCodebook} />
             <Button variant="outline" size="sm" onClick={() => csvImportRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" />Import CSV
+              <Upload className="h-3.5 w-3.5 mr-1.5" />Import
             </Button>
             <Button variant="outline" size="sm" disabled={codebook.length === 0} onClick={exportCodebookCSV}>
               <Upload className="h-3.5 w-3.5 mr-1.5" />Export CSV
@@ -1013,9 +963,9 @@ export default function AICoderPage() {
               ) : (
                 codebook.map((entry) => (
                   <tr key={entry.id} className="border-b last:border-0 hover:bg-muted/10 transition-colors">
-                    <td className="px-2 py-1.5"><Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="h-7 text-sm font-medium border-0 shadow-none bg-transparent focus-visible:ring-1 px-1" /></td>
-                    <td className="px-2 py-1.5"><Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="What this code means…" className="h-7 text-sm border-0 shadow-none bg-transparent focus-visible:ring-1 px-1" /></td>
-                    <td className="px-2 py-1.5"><Input value={entry.highlights} onChange={(e) => updateCode(entry.id, "highlights", e.target.value)} placeholder="word1, word2, phrase…" className="h-7 text-sm border-0 shadow-none bg-transparent focus-visible:ring-1 px-1" /></td>
+                    <td className="px-2 py-1.5"><Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="h-7 text-sm font-medium px-2" /></td>
+                    <td className="px-2 py-1.5"><Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="What this code means…" className="h-7 text-sm px-2" /></td>
+                    <td className="px-2 py-1.5"><Input value={entry.highlights} onChange={(e) => updateCode(entry.id, "highlights", e.target.value)} placeholder="word1, word2, phrase…" className="h-7 text-sm px-2" /></td>
                     <td className="px-2 py-1.5 text-center">
                       <button onClick={() => deleteCode(entry.id)} className="text-muted-foreground hover:text-destructive transition-colors p-0.5" aria-label="Delete code">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1057,69 +1007,59 @@ export default function AICoderPage() {
           <p className="text-sm text-muted-foreground italic">Define at least one code in Section 3 to begin.</p>
         ) : (
           <>
-            {/* ── Batch Processing (collapsible) ─────────────────────────── */}
-            <div className="border rounded-lg overflow-hidden">
-              <button
-                className="w-full px-4 py-3 text-left text-sm font-medium flex items-center justify-between bg-muted/20 hover:bg-muted/30 transition-colors"
-                onClick={() => setShowBatch(!showBatch)}
-              >
-                <span>AI Batch Processing</span>
-                <span className="text-xs text-muted-foreground">{showBatch ? "▲" : "▼"}</span>
-              </button>
-              {showBatch && (
-                <div className="p-4 space-y-3 border-t">
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">Concurrency:</span>
-                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setBatchConcurrency((c) => Math.max(1, c - 1))}>−</Button>
-                      <span className="text-sm font-mono w-6 text-center">{batchConcurrency}</span>
-                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setBatchConcurrency((c) => Math.min(20, c + 1))}>+</Button>
-                    </div>
-                    {provider && (
-                      <span className="text-xs text-muted-foreground">
-                        Model: <span className="text-foreground">{provider.defaultModel}</span>
-                      </span>
-                    )}
-                    {!batchProcessing && (
-                      <Button
-                        onClick={runBatch}
-                        disabled={!provider || batchProcessing}
-                        size="sm"
-                        className="ml-auto bg-orange-500 hover:bg-orange-600 text-white"
-                      >
-                        Run AI Batch ({data.length} rows)
-                      </Button>
-                    )}
-                  </div>
-                  {batchProcessing && (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="flex items-center gap-1.5">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          Processing {batchProgress.total} rows...
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <span>{batchProgress.completed} / {batchProgress.total}</span>
-                          <Button
-                            size="sm" variant="outline"
-                            className="h-6 px-2 text-[11px] border-red-300 text-red-600"
-                            onClick={() => { batchAbortRef.current = true; }}
-                          >
-                            Stop
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
-                        <div className="bg-orange-500 h-full transition-all duration-300" style={{ width: `${batchPct}%` }} />
-                      </div>
-                    </div>
-                  )}
-                  {!batchProcessing && aiCount > 0 && (
-                    <p className="text-xs text-green-600">
-                      ✓ AI suggestions ready for {aiCount}/{data.length} rows
-                    </p>
-                  )}
+            {/* ── Batch Processing ─────────────────────────────────────── */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-4 flex-wrap">
+                <span className="text-sm font-medium">AI Batch Processing</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Concurrency:</span>
+                  <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setBatchConcurrency((c) => Math.max(1, c - 1))}>−</Button>
+                  <span className="text-sm font-mono w-6 text-center">{batchConcurrency}</span>
+                  <Button size="sm" variant="outline" className="h-7 w-7 p-0" onClick={() => setBatchConcurrency((c) => Math.min(20, c + 1))}>+</Button>
                 </div>
+                {provider && (
+                  <span className="text-xs text-muted-foreground">
+                    Model: <span className="text-foreground">{provider.defaultModel}</span>
+                  </span>
+                )}
+                {!batch.isProcessing && (
+                  <Button
+                    onClick={() => batch.run("full")}
+                    disabled={!provider || batch.isProcessing}
+                    size="sm"
+                    className="ml-auto bg-orange-500 hover:bg-orange-600 text-white"
+                  >
+                    Run AI Batch ({data.length} rows)
+                  </Button>
+                )}
+              </div>
+              {batch.isProcessing && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Processing {batch.progress.total} rows...
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span>{batch.progress.completed} / {batch.progress.total}{batch.etaStr ? ` — ${batch.etaStr}` : ""}</span>
+                      <Button
+                        size="sm" variant="outline"
+                        className="h-6 px-2 text-[11px] border-red-300 text-red-600"
+                        onClick={batch.abort}
+                      >
+                        Stop
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
+                    <div className="bg-orange-500 h-full transition-all duration-300" style={{ width: `${batchPct}%` }} />
+                  </div>
+                </div>
+              )}
+              {!batch.isProcessing && aiCount > 0 && (
+                <p className="text-xs text-green-600">
+                  AI suggestions ready for {aiCount}/{data.length} rows
+                </p>
               )}
             </div>
 

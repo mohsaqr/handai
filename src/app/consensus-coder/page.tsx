@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -8,39 +8,41 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { useAppStore } from "@/lib/store";
 import { useSystemSettings } from "@/lib/hooks";
-import { Loader2, HelpCircle, ExternalLink, Plus, X } from "lucide-react";
+import { useBatchProcessor } from "@/hooks/useBatchProcessor";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
+import { useProcessingStore } from "@/lib/processing-store";
+import { HelpCircle, Plus, X } from "lucide-react";
 import { toast } from "sonner";
-import pLimit from "p-limit";
-import Link from "next/link";
-import type { Row } from "@/types";
-import { dispatchCreateRun, dispatchSaveResults, dispatchConsensusRow } from "@/lib/llm-dispatch";
+import { dispatchConsensusRow } from "@/lib/llm-dispatch";
 import { UploadPreview } from "@/components/tools/UploadPreview";
 import { ColumnSelector } from "@/components/tools/ColumnSelector";
 import { useColumnSelection } from "@/hooks/useColumnSelection";
-import { DataTable, ExportDropdown } from "@/components/tools/DataTable";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
+import { ExecutionPanel } from "@/components/tools/ExecutionPanel";
+import { ResultsPanel } from "@/components/tools/ResultsPanel";
 
-type RunMode = "preview" | "test" | "full";
+type Row = Record<string, unknown>;
 
-const DEFAULT_WORKER_PROMPT = `Apply the given instructions to the data. Return ONLY the direct answer — nothing else.
+const DEFAULT_WORKER_PROMPT = `You are an independent coder in an inter-rater reliability study. Code this text based on the instructions.
 
-STRICT RULES:
-- Output ONLY the answer to the instruction. No notes, no explanations, no reasoning, no commentary, no caveats.
-- Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks.
-- Do NOT add headers, labels, introductions, or sign-offs.
-- Do NOT prefix with "Answer:", "Result:", "Note:", or any label.
-- Do NOT add extra sentences, context, or qualifications.
-- If the instruction asks for a single value, return that value and NOTHING else.`;
+CODING RULES:
+- Apply the codes the text genuinely speaks to — multi-coding is appropriate when multiple themes are present.
+- Consider both explicit statements and implied meaning.
+- Be consistent: apply the same standard to every text segment.
+- Output ONLY the codes or values requested. No explanations, no commentary.
+- Plain text only. No markdown, no headings, no code fences.`;
 
-const DEFAULT_JUDGE_PROMPT = `Synthesize worker responses into one best answer.
+const DEFAULT_JUDGE_PROMPT = `You are a senior researcher adjudicating between independent coders.
 
-RULES:
-- Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks
-- Do NOT add headers or labels
-- Pick the most accurate values and output them directly
-- You may add a brief reason for your choice, but keep it to one short sentence maximum`;
+PROCEDURE:
+1. Identify codes where all workers agree — accept these.
+2. For disagreements, re-read the original text and evaluate against the codebook.
+3. Favor inclusion when evidence is ambiguous but present.
+4. Produce the final consolidated answer.
+
+OUTPUT: Plain text only. No markdown, no code fences. You may add one sentence explaining a key decision.`;
 
 const SAMPLE_JUDGE_PROMPTS: Record<string, string> = {
   "Strict consensus": `Only accept a result if ALL workers agree. If any worker disagrees, flag the row as "DISAGREEMENT" and do not pick a winner.\n\nRULES:\n- Plain text only, no markdown\n- Output the agreed answer, or "DISAGREEMENT" if workers differ\n- Do NOT add headers or labels`,
@@ -110,14 +112,7 @@ export default function ConsensusCoderPage() {
   const [dataName, setDataName] = useState("");
   const [workerPrompt, setWorkerPrompt] = useState("");
   const [judgePrompt, setJudgePrompt] = useState("");
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [runMode, setRunMode] = useState<RunMode>("full");
-  const [runId, setRunId] = useState<string | null>(null);
-  const [progress, setProgress] = useState({ completed: 0, total: 0, success: 0, errors: 0 });
-  const [results, setResults] = useState<Row[]>([]);
   const [kappaStats, setKappaStats] = useState<KappaStats | null>(null);
-  const abortRef = useRef(false);
-  const startedAtRef = useRef<number>(0);
 
   const [extraWorkers, setExtraWorkers] = useState<WorkerConfig[]>([]);
   const [includeJudgeReasoning, setIncludeJudgeReasoning] = useState(true);
@@ -177,10 +172,151 @@ export default function ConsensusCoderPage() {
 
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
+  // Build a pseudo activeModel from the judge config for useBatchProcessor
+  const judgeProvider = providers[judge.providerId];
+  const activeModel = judgeProvider ? {
+    ...judgeProvider,
+    providerId: judge.providerId,
+    defaultModel: judge.model,
+  } : null;
+
+  const batch = useBatchProcessor({
+    toolId: "/consensus-coder",
+    runType: "consensus-coder",
+    activeModel,
+    systemSettings,
+    data,
+    dataName,
+    systemPrompt: aiInstructions,
+    validate: () => {
+      if (selectedCols.length === 0) return "Select at least one column";
+      const p1 = providers[worker1.providerId];
+      const p2 = providers[worker2.providerId];
+      const pJ = providers[judge.providerId];
+      if (!p1 || !p2 || !pJ) return "Invalid provider selection";
+      if ((!p1.isLocal && !p1.apiKey) || (!p2.isLocal && !p2.apiKey) || (!pJ.isLocal && !pJ.apiKey)) {
+        return "API keys missing. Check Settings.";
+      }
+      for (let i = 0; i < extraWorkers.length; i++) {
+        const ep = providers[extraWorkers[i].providerId];
+        if (!ep) return `Invalid Worker ${i + 3} provider`;
+        if (!ep.isLocal && !ep.apiKey) return `API key missing for Worker ${i + 3}. Check Settings.`;
+      }
+      return null;
+    },
+    runParams: {
+      provider: judge.providerId,
+      model: judge.model,
+      temperature: systemSettings.temperature,
+    },
+    processRow: async (row: Row, idx: number) => {
+      const p1 = providers[worker1.providerId];
+      const p2 = providers[worker2.providerId];
+      const pJ = providers[judge.providerId];
+
+      const workers = [
+        { provider: worker1.providerId, model: worker1.model, apiKey: p1?.apiKey || "local", baseUrl: p1?.baseUrl },
+        { provider: worker2.providerId, model: worker2.model, apiKey: p2?.apiKey || "local", baseUrl: p2?.baseUrl },
+        ...extraWorkers.map((ew) => {
+          const ep = providers[ew.providerId];
+          return { provider: ew.providerId, model: ew.model, apiKey: ep?.apiKey || "local", baseUrl: ep?.baseUrl };
+        }),
+      ];
+
+      const subset: Row = {};
+      selectedCols.forEach((col) => (subset[col] = row[col]));
+
+      const result = await dispatchConsensusRow({
+        workers: workers.map((w) => ({ provider: w.provider, model: w.model, apiKey: w.apiKey || "", baseUrl: w.baseUrl })),
+        judge: { provider: judge.providerId, model: judge.model, apiKey: pJ?.apiKey || "", baseUrl: pJ?.baseUrl },
+        workerPrompt: workerPrompt.trim() || DEFAULT_WORKER_PROMPT,
+        judgePrompt: judgePrompt.trim() || DEFAULT_JUDGE_PROMPT,
+        userContent: JSON.stringify(subset),
+        enableQualityScoring,
+        enableDisagreementAnalysis,
+        includeReasoning: includeJudgeReasoning,
+        rowIdx: idx,
+      });
+
+      const workerCols: Record<string, string> = {};
+      result.workerResults?.forEach((wr: { output: string }, i: number) => {
+        workerCols[`worker_${i + 1}_output`] = wr?.output ?? "";
+      });
+
+      const qualityCols: Record<string, string> = {};
+      if (result.qualityScores) {
+        (result.qualityScores as number[]).forEach((score, i) => {
+          qualityCols[`quality_score_w${i + 1}`] = String(score);
+        });
+      }
+
+      return {
+        ...row,
+        ...workerCols,
+        judge_best_answer: result.judgeOutput,
+        consensus: result.consensusType,
+        kappa: result.kappa !== null ? Number(result.kappa).toFixed(3) : "N/A",
+        ...(includeJudgeReasoning && result.judgeReasoning ? { judge_reasoning: result.judgeReasoning } : {}),
+        ...qualityCols,
+        ...(result.disagreementReason ? { disagreement_reason: result.disagreementReason } : {}),
+        status: "success",
+      };
+    },
+    buildResultEntry: (r: Row, i: number) => ({
+      rowIndex: i,
+      input: r as Record<string, unknown>,
+      output: (r.judge_best_answer ?? "") as string,
+      status: (r.consensus === "Error" ? "error" : "success") as string,
+      errorMessage: r.error_msg as string | undefined,
+    }),
+    onComplete: (results: Row[]) => {
+      // Extract kappa from the last successfully processed row
+      let lastKappa: number | null = null;
+      let lastKappaLabel = "";
+      for (let i = results.length - 1; i >= 0; i--) {
+        const row = results[i];
+        if (row.kappa !== undefined && row.kappa !== "N/A" && row.status !== "error") {
+          lastKappa = parseFloat(row.kappa as string);
+          // Derive label from kappa value
+          if (lastKappa < 0) lastKappaLabel = "Less than chance";
+          else if (lastKappa < 0.21) lastKappaLabel = "Slight";
+          else if (lastKappa < 0.41) lastKappaLabel = "Fair";
+          else if (lastKappa < 0.61) lastKappaLabel = "Moderate";
+          else if (lastKappa < 0.81) lastKappaLabel = "Substantial";
+          else lastKappaLabel = "Almost perfect";
+          break;
+        }
+      }
+      if (lastKappa !== null) {
+        setKappaStats({ kappa: lastKappa, kappaLabel: lastKappaLabel });
+      }
+    },
+  });
+
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("consensus-coder");
+  React.useEffect(() => {
+    if (!restored) return;
+    queueMicrotask(() => {
+      setData(restored.data as Row[]);
+      setDataName(restored.dataName);
+      setWorkerPrompt(restored.systemPrompt);
+      // Populate results in global processing store
+      const errors = restored.results.filter((r) => r.status === "error").length;
+      useProcessingStore.getState().completeJob(
+        "/consensus-coder",
+        restored.results as Row[],
+        { success: restored.results.length - errors, errors, avgLatency: 0 },
+        restored.runId,
+      );
+      toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+    });
+  }, [restored]);
+
   const handleDataLoaded = (newData: Row[], name: string) => {
     setData(newData);
     setDataName(name);
-    setResults([]);
+    batch.clearResults();
     setKappaStats(null);
     toast.success(`Loaded ${newData.length} rows from ${name}`);
   };
@@ -189,157 +325,6 @@ export default function ConsensusCoderPage() {
     const ds = SAMPLE_DATASETS[key];
     if (ds) handleDataLoaded(ds.data as Row[], ds.name);
   };
-
-  const startProcessing = async (mode: RunMode) => {
-    if (data.length === 0) return toast.error("No data loaded");
-    if (selectedCols.length === 0) return toast.error("Select at least one column");
-
-    const p1 = providers[worker1.providerId];
-    const p2 = providers[worker2.providerId];
-    const pJ = providers[judge.providerId];
-
-    if (!p1 || !p2 || !pJ) return toast.error("Invalid provider selection");
-    for (let i = 0; i < extraWorkers.length; i++) {
-      const ep = providers[extraWorkers[i].providerId];
-      if (!ep) return toast.error(`Invalid Worker ${i + 3} provider`);
-      if (!ep.isLocal && !ep.apiKey) return toast.error(`API key missing for Worker ${i + 3}. Check Settings.`);
-    }
-    if (
-      (!p1.isLocal && !p1.apiKey) ||
-      (!p2.isLocal && !p2.apiKey) ||
-      (!pJ.isLocal && !pJ.apiKey)
-    ) {
-      return toast.error("API keys missing. Check Settings.");
-    }
-
-    const targetData =
-      mode === "preview" ? data.slice(0, 3) :
-      mode === "test"    ? data.slice(0, 10) :
-      data;
-
-    abortRef.current = false;
-    startedAtRef.current = Date.now();
-    setRunId(null);
-    setIsProcessing(true);
-    setRunMode(mode);
-    setProgress({ completed: 0, total: targetData.length, success: 0, errors: 0 });
-    setResults([]);
-    setKappaStats(null);
-
-    const localRunId = await dispatchCreateRun({
-      runType: "consensus-coder",
-      provider: judge.providerId,
-      model: judge.model,
-      temperature: systemSettings.temperature,
-      systemPrompt: aiInstructions,
-      inputFile: dataName || "unnamed",
-      inputRows: targetData.length,
-    });
-
-    const limit = pLimit(systemSettings.maxConcurrency);
-    const newResults: Row[] = [...targetData];
-    let runningKappa: number | null = null;
-    let runningKappaLabel = "";
-
-    const workers = [
-      { provider: worker1.providerId, model: worker1.model, apiKey: p1.apiKey || "local", baseUrl: p1.baseUrl },
-      { provider: worker2.providerId, model: worker2.model, apiKey: p2.apiKey || "local", baseUrl: p2.baseUrl },
-      ...extraWorkers.map((ew) => {
-        const ep = providers[ew.providerId];
-        return { provider: ew.providerId, model: ew.model, apiKey: ep?.apiKey || "local", baseUrl: ep?.baseUrl };
-      }),
-    ];
-
-    const tasks = targetData.map((row, idx) =>
-      limit(async () => {
-        if (abortRef.current) return;
-        try {
-          const subset: Row = {};
-          selectedCols.forEach((col) => (subset[col] = row[col]));
-
-          const result = await dispatchConsensusRow({
-            workers: workers.map((w) => ({ provider: w.provider, model: w.model, apiKey: w.apiKey || "", baseUrl: w.baseUrl })),
-            judge: { provider: judge.providerId, model: judge.model, apiKey: pJ.apiKey || "", baseUrl: pJ.baseUrl },
-            workerPrompt: workerPrompt.trim() || DEFAULT_WORKER_PROMPT,
-            judgePrompt: judgePrompt.trim() || DEFAULT_JUDGE_PROMPT,
-            userContent: JSON.stringify(subset),
-            enableQualityScoring,
-            enableDisagreementAnalysis,
-            includeReasoning: includeJudgeReasoning,
-            rowIdx: idx,
-          });
-
-          if (result.kappa !== null && result.kappa !== undefined) {
-            runningKappa = result.kappa;
-            runningKappaLabel = result.kappaLabel;
-          }
-
-          const workerCols: Record<string, string> = {};
-          result.workerResults?.forEach((wr: { output: string }, i: number) => {
-            workerCols[`worker_${i + 1}_output`] = wr?.output ?? "";
-          });
-
-          const qualityCols: Record<string, string> = {};
-          if (result.qualityScores) {
-            (result.qualityScores as number[]).forEach((score, i) => {
-              qualityCols[`quality_score_w${i + 1}`] = String(score);
-            });
-          }
-
-          newResults[idx] = {
-            ...row,
-            ...workerCols,
-            judge_best_answer: result.judgeOutput,
-            consensus: result.consensusType,
-            kappa: result.kappa !== null ? Number(result.kappa).toFixed(3) : "N/A",
-            ...(includeJudgeReasoning && result.judgeReasoning ? { judge_reasoning: result.judgeReasoning } : {}),
-            ...qualityCols,
-            ...(result.disagreementReason ? { disagreement_reason: result.disagreementReason } : {}),
-          };
-
-          setProgress((prev) => ({ ...prev, completed: prev.completed + 1, success: prev.success + 1 }));
-        } catch (err) {
-          console.error(err);
-          newResults[idx] = {
-            ...row,
-            judge_best_answer: "ERROR",
-            consensus: "Error",
-            kappa: "N/A",
-            error_msg: err instanceof Error ? err.message : String(err),
-          };
-          setProgress((prev) => ({ ...prev, completed: prev.completed + 1, errors: prev.errors + 1 }));
-        }
-      })
-    );
-
-    await Promise.all(tasks);
-    setResults(newResults);
-
-    // Save results to history
-    if (localRunId) {
-      const resultRows = newResults.map((r, i) => ({
-        rowIndex: i,
-        input: r as Record<string, unknown>,
-        output: (r.judge_best_answer ?? "") as string,
-        status: (r.consensus === "Error" ? "error" : "success") as string,
-        errorMessage: r.error_msg as string | undefined,
-      }));
-      await dispatchSaveResults(localRunId, resultRows);
-    }
-
-    setRunId(localRunId);
-    if (runningKappa !== null) {
-      setKappaStats({ kappa: runningKappa, kappaLabel: runningKappaLabel });
-    }
-    setIsProcessing(false);
-    toast.success(
-      mode === "preview" ? "Preview complete!" :
-      mode === "test" ? "Test run complete!" :
-      "Consensus processing complete!"
-    );
-  };
-
-  const progressPct = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
 
   return (
     <div className="space-y-0 pb-16">
@@ -441,13 +426,13 @@ export default function ConsensusCoderPage() {
         <div className="grid grid-cols-2 gap-6">
           <div className="space-y-2">
             <div className="flex items-center justify-between h-7">
-              <Label className="text-sm">🔧 Worker Instructions</Label>
+              <Label className="text-sm">Worker Instructions</Label>
             </div>
             <Textarea value={workerPrompt} onChange={(e) => setWorkerPrompt(e.target.value)} className="min-h-[200px] text-xs font-mono resize-y" />
           </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between h-7">
-              <Label className="text-sm">⚖️ Judge Instructions</Label>
+              <Label className="text-sm">Judge Instructions</Label>
               <Select onValueChange={(key) => { if (SAMPLE_JUDGE_PROMPTS[key]) setJudgePrompt(SAMPLE_JUDGE_PROMPTS[key]); }}>
                 <SelectTrigger className="w-[160px] h-7 text-xs">
                   <SelectValue placeholder="Load sample..." />
@@ -505,105 +490,53 @@ export default function ConsensusCoderPage() {
       {/* ── 6. Execute ────────────────────────────────────────────────────── */}
       <div className="space-y-4 py-8">
         <h2 className="text-2xl font-bold">6. Execute</h2>
-
-        {isProcessing && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {runMode === "preview" ? "Preview" : runMode === "test" ? "Test run" : "Full run"} — processing {progress.total} rows…
-                {startedAtRef.current > 0 && <span className="ml-1">{Math.round((Date.now() - startedAtRef.current) / 1000)}s elapsed</span>}
-              </span>
-              <div className="flex items-center gap-2">
-                <span>{progress.completed} / {progress.total}</span>
-                <Button variant="outline" size="sm" onClick={() => { abortRef.current = true; }}
-                  className="h-6 px-2 text-[11px] border-red-300 text-red-600 hover:bg-red-50">
-                  Stop
-                </Button>
-              </div>
-            </div>
-            <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
-              <div className="bg-purple-500 h-full transition-all duration-300" style={{ width: `${progressPct}%` }} />
-            </div>
-            <div className="flex gap-4 text-xs">
-              <span className="text-green-600">{progress.success} success</span>
-              <span className="text-red-500">{progress.errors} errors</span>
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Button variant="outline" size="lg" className="h-12 text-sm border-dashed"
-            disabled={data.length === 0 || isProcessing || selectedCols.length === 0}
-            onClick={() => startProcessing("preview")}>
-            {isProcessing && runMode === "preview" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Preview (3 rows)
-          </Button>
-          <Button size="lg" className="h-12 text-base bg-red-500 hover:bg-red-600 text-white"
-            disabled={data.length === 0 || isProcessing || selectedCols.length === 0}
-            onClick={() => startProcessing("test")}>
-            {isProcessing && runMode === "test" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Test (10 rows)
-          </Button>
-          <Button variant="outline" size="lg" className="h-12 text-base"
-            disabled={data.length === 0 || isProcessing || selectedCols.length === 0}
-            onClick={() => startProcessing("full")}>
-            {isProcessing && runMode === "full" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Full Run ({data.length} rows)
-          </Button>
-        </div>
+        <ExecutionPanel
+          isProcessing={batch.isProcessing}
+          runMode={batch.runMode}
+          progress={batch.progress}
+          etaStr={batch.etaStr}
+          dataCount={data.length}
+          disabled={data.length === 0 || selectedCols.length === 0}
+          onRun={batch.run}
+          onAbort={batch.abort}
+          onResume={batch.resume}
+          failedCount={batch.failedCount}
+          progressColor="bg-purple-500"
+        />
       </div>
 
       {/* ── Results ────────────────────────────────────────────────────────── */}
-      {results.length > 0 && (
-        <div className="space-y-4 border-t pt-6 pb-8">
-          <div className="flex items-center justify-between">
+      <ResultsPanel
+        results={batch.results}
+        runId={batch.runId}
+        runMode={batch.runMode}
+        totalDataCount={data.length}
+        title="Results"
+        subtitle={`${batch.results.length} rows coded`}
+      >
+        {kappaStats && (
+          <div className="flex items-center gap-8 px-5 py-4 rounded-lg border border-purple-200 bg-purple-50/30 dark:bg-purple-950/20">
             <div>
-              <h2 className="text-lg font-semibold">Results</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">{results.length} rows coded</p>
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wider font-medium">Cohen&apos;s Kappa</div>
+              <div className="text-3xl font-bold text-purple-600 mt-0.5">
+                {kappaStats.kappa !== null ? kappaStats.kappa.toFixed(3) : "N/A"}
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              {runId && (
-                <Link href={`/history/${runId}`} className="flex items-center gap-1.5 text-xs text-indigo-500 hover:underline">
-                  <ExternalLink className="h-3 w-3" />
-                  View in History
-                </Link>
-              )}
+            <div>
+              <div className="text-[11px] text-muted-foreground uppercase tracking-wider font-medium">Agreement Level</div>
+              <div className="text-base font-semibold mt-0.5">{kappaStats.kappaLabel}</div>
             </div>
+            <div className="flex-1 text-xs text-muted-foreground">
+              Kappa measures inter-rater agreement beyond chance. 0 = chance, 1 = perfect, &lt;0 = less than chance.
+            </div>
+            {batch.runMode !== "full" && batch.results.length > 0 && (
+              <span className="text-xs font-medium text-purple-600 border border-purple-200 px-2 py-0.5 rounded bg-purple-50 shrink-0">
+                {batch.runMode === "preview" ? "Preview" : "Test"} run · {batch.results.length} of {data.length} rows
+              </span>
+            )}
           </div>
-
-          {kappaStats && (
-            <div className="flex items-center gap-8 px-5 py-4 rounded-lg border border-purple-200 bg-purple-50/30 dark:bg-purple-950/20">
-              <div>
-                <div className="text-[11px] text-muted-foreground uppercase tracking-wider font-medium">Cohen&apos;s Kappa</div>
-                <div className="text-3xl font-bold text-purple-600 mt-0.5">
-                  {kappaStats.kappa !== null ? kappaStats.kappa.toFixed(3) : "N/A"}
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] text-muted-foreground uppercase tracking-wider font-medium">Agreement Level</div>
-                <div className="text-base font-semibold mt-0.5">{kappaStats.kappaLabel}</div>
-              </div>
-              <div className="flex-1 text-xs text-muted-foreground">
-                Kappa measures inter-rater agreement beyond chance. 0 = chance, 1 = perfect, &lt;0 = less than chance.
-              </div>
-              {runMode !== "full" && (
-                <span className="text-xs font-medium text-purple-600 border border-purple-200 px-2 py-0.5 rounded bg-purple-50 shrink-0">
-                  {runMode === "preview" ? "Preview" : "Test"} run · {results.length} of {data.length} rows
-                </span>
-              )}
-            </div>
-          )}
-
-          <div className="border rounded-lg overflow-hidden">
-            <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between">
-              <span>Results — {results.length} rows</span>
-              <ExportDropdown data={results} filename="consensus_results" />
-            </div>
-            <DataTable data={results} showAll />
-          </div>
-        </div>
-      )}
+        )}
+      </ResultsPanel>
     </div>
   );
 }

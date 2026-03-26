@@ -17,7 +17,7 @@ export function useColumnSelection(allColumns: string[], defaultSelectAll = true
   // Auto-select columns when they change (new data loaded)
   useEffect(() => {
     if (allColumns.length > 0) {
-      setSelectedCols(defaultSelectAll ? [...allColumns] : []);
+      queueMicrotask(() => setSelectedCols(defaultSelectAll ? [...allColumns] : []));
     }
   }, [allColumns.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
 

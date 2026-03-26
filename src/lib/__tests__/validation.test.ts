@@ -23,7 +23,8 @@ describe('ProcessRowSchema', () => {
   });
 
   it('defaults missing apiKey to empty string (local providers)', () => {
-    const { apiKey: _k, ...rest } = valid;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { apiKey: _apiKey, ...rest } = valid;
     const result = ProcessRowSchema.safeParse(rest);
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.apiKey).toBe("");
@@ -199,7 +200,8 @@ describe('ResultsBatchSchema', () => {
   });
 
   it('rejects missing runId', () => {
-    const { runId: _id, ...rest } = valid;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { runId: _runId, ...rest } = valid;
     expect(ResultsBatchSchema.safeParse(rest).success).toBe(false);
   });
 

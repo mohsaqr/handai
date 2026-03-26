@@ -30,7 +30,7 @@ export function UploadPreview({
   dataName,
   onDataLoaded,
   onSampleLoad,
-  maxPreviewRows = 5,
+  maxPreviewRows: _maxPreviewRows  = 5, // eslint-disable-line @typescript-eslint/no-unused-vars
   customSamplePicker,
   samplePickerPosition = "below",
   children,
@@ -66,13 +66,11 @@ export function UploadPreview({
             </span>
             {bannerExtra}
           </div>
-          <div className="border border-gray-300 overflow-hidden">
-            <div className="px-4 py-2.5 border-b border-gray-300 bg-gray-50 text-sm font-medium flex items-center justify-between">
-              <span>Data Preview — {data.length} rows</span>
-              <ExportDropdown data={data} filename="preview" />
-            </div>
-            <DataTable data={data} />
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-muted-foreground">Data Preview</span>
+            <ExportDropdown data={data} filename="preview" />
           </div>
+          <DataTable data={data} />
         </>
       )}
     </div>

@@ -1,7 +1,7 @@
 /**
- * Unified LLM dispatch layer — wraps all isTauri branching into single functions.
+ * Unified LLM dispatch layer — wraps static vs web branching into single functions.
  *
- * Each function handles Tauri (direct) vs Web (fetch) transparently.
+ * Each function handles static (browser-direct) vs web (fetch) transparently.
  * Error handling matches existing behavior:
  *   - dispatchCreateRun / dispatchSaveResults: never throw (log + return null/void)
  *   - dispatchProcessRow and others: throw on error (caller catches per-row)
@@ -17,22 +17,33 @@ import {
   documentAnalyzeDirect,
 } from "./llm-browser";
 import type { ConsensusResult } from "./llm-browser";
-import { createRun as tauriCreateRun, saveResults as tauriSaveResults } from "./db-tauri";
 import { createRun as idbCreateRun, saveResults as idbSaveResults } from "./db-indexeddb";
 import type { FieldDef } from "@/types";
 
 // ── Runtime detection ────────────────────────────────────────────────────────
 
-export const isTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-/** Static web build (GitHub Pages) — no server, no Tauri. Uses IndexedDB + browser-direct LLM. */
+/** Static web build (GitHub Pages) — no server. Uses IndexedDB + browser-direct LLM. */
 export const isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
 
-/** True when LLM calls should go through browser-direct path (Tauri or static). */
-const useBrowserDirect = isTauri || isStatic;
+/**
+ * True when the app should operate entirely in the browser:
+ * - LLM calls go directly from the browser to provider APIs (no server relay)
+ * - Run history is stored in IndexedDB (no server SQLite)
+ *
+ * Enabled for:
+ * - Static builds (NEXT_PUBLIC_STATIC=1, e.g. GitHub Pages)
+ * - Public server deployments (NEXT_PUBLIC_BROWSER_STORAGE=1)
+ *
+ * This ensures local models (LM Studio, Ollama) work from the user's machine,
+ * and API keys never leave the browser.
+ */
+export const useBrowserStorage =
+  isStatic || process.env.NEXT_PUBLIC_BROWSER_STORAGE === "1";
 
-// ── Result entry type (shared with db-tauri) ─────────────────────────────────
+/** True when LLM calls should go through browser-direct path. */
+const useBrowserDirect = useBrowserStorage;
+
+// ── Result entry type ────────────────────────────────────────────────────────
 
 export interface ResultEntry {
   rowIndex: number;
@@ -57,10 +68,7 @@ export async function dispatchCreateRun(params: {
   inputRows?: number;
 }): Promise<string | null> {
   try {
-    if (isTauri) {
-      const rd = await tauriCreateRun(params);
-      return rd.id ?? null;
-    } else if (isStatic) {
+    if (useBrowserStorage) {
       const rd = await idbCreateRun(params);
       return rd.id ?? null;
     } else {
@@ -89,9 +97,7 @@ export async function dispatchSaveResults(
   results: ResultEntry[]
 ): Promise<void> {
   try {
-    if (isTauri) {
-      await tauriSaveResults(runId, results);
-    } else if (isStatic) {
+    if (useBrowserStorage) {
       await idbSaveResults(runId, results);
     } else {
       await fetch("/api/results", {
@@ -286,29 +292,6 @@ export async function dispatchGenerateRow(params: {
   }
 }
 
-// ── File → base64 helpers ─────────────────────────────────────────────────────
-
-async function fileToBase64(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function detectFileType(name: string): string {
-  const n = name.toLowerCase();
-  if (n.endsWith(".pdf")) return "pdf";
-  if (n.endsWith(".docx")) return "docx";
-  if (n.endsWith(".txt")) return "txt";
-  if (n.endsWith(".md")) return "md";
-  if (n.endsWith(".json")) return "json";
-  if (n.endsWith(".csv")) return "csv";
-  if (n.endsWith(".xlsx") || n.endsWith(".xls")) return "excel";
-  if (n.endsWith(".html") || n.endsWith(".htm")) return "html";
-  return "txt";
-}
-
 // ── Document extraction (throws on error) ────────────────────────────────────
 
 export async function dispatchDocumentExtract(params: {
@@ -331,7 +314,7 @@ export async function dispatchDocumentExtract(params: {
   } else {
     // Extract text in browser (pdfjs-dist works in browser but fails server-side)
     const { extractTextBrowser } = await import("./document-browser");
-    const { text: rawText, truncated, charCount } = await extractTextBrowser(params.file);
+    const { text: rawText } = await extractTextBrowser(params.file);
     const fileContent = btoa(unescape(encodeURIComponent(rawText)));
 
     const res = await fetch("/api/document-extract", {

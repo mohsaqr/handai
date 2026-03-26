@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { UploadPreview } from "@/components/tools/UploadPreview";
 import { NoModelWarning } from "@/components/tools/NoModelWarning";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
+import { useBatchProcessor } from "@/hooks/useBatchProcessor";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -15,7 +17,7 @@ import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
-import { dispatchProcessRow, dispatchCreateRun, dispatchSaveResults } from "@/lib/llm-dispatch";
+import { dispatchProcessRow } from "@/lib/llm-dispatch";
 import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogDescription,
@@ -26,11 +28,12 @@ import {
   AlertCircle, ChevronDown, ChevronRight,
   Highlighter,
 } from "lucide-react";
-import type { Row } from "@/types";
 import { cn } from "@/lib/utils";
 import { ScreenerAnalyticsPanel } from "./ScreenerAnalyticsDialog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+type Row = Record<string, unknown>;
 
 type Decision = "include" | "exclude" | "maybe" | null;
 
@@ -253,9 +256,6 @@ export default function AbstractScreenerPage() {
     : "";
 
   // ── UI state ───────────────────────────────────────────────────────────────
-  const [isBatching, setIsBatching]       = useState(false);
-  const [batchProgress, setBatchProgress] = useState(0);
-  const [batchErrors, setBatchErrors]     = useState(0);
   const [showBatchPanel, setShowBatchPanel] = useState(false);
   const [concurrency, setConcurrency]     = useState(5);
   const [askingAI, setAskingAI]           = useState(false);
@@ -274,7 +274,6 @@ export default function AbstractScreenerPage() {
   const [pendingLoad, setPendingLoad]       = useState<{ data: Row[]; name: string } | null>(null);
 
   // ── Refs ───────────────────────────────────────────────────────────────────
-  const abortRef = useRef<AbortController | null>(null);
   const stateRef = useRef<ASAutosave>({
     name: "", savedAt: "", data: [], aiResults: {}, decisions: {},
     criteria: "", colMap: { title: "", abstract: "", keywords: "", journal: "" },
@@ -318,6 +317,113 @@ export default function AbstractScreenerPage() {
 
   // AI Instructions
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
+
+  // ── Batch processor (survives navigation) ──────────────────────────────────
+  const batch = useBatchProcessor({
+    toolId: "/abstract-screener",
+    runType: "abstract-screener",
+    activeModel,
+    systemSettings,
+    data,
+    dataName,
+    systemPrompt: aiInstructions,
+    concurrency,
+    validate: () => {
+      if (!criteria.trim()) return "Please enter inclusion/exclusion criteria before running AI.";
+      if (!colMap.title && !colMap.abstract && !colMap.keywords && !colMap.journal)
+        return "Map at least one column (title, abstract, etc.) before running AI.";
+      return null;
+    },
+    processRow: async (row: Row) => {
+      const parts = [
+        colMap.title    && row[colMap.title]    ? `Title: ${String(row[colMap.title])}` : "",
+        colMap.journal  && row[colMap.journal]  ? `Journal: ${String(row[colMap.journal])}` : "",
+        colMap.keywords && row[colMap.keywords] ? `Keywords: ${String(row[colMap.keywords])}` : "",
+        colMap.abstract && row[colMap.abstract] ? `Abstract: ${String(row[colMap.abstract])}` : "",
+      ].filter(Boolean);
+
+      if (parts.length === 0) {
+        return { ...row, status: "skipped", latency_ms: 0 };
+      }
+
+      const userContent = parts.join("\n\n");
+      const start = Date.now();
+
+      const { output } = await dispatchProcessRow({
+        provider: activeModel!.providerId,
+        model: activeModel!.defaultModel,
+        apiKey: activeModel!.apiKey || "",
+        baseUrl: activeModel!.baseUrl,
+        systemPrompt: aiInstructions,
+        userContent,
+        temperature: systemSettings.temperature,
+      });
+
+      const latency = Date.now() - start;
+      const parsed = extractJson(output);
+      const decision: "include" | "exclude" | "maybe" =
+        parsed?.decision === "include" || parsed?.decision === "exclude" || parsed?.decision === "maybe"
+          ? (parsed.decision as "include" | "exclude" | "maybe") : "exclude";
+      const probabilities = parseProbabilities(parsed, decision);
+
+      return {
+        ...row,
+        ai_decision: decision,
+        ai_confidence: probabilities[decision],
+        ai_probabilities: JSON.stringify(probabilities),
+        ai_reasoning: typeof parsed?.reasoning === "string" ? parsed.reasoning : "",
+        ai_highlight_terms: JSON.stringify(
+          Array.isArray(parsed?.highlight_terms)
+            ? (parsed.highlight_terms as unknown[]).filter((t): t is string => typeof t === "string")
+            : []
+        ),
+        status: "success",
+        latency_ms: latency,
+      };
+    },
+    buildResultEntry: (r: Row, i: number) => ({
+      rowIndex: i,
+      input: r as Record<string, unknown>,
+      output: JSON.stringify({
+        decision: r.ai_decision,
+        confidence: r.ai_confidence,
+        probabilities: r.ai_probabilities ? JSON.parse(r.ai_probabilities as string) : {},
+        reasoning: r.ai_reasoning,
+      }),
+      status: (r.status as string) ?? "success",
+      latency: r.latency_ms as number | undefined,
+      errorMessage: r.error_msg as string | undefined,
+    }),
+    onComplete: (results: Row[]) => {
+      const newAiResults: Record<number, AIScreenResult> = {};
+      results.forEach((r, i) => {
+        if (r.status === "skipped" || r.status === "error") return;
+        const decision = r.ai_decision as "include" | "exclude" | "maybe" | undefined;
+        if (!decision) return;
+        let probabilities: { include: number; maybe: number; exclude: number };
+        try {
+          probabilities = JSON.parse(r.ai_probabilities as string);
+        } catch {
+          probabilities = { include: 0, maybe: 0, exclude: 0 };
+        }
+        let highlightTerms: string[];
+        try {
+          highlightTerms = JSON.parse(r.ai_highlight_terms as string);
+        } catch {
+          highlightTerms = [];
+        }
+        newAiResults[i] = {
+          decision,
+          confidence: (r.ai_confidence as number) ?? probabilities[decision],
+          probabilities,
+          reasoning: (r.ai_reasoning as string) ?? "",
+          highlightTerms,
+          latency: (r.latency_ms as number) ?? 0,
+        };
+      });
+      setAiResults(newAiResults);
+    },
+  });
 
   // ── On mount: restore settings + autosave ──────────────────────────────────
   useEffect(() => {
@@ -365,10 +471,9 @@ export default function AbstractScreenerPage() {
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
       setAutosaveTime(new Date());
     } catch { /* storage full */ }
-  }, [data, aiResults, decisions, includeCriteria, excludeCriteria, colMap, wordHighlighter, currentIndex, dataName, sessionName]);
+  }, [data, aiResults, decisions, criteria, includeCriteria, excludeCriteria, colMap, wordHighlighter, currentIndex, dataName, sessionName]);
 
   // ── Sync stateRef every render ───────────────────────────────────────────
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (data.length === 0) return;
     stateRef.current = {
@@ -412,25 +517,6 @@ export default function AbstractScreenerPage() {
 
   const decidedEntries  = Object.values(decisions).filter(Boolean);
   const decidedCount    = decidedEntries.length;
-  const includeCount    = decidedEntries.filter((d) => d === "include").length;
-  const excludeCount    = decidedEntries.filter((d) => d === "exclude").length;
-  const maybeCount      = decidedEntries.filter((d) => d === "maybe").length;
-  const undecidedCount  = totalRows - decidedCount;
-
-  const aiAgreementData = Object.entries(decisions).reduce(
-    (acc, [i, dec]) => {
-      const ai = aiResults[Number(i)];
-      if (!ai || !dec || dec === "maybe") return acc;
-      acc.total++;
-      if (dec === ai.decision) acc.match++;
-      return acc;
-    },
-    { total: 0, match: 0 }
-  );
-  const aiAgreementRate = aiAgreementData.total > 0
-    ? Math.round((aiAgreementData.match / aiAgreementData.total) * 100)
-    : null;
-
   // ── Navigation ───────────────────────────────────────────────────────────
   const navigate = (dir: number) =>
     setCurrentIndex((i) => Math.max(0, Math.min(totalRows - 1, i + dir)));
@@ -457,7 +543,7 @@ export default function AbstractScreenerPage() {
 
   // ── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
-    if (data.length === 0 || isBatching) return;
+    if (data.length === 0 || batch.isProcessing) return;
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -470,7 +556,7 @@ export default function AbstractScreenerPage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.length, isBatching, currentIndex, decisions, settings.autoAdvance]);
+  }, [data.length, batch.isProcessing, currentIndex, decisions, settings.autoAdvance]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
   const doDataLoaded = (newData: Row[], name: string, autoFillCriteria?: string) => {
@@ -492,6 +578,15 @@ export default function AbstractScreenerPage() {
     }
     toast.success(`Loaded ${newData.length} records`);
   };
+
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("abstract-screener");
+  useEffect(() => {
+    if (!restored) return;
+    setData(restored.data as Row[]);
+    setDataName(restored.dataName);
+    toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+  }, [restored]);
 
   const handleDataLoaded = (newData: Row[], name: string) => {
     if (decidedCount > 0) {
@@ -549,103 +644,6 @@ export default function AbstractScreenerPage() {
     setShowSessions(false);
     toast.success(`Loaded "${s.name}"`);
   };
-
-  // ── Batch AI pre-screening ───────────────────────────────────────────────
-  const runBatch = async () => {
-    if (!activeModel) {
-      toast.error("No model configured — go to Settings to add one.");
-      return;
-    }
-    if (!criteria.trim()) {
-      toast.error("Please enter inclusion/exclusion criteria before running AI.");
-      return;
-    }
-    if (!colMap.title && !colMap.abstract && !colMap.keywords && !colMap.journal) {
-      toast.error("Map at least one column (title, abstract, etc.) before running AI.");
-      return;
-    }
-
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    setIsBatching(true);
-    setBatchProgress(0);
-    setBatchErrors(0);
-
-    const systemPrompt = aiInstructions;
-    const results: Record<number, AIScreenResult> = {};
-    let errorCount = 0;
-
-    const localRunId = await dispatchCreateRun({ runType: "abstract-screener", provider: activeModel.providerId, model: activeModel.defaultModel, temperature: systemSettings.temperature, systemPrompt, inputFile: dataName || "unnamed", inputRows: data.length });
-
-    for (let i = 0; i < data.length; i++) {
-      if (ctrl.signal.aborted) break;
-      const row = data[i];
-
-      const parts = [
-        colMap.title    && row[colMap.title]    ? `Title: ${String(row[colMap.title])}` : "",
-        colMap.journal  && row[colMap.journal]  ? `Journal: ${String(row[colMap.journal])}` : "",
-        colMap.keywords && row[colMap.keywords] ? `Keywords: ${String(row[colMap.keywords])}` : "",
-        colMap.abstract && row[colMap.abstract] ? `Abstract: ${String(row[colMap.abstract])}` : "",
-      ].filter(Boolean);
-
-      if (parts.length === 0) { setBatchProgress(i + 1); continue; }
-      const userContent = parts.join("\n\n");
-
-      try {
-        const { output } = await dispatchProcessRow({
-          provider: activeModel.providerId, model: activeModel.defaultModel,
-          apiKey: activeModel.apiKey || "", baseUrl: activeModel.baseUrl,
-          systemPrompt, userContent, temperature: systemSettings.temperature,
-        });
-
-        const parsed = extractJson(output);
-        const decision: "include" | "exclude" | "maybe" =
-          parsed?.decision === "include" || parsed?.decision === "exclude" || parsed?.decision === "maybe"
-            ? (parsed.decision as "include" | "exclude" | "maybe") : "exclude";
-        const probabilities = parseProbabilities(parsed, decision);
-        results[i] = {
-          decision,
-          confidence: probabilities[decision],
-          probabilities,
-          reasoning: typeof parsed?.reasoning === "string" ? parsed.reasoning : "",
-          highlightTerms: Array.isArray(parsed?.highlight_terms)
-            ? (parsed.highlight_terms as unknown[]).filter((t): t is string => typeof t === "string")
-            : [],
-          latency: 0,
-        };
-      } catch (err) {
-        errorCount++;
-        setBatchErrors(errorCount);
-        console.error(`Row ${i} failed:`, err);
-      }
-
-      setBatchProgress(i + 1);
-    }
-
-    setAiResults(results);
-
-    if (localRunId) {
-      const resultRows = Object.entries(results).map(([idx, r]) => ({
-        rowIndex: Number(idx),
-        input: data[Number(idx)] as Record<string, unknown>,
-        output: JSON.stringify(r),
-        status: "success" as const,
-        latency: r.latency,
-      }));
-      await dispatchSaveResults(localRunId, resultRows);
-    }
-
-    setIsBatching(false);
-
-    const processed = Object.keys(results).length;
-    if (errorCount > 0) {
-      toast.warning(`AI finished: ${processed} processed, ${errorCount} failed. Check your API key and model.`);
-    } else {
-      toast.success(`AI pre-screened ${processed} abstracts`);
-    }
-  };
-
-  const stopBatch = () => { abortRef.current?.abort(); setIsBatching(false); };
 
   // ── Per-row AI suggestion ──────────────────────────────────────────────────
   const askAI = async () => {
@@ -1048,7 +1046,7 @@ export default function AbstractScreenerPage() {
               </button>
               {showBatchPanel && (
                 <div className="border-t p-3 space-y-3">
-                  {!isBatching ? (
+                  {!batch.isProcessing ? (
                     <>
                       <div className="flex items-center gap-4 text-xs">
                         <div className="flex items-center gap-1.5">
@@ -1066,10 +1064,17 @@ export default function AbstractScreenerPage() {
                         )}
                       </div>
                       <Button size="sm" disabled={!canRunAI || data.length === 0}
-                        onClick={() => void runBatch()}
+                        onClick={() => void batch.run("full")}
                         className="bg-orange-500 hover:bg-orange-600 text-white w-full">
                         Run AI Batch ({totalRows} rows)
                       </Button>
+                      {batch.failedCount > 0 && (
+                        <Button size="sm" variant="outline"
+                          onClick={() => void batch.resume()}
+                          className="w-full border-amber-300 text-amber-700 hover:bg-amber-50">
+                          Retry {batch.failedCount} failed rows
+                        </Button>
+                      )}
                       {aiCount > 0 && (
                         <p className="text-xs text-green-600">✓ AI suggestions ready for {aiCount}/{totalRows} rows</p>
                       )}
@@ -1077,17 +1082,18 @@ export default function AbstractScreenerPage() {
                   ) : (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-sm">
-                        <span>Processing {totalRows} rows… {batchProgress}/{totalRows}
-                          {batchErrors > 0 && <span className="text-amber-600 ml-2">({batchErrors} errors)</span>}
+                        <span>Processing {batch.progress.total} rows… {batch.progress.completed}/{batch.progress.total}
+                          {batch.failedCount > 0 && <span className="text-amber-600 ml-2">({batch.failedCount} errors)</span>}
+                          {batch.etaStr && <span className="text-muted-foreground ml-2">{batch.etaStr}</span>}
                         </span>
-                        <Button variant="outline" size="sm" onClick={stopBatch}
+                        <Button variant="outline" size="sm" onClick={batch.abort}
                           className="border-red-300 text-red-600 hover:bg-red-50">
                           Stop
                         </Button>
                       </div>
                       <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
                         <div className="bg-orange-500 h-full transition-all duration-300 rounded-full"
-                          style={{ width: `${totalRows > 0 ? Math.round((batchProgress / totalRows) * 100) : 0}%` }} />
+                          style={{ width: `${batch.progressPct}%` }} />
                       </div>
                     </div>
                   )}

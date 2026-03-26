@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import pLimit from "p-limit";
+import { useProcessingFlag } from "@/hooks/useProcessingFlag";
 import { useDropzone } from "react-dropzone";
 import { DataTable, ExportDropdown } from "@/components/tools/DataTable";
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,6 @@ import {
   FileText,
   Upload,
   X,
-  Download,
   Loader2,
   CheckCircle2,
   AlertCircle,
@@ -37,7 +37,6 @@ import { toast } from "sonner";
 import type { Row } from "@/types";
 import type { FieldDef, FileState } from "@/types";
 import { dispatchDocumentExtract, dispatchDocumentAnalyze, dispatchCreateRun, dispatchSaveResults } from "@/lib/llm-dispatch";
-import { downloadCSV, downloadXLSX } from "@/lib/export";
 import { getPrompt, formatExtractionSchema } from "@/lib/prompts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -130,6 +129,7 @@ function getFileTypeKey(file: File): string | null {
 export default function ProcessDocumentsPage() {
   const activeModel = useActiveModel();
   const systemSettings = useSystemSettings();
+  const { markProcessing, markIdle } = useProcessingFlag("/process-documents");
 
   // ── Section 1: Documents
   const [fileStates, setFileStates] = useState<FileState[]>([]);
@@ -321,6 +321,7 @@ export default function ProcessDocumentsPage() {
     abortRef.current = false;
     setRunId(null);
     setIsProcessing(true);
+    markProcessing();
     setProgress({ completed: 0, total: targets.length });
     setFileStates((prev) =>
       prev.map((fs, i) =>
@@ -402,6 +403,7 @@ export default function ProcessDocumentsPage() {
 
     setRunId(localRunId);
     setIsProcessing(false);
+    markIdle();
     if (accumulated.length > 0) {
       toast.success(`Extracted ${accumulated.length} records from ${targets.length} file(s)`);
     }
@@ -820,7 +822,7 @@ export default function ProcessDocumentsPage() {
               <span>Extracted Data — {allResults.length} rows</span>
               <ExportDropdown data={allResults} filename="extracted_documents" />
             </div>
-            <DataTable data={allResults} showAll />
+            <DataTable data={allResults} />
           </div>
         </div>
       )}

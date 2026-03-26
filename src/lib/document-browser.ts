@@ -1,5 +1,5 @@
 /**
- * Browser-side document text extraction for Tauri (static export, no API routes).
+ * Browser-side document text extraction for static builds (no API routes).
  *
  * Supported types:
  *  .pdf              → pdfjs-dist (WASM, runs in WebView main thread)

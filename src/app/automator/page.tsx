@@ -1,34 +1,32 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { UploadPreview } from "@/components/tools/UploadPreview";
 import { NoModelWarning } from "@/components/tools/NoModelWarning";
-import { DataTable, ExportDropdown } from "@/components/tools/DataTable";
+import { ExecutionPanel } from "@/components/tools/ExecutionPanel";
+import { ResultsPanel } from "@/components/tools/ResultsPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
+import { useBatchProcessor } from "@/hooks/useBatchProcessor";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
+import { useProcessingStore } from "@/lib/processing-store";
 import {
-  dispatchCreateRun,
-  dispatchSaveResults,
   dispatchAutomatorRow,
 } from "@/lib/llm-dispatch";
 import {
   Plus,
   X,
   ArrowRight,
-  Loader2,
   Settings2,
-  ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
-import pLimit from "p-limit";
-import Link from "next/link";
 
 interface OutputField {
   name: string;
@@ -45,9 +43,9 @@ interface Step {
 }
 
 type Row = Record<string, unknown>;
-type RunMode = "preview" | "test" | "full";
 
 const STEPS_KEY = "handai_steps_automator";
+const MAX_ROW_RETRIES = 3;
 
 function makeStep(idx: number): Step {
   return {
@@ -64,14 +62,8 @@ export default function AutomatorPage() {
   const [dataName, setDataName] = useState("");
   const [availableCols, setAvailableCols] = useState<string[]>([]);
   const [steps, setSteps] = useState<Step[]>([makeStep(1)]);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
 
-  const abortRef = useRef(false);
-  const [runMode, setRunMode] = useState<RunMode>("full");
-  const [progress, setProgress] = useState({ completed: 0, total: 0 });
-  const [results, setResults] = useState<Row[]>([]);
-  const [runId, setRunId] = useState<string | null>(null);
   const provider = useActiveModel();
   const systemSettings = useSystemSettings();
 
@@ -92,7 +84,7 @@ export default function AutomatorPage() {
     setData(newData);
     setDataName(name);
     if (newData.length > 0) setAvailableCols(Object.keys(newData[0]));
-    setResults([]);
+    batch.clearResults();
     toast.success(`Loaded ${newData.length} rows`);
   };
 
@@ -169,105 +161,94 @@ export default function AutomatorPage() {
 
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
-  const runAutomator = async (mode: RunMode) => {
-    if (data.length === 0) return toast.error("No data loaded");
-    if (!provider) return toast.error("No model configured. Add an API key in Settings.");
-    if (steps.some((s) => !s.task.trim())) return toast.error("All steps need a task description");
+  const batch = useBatchProcessor({
+    toolId: "/automator",
+    runType: "automator",
+    activeModel: provider,
+    systemSettings,
+    data,
+    dataName,
+    systemPrompt: aiInstructions || JSON.stringify(steps),
+    validate: () => {
+      if (steps.some((s) => !s.task.trim())) return "All steps need a task description";
+      return null;
+    },
+    processRow: async (row: Row) => {
+      const t0 = Date.now();
+      for (let attempt = 1; attempt <= MAX_ROW_RETRIES; attempt++) {
+        try {
+          const result = await dispatchAutomatorRow({
+            row,
+            steps,
+            provider: provider!.providerId,
+            model: provider!.defaultModel,
+            apiKey: provider!.apiKey || "",
+            baseUrl: provider!.baseUrl,
+          });
 
-    const targetData =
-      mode === "preview" ? data.slice(0, 3) :
-      mode === "test"    ? data.slice(0, 10) :
-      data;
-
-    abortRef.current = false;
-    setRunId(null);
-    setIsProcessing(true);
-    setRunMode(mode);
-    setProgress({ completed: 0, total: targetData.length });
-
-    const limit = pLimit(systemSettings.maxConcurrency);
-    const newResults: Row[] = [];
-
-    const localRunId = await dispatchCreateRun({
-      runType: "automator",
-      provider: provider.providerId,
-      model: provider.defaultModel,
-      temperature: systemSettings.temperature,
-      systemPrompt: aiInstructions || JSON.stringify(steps),
-      inputFile: dataName || "unnamed_data",
-      inputRows: targetData.length,
-    });
-
-    const tasks = targetData.map((row, idx) =>
-      limit(async () => {
-        if (abortRef.current) return;
-        const t0 = Date.now();
-        const MAX_ROW_RETRIES = 3;
-        for (let attempt = 1; attempt <= MAX_ROW_RETRIES; attempt++) {
-          try {
-            const result = await dispatchAutomatorRow({
-              row,
-              steps,
-              provider: provider.providerId,
-              model: provider.defaultModel,
-              apiKey: provider.apiKey || "",
-              baseUrl: provider.baseUrl,
-            });
-
-            // Check if result.output is essentially the same as input (extraction failed silently)
-            const outputKeys = Object.keys(result.output || {});
-            const inputKeys = Object.keys(row);
-            const newKeys = outputKeys.filter(k => !inputKeys.includes(k) && k !== 'status' && k !== 'latency');
-            if (newKeys.length === 0 && steps.length > 0 && attempt < MAX_ROW_RETRIES) {
-              await new Promise(r => setTimeout(r, 500 * attempt));
-              continue;
-            }
-            if (newKeys.length === 0 && steps.length > 0) {
-              newResults[idx] = {
-                ...row,
-                ...result.output,
-                _step_warning: "No new fields extracted — check step configuration",
-                status: "warning",
-                latency: Date.now() - t0,
-              };
-            } else {
-              newResults[idx] = { ...result.output, status: "success", latency: Date.now() - t0 };
-            }
-            break;
-          } catch (err) {
-            if (attempt === MAX_ROW_RETRIES) {
-              console.error(err);
-              newResults[idx] = { ...row, automator_error: true, status: "error", errorMessage: String(err), latency: Date.now() - t0 };
-            } else {
-              await new Promise(r => setTimeout(r, 500 * attempt));
-            }
+          // Check if result.output is essentially the same as input (extraction failed silently)
+          const outputKeys = Object.keys(result.output || {});
+          const inputKeys = Object.keys(row);
+          const newKeys = outputKeys.filter(k => !inputKeys.includes(k) && k !== 'status' && k !== 'latency');
+          if (newKeys.length === 0 && steps.length > 0 && attempt < MAX_ROW_RETRIES) {
+            await new Promise(r => setTimeout(r, 500 * attempt));
+            continue;
           }
+          if (newKeys.length === 0 && steps.length > 0) {
+            return {
+              ...row,
+              ...result.output,
+              _step_warning: "No new fields extracted — check step configuration",
+              status: "warning",
+              latency_ms: Date.now() - t0,
+            };
+          }
+          return { ...result.output, status: "success", latency_ms: Date.now() - t0 };
+        } catch (err) {
+          if (attempt === MAX_ROW_RETRIES) {
+            return {
+              ...row,
+              automator_error: true,
+              status: "error",
+              error_msg: String(err),
+              latency_ms: Date.now() - t0,
+            };
+          }
+          await new Promise(r => setTimeout(r, 500 * attempt));
         }
-        setProgress((prev) => ({ ...prev, completed: prev.completed + 1 }));
-      })
-    );
+      }
+      // Fallback (should not be reached)
+      return { ...row, status: "error", error_msg: "Unexpected retry exhaustion", latency_ms: Date.now() - t0 };
+    },
+    buildResultEntry: (r: Row, i: number) => ({
+      rowIndex: i,
+      input: r as Record<string, unknown>,
+      output: r as Record<string, unknown>,
+      status: (r.status as string) ?? "success",
+      latency: r.latency_ms as number | undefined,
+      errorMessage: r.error_msg as string | undefined,
+    }),
+  });
 
-    await Promise.all(tasks);
-    setResults(newResults);
-
-    if (localRunId) {
-      const resultRows = newResults.map((r, i) => ({
-        rowIndex: i,
-        input: r,
-        output: r,
-        status: r.status as string,
-        latency: r.latency as number | undefined,
-        errorMessage: r.errorMessage as string | undefined,
-      }));
-      await dispatchSaveResults(localRunId, resultRows);
-    }
-
-    setRunId(localRunId);
-    setIsProcessing(false);
-    toast.success(mode === "full" ? "Automator run complete!" : `${mode === "preview" ? "Preview" : "Test"} complete (${targetData.length} rows)`);
-  };
-
-  const progressPct = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("automator");
+  useEffect(() => {
+    if (!restored) return;
+    queueMicrotask(() => {
+      setData(restored.data);
+      setDataName(restored.dataName);
+      if (restored.data.length > 0) setAvailableCols(Object.keys(restored.data[0]));
+      // Populate results in global processing store
+      const errors = restored.results.filter((r) => r.status === "error").length;
+      useProcessingStore.getState().completeJob(
+        "/automator",
+        restored.results,
+        { success: restored.results.length - errors, errors, avgLatency: 0 },
+        restored.runId,
+      );
+      toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+    });
+  }, [restored]);
 
   return (
     <div className="space-y-0 pb-16">
@@ -458,89 +439,44 @@ export default function AutomatorPage() {
       {/* ── 4. Execute ────────────────────────────────────────────────────── */}
       <div className="space-y-4 py-8">
         <h2 className="text-2xl font-bold">4. Execute</h2>
-
-        {isProcessing && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                {runMode !== "full" ? (runMode === "preview" ? "Preview" : "Test") + " run" : "Full run"} — running {steps.length}-step pipeline on {progress.total} rows…
-              </span>
-              <div className="flex items-center gap-2">
-                <span>{progress.completed} / {progress.total}</span>
-                <Button variant="outline" size="sm" onClick={() => { abortRef.current = true; }}
-                  className="h-6 px-2 text-[11px] border-red-300 text-red-600 hover:bg-red-50">
-                  Stop
-                </Button>
-              </div>
-            </div>
-            <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
-              <div className="bg-indigo-500 h-full transition-all duration-300" style={{ width: `${progressPct}%` }} />
-            </div>
-          </div>
-        )}
-
         <NoModelWarning activeModel={provider} />
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Button variant="outline" size="lg" className="h-12 text-sm border-dashed"
-            disabled={data.length === 0 || isProcessing || !provider}
-            onClick={() => runAutomator("preview")}>
-            {isProcessing && runMode === "preview" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Preview (3 rows)
-          </Button>
-          <Button size="lg" className="h-12 text-base bg-red-500 hover:bg-red-600 text-white"
-            disabled={data.length === 0 || isProcessing || !provider}
-            onClick={() => runAutomator("test")}>
-            {isProcessing && runMode === "test" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Test (10 rows)
-          </Button>
-          <Button variant="outline" size="lg" className="h-12 text-base"
-            disabled={data.length === 0 || isProcessing || !provider}
-            onClick={() => runAutomator("full")}>
-            {isProcessing && runMode === "full" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Full Run ({data.length} rows)
-          </Button>
-        </div>
+        <ExecutionPanel
+          isProcessing={batch.isProcessing}
+          runMode={batch.runMode}
+          progress={batch.progress}
+          etaStr={batch.etaStr}
+          dataCount={data.length}
+          disabled={data.length === 0 || !provider || steps.some((s) => !s.task.trim())}
+          onRun={batch.run}
+          onAbort={batch.abort}
+          onResume={batch.resume}
+          failedCount={batch.failedCount}
+          progressColor="bg-indigo-500"
+          fullLabel={`Full Run (${data.length} rows)`}
+        />
       </div>
 
       {/* ── Results ────────────────────────────────────────────────────────── */}
-      {results.length > 0 && (
-        <div className="space-y-4 border-t pt-6 pb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Results</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">{results.length} rows · {steps.length}-step pipeline</p>
+      <ResultsPanel
+        results={batch.results}
+        runId={batch.runId}
+        runMode={batch.runMode}
+        totalDataCount={data.length}
+        title="Results"
+        subtitle={`${batch.results.length} rows · ${steps.length}-step pipeline`}
+      >
+        {(() => {
+          const warnings = batch.results.filter(r => r.status === "warning").length;
+          const errors = batch.results.filter(r => r.status === "error").length;
+          if (warnings === 0 && errors === 0) return null;
+          return (
+            <div className="flex items-center gap-4 px-4 py-2.5 rounded-lg border bg-amber-50 dark:bg-amber-950/20 border-amber-200 text-sm">
+              {errors > 0 && <span className="text-red-600">{errors} errors</span>}
+              {warnings > 0 && <span className="text-amber-600">{warnings} rows with extraction warnings</span>}
             </div>
-            <div className="flex items-center gap-3">
-              {runId && (
-                <Link href={`/history/${runId}`} className="flex items-center gap-1.5 text-xs text-indigo-500 hover:underline">
-                  <ExternalLink className="h-3 w-3" />
-                  View in History
-                </Link>
-              )}
-            </div>
-          </div>
-          <div className="border rounded-lg overflow-hidden">
-            <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between">
-              <span>Pipeline Output — {results.length} rows</span>
-              <ExportDropdown data={results} filename="pipeline_output" />
-            </div>
-            <DataTable data={results} showAll />
-          </div>
-          {(() => {
-            const warnings = results.filter(r => r.status === "warning").length;
-            const errors = results.filter(r => r.status === "error").length;
-            if (warnings === 0 && errors === 0) return null;
-            return (
-              <div className="flex items-center gap-4 px-4 py-2.5 rounded-lg border bg-amber-50 dark:bg-amber-950/20 border-amber-200 text-sm">
-                {errors > 0 && <span className="text-red-600">{errors} errors</span>}
-                {warnings > 0 && <span className="text-amber-600">{warnings} rows with extraction warnings</span>}
-              </div>
-            );
-          })()}
-        </div>
-      )}
+          );
+        })()}
+      </ResultsPanel>
     </div>
   );
 }

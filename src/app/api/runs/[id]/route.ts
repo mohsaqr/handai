@@ -22,8 +22,8 @@ export async function GET(
         });
 
         return NextResponse.json({ run, results });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
     }
 }
 
@@ -36,7 +36,7 @@ export async function DELETE(
         await prisma.runResult.deleteMany({ where: { runId: id } });
         await prisma.run.delete({ where: { id } });
         return NextResponse.json({ ok: true });
-    } catch (error: any) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+        return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
     }
 }

@@ -1,32 +1,8 @@
-# Handai AI Data Suite — Web App (JavaScript)
+# Handai AI Data Suite
 
-A qualitative and quantitative data analysis suite powered by large language models. Runs as a web app or as a native desktop application (Tauri, ~10 MB) — no code changes between the two targets.
+A qualitative and quantitative data analysis suite powered by large language models. Runs as a Next.js web app with an optional static export for GitHub Pages.
 
 Built with Next.js 16, React 19, TypeScript, and Tailwind CSS v4.
-
----
-
-## Two Versions of Handai
-
-Handai ships in two completely independent versions that share the same tools and LLM providers but are built on different technology stacks. **This repository is the JavaScript/Next.js version.**
-
-| | **Handai Web** (this repo) | **Handai Streamlit** |
-|---|---|---|
-| **Stack** | Next.js 16, React 19, TypeScript | Python, Streamlit |
-| **Repo** | [mohsaqr/handai_refactored](https://github.com/mohsaqr/handai_refactored) | [mohsaqr/handai](https://github.com/mohsaqr/handai) |
-| **Run** | `npm install && npm run dev` → :3000 | `pip install -r requirements.txt && streamlit run app.py` → :8501 |
-| **Desktop app** | Tauri (~10 MB native, instant launch) | Electron wrapper |
-| **Run history** | SQLite DB, History page, per-row drill-down | — |
-| **Web deploy** | Vercel / Docker / any Node host | — |
-| **Best for** | Teams, web deployment, production, non-Python users | Python users, quick local analysis |
-| **Tools** | All 11 tools | All 11 tools |
-| **Providers** | All 10 providers | All 10 providers |
-
-**Choose Handai Web if you** want to deploy it for a team, want the Tauri desktop app, prefer TypeScript/React, or need run history and CSV export from past sessions.
-
-**Choose Handai Streamlit if you** are already in the Python ecosystem, want the simplest possible local setup, or prefer Streamlit's single-file script approach.
-
-Both versions are fully independent — you do not need to install or run both.
 
 ---
 
@@ -42,7 +18,6 @@ Both versions are fully independent — you do not need to install or run both.
 - [Data Format](#data-format)
 - [Scripts Reference](#scripts-reference)
 - [Web Deployment](#web-deployment)
-- [Desktop App (Tauri)](#desktop-app-tauri)
 - [Tech Stack](#tech-stack)
 - [Project Layout](#project-layout)
 - [Architecture](#architecture)
@@ -56,9 +31,9 @@ Handai is a browser-based research toolkit for analysts, qualitative researchers
 **Key design principles:**
 
 - **No vendor lock-in.** Switch between OpenAI, Anthropic, Google, Groq, or a locally running Ollama model by changing a dropdown in Settings.
-- **Human in the loop.** Tools like Manual Coder and AI Coder are built around review workflows, not fire-and-forget automation.
+- **Human in the loop.** Tools like AI Coder are built around review workflows, not fire-and-forget automation.
 - **Works offline.** When connected to Ollama or LM Studio, the entire app runs without any internet connection.
-- **Portable.** The same codebase produces a Next.js web app and a ~10 MB Tauri native app that opens instantly without a Node.js server.
+- **Session persistence.** Navigate between tools freely — active processing continues in the background. Restore any past session from History and resume where you left off.
 
 ---
 
@@ -66,17 +41,17 @@ Handai is a browser-based research toolkit for analysts, qualitative researchers
 
 | Tool | What it does |
 |---|---|
-| **Manual Coder** | Keyboard-driven qualitative coding. Arrow keys navigate rows; `0`/`1` buttons (or keyboard shortcuts) apply codes. Full autosave — resume exactly where you left off. |
 | **AI Coder** | AI suggests a code for each row; you review and accept, override, or skip. Autosave keeps your progress across sessions. |
 | **Qualitative Coder** | Batch-code an entire dataset against a codebook in one run. Each row is scored against every codebook category. Exports results as CSV. |
-| **Consensus Coder** | N independent worker models each code every row, then a judge model resolves disagreements. Reports Cohen's κ inter-rater agreement score. |
+| **Consensus Coder** | N independent worker models each code every row, then a judge model resolves disagreements. Reports Cohen's kappa inter-rater agreement score. |
 | **Codebook Generator** | Feed a sample of text rows and let the LLM inductively derive a codebook. Edit and refine before using it in Qualitative Coder. |
+| **Abstract Screener** | Screen research abstracts against inclusion/exclusion criteria with AI pre-screening and human review. |
 | **Transform** | Apply any free-form LLM prompt to every row in a CSV. Useful for translation, summarisation, sentiment, entity extraction, or any custom transformation. |
 | **Automator** | Build a multi-step LLM pipeline where each step's output feeds into the next. Chain up to N steps, each with its own prompt and model. |
 | **Generate** | Synthesise realistic datasets by providing a schema and a few example rows. Useful for testing or creating training data. |
 | **Process Documents** | Upload PDFs, DOCX, or plain-text files. The LLM extracts structured data fields you define. Results exportable as CSV. |
 | **Model Comparison** | Run the same prompt across N models side-by-side. Useful for evaluating model suitability before committing to a full batch run. |
-| **History** | Browse all previous batch runs. Filter by tool or date, drill into per-row results, and re-export any run as CSV. |
+| **History** | Browse all previous batch runs. Filter by tool or date, drill into per-row results, restore any session, and re-export as CSV. |
 | **Settings** | Configure API keys for each provider, enable or disable providers, and customise the system prompt templates used by each tool. |
 
 ---
@@ -89,8 +64,6 @@ Handai is a browser-based research toolkit for analysts, qualitative researchers
 | npm | 10 or higher (ships with Node 20) | `npm --version` |
 | Git | Any recent version | `git --version` |
 
-For the **desktop app** only: Rust toolchain and Tauri CLI. See [Desktop App (Tauri)](#desktop-app-tauri).
-
 For **local LLM inference**: [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai) installed and running. The app auto-detects them — no configuration required.
 
 ---
@@ -98,8 +71,8 @@ For **local LLM inference**: [Ollama](https://ollama.com) or [LM Studio](https:/
 ## Installation
 
 ```bash
-git clone https://github.com/mohsaqr/handai_refactored.git
-cd handai_refactored/web
+git clone https://github.com/mohsaqr/handai.git
+cd handai
 npm install
 ```
 
@@ -151,9 +124,9 @@ Click the file upload area on any tool page and select a CSV file, or drag and d
 
 API keys are stored in your browser's `localStorage` via the Settings page. They never leave your browser except when making direct calls to provider APIs.
 
-No `.env` file is required for local development or for the desktop app.
+No `.env` file is required for local development.
 
-If you are deploying the web app to a server and want to pre-configure keys at the server level (so users do not need to enter them), create `web/.env.local`:
+If you are deploying the web app to a server and want to pre-configure keys at the server level (so users do not need to enter them), create `.env.local`:
 
 ```env
 OPENAI_API_KEY=sk-...
@@ -206,25 +179,21 @@ There is no required schema. A CSV with a single column of free-text responses w
 
 ## Scripts Reference
 
-Run all scripts from the `web/` directory.
-
 ```bash
 npm run dev          # Start Next.js dev server at http://localhost:3000 with hot reload
 npm run build        # Production build — standalone output — 0 TypeScript errors required
-npm run build:tauri  # Static export for Tauri desktop — produces web/out/
 npm start            # Serve the production build (run npm run build first)
-npm test             # Run Vitest test suite — 76 tests across 4 suites
+npm test             # Run Vitest test suite — 115 tests across 4 suites
 npm run lint         # ESLint check across all source files
+npx tsc --noEmit     # TypeScript type-check (strict mode)
 ```
 
 ### Build targets
 
-The project supports two build modes controlled by `next.config.ts`:
-
 | Mode | Command | Output | Used for |
 |---|---|---|---|
 | Standalone | `npm run build` | `.next/standalone/server.js` | Web deployment, Docker |
-| Static export | `npm run build:tauri` | `out/` | Tauri desktop app |
+| Static export | `npm run build:static` | `out/` | GitHub Pages |
 
 ---
 
@@ -240,8 +209,6 @@ npm start            # Serves on port 3000
 Set the `PORT` environment variable to change the port.
 
 ### Option 2: Docker
-
-A multi-stage Dockerfile is included in `web/`:
 
 ```dockerfile
 FROM node:22-alpine AS builder
@@ -264,56 +231,22 @@ CMD ["node", "server.js"]
 Build and run:
 
 ```bash
-docker build -t handai-web .
-docker run -p 3000:3000 handai-web
+docker build -t handai .
+docker run -p 3000:3000 handai
 ```
 
-### Option 3: Managed platforms
+### Option 3: GitHub Pages
+
+```bash
+npm run build:static
+# Deploy the out/ directory to GitHub Pages
+```
+
+The static build uses IndexedDB for persistence instead of server-side SQLite.
+
+### Option 4: Managed platforms
 
 Handai is a standard Next.js application. Deploy to Vercel, Railway, Fly.io, or any other platform that supports Node.js without any special configuration.
-
-For Vercel:
-
-```bash
-npx vercel
-```
-
----
-
-## Desktop App (Tauri)
-
-The Tauri wrapper produces a native app that is approximately 10 MB because it uses the operating system's built-in WebView (WKWebView on macOS, WebView2 on Windows) rather than bundling Chromium.
-
-**Differences from the web app:**
-
-- LLM calls go directly from the WebView to provider APIs — no Next.js API routes involved
-- The SQLite database is managed by `tauri-plugin-sql` instead of Prisma
-- CSV exports use the native OS save dialog instead of a browser download
-- No Node.js process runs at runtime — the app opens instantly
-- The static export (`npm run build:tauri`) is served from the app bundle itself
-
-**Quick start (development mode):**
-
-```bash
-# Prerequisites: Rust + Tauri CLI
-# https://tauri.app/start/prerequisites/
-
-cd web/desktop/tauri
-npm install
-npm run tauri dev   # Opens a native window pointed at http://localhost:3000
-```
-
-This requires the Next.js dev server (`npm run dev`) to be running in a separate terminal.
-
-**Build a distributable app:**
-
-```bash
-npm run build:tauri          # from web/ — produces the static export in web/out/
-cd web/desktop/tauri
-npm run tauri build          # produces .dmg / .msi / .AppImage in src-tauri/target/release/bundle/
-```
-
-See [`desktop/README.md`](desktop/README.md) for platform-specific instructions, code-signing notes, and the full build pipeline.
 
 ---
 
@@ -321,70 +254,67 @@ See [`desktop/README.md`](desktop/README.md) for platform-specific instructions,
 
 | Layer | Technology | Notes |
 |---|---|---|
-| Framework | Next.js 16.1.6 (App Router) | 24 routes, `output: "standalone"` |
+| Framework | Next.js 16 (App Router) | `output: "standalone"` |
 | UI library | React 19 | |
 | Language | TypeScript (strict mode) | 0 errors required at build time |
 | Styling | Tailwind CSS v4, shadcn/ui | |
-| LLM SDK | Vercel AI SDK v4 | `generateText`, `withRetry` wrapper |
+| LLM SDK | Vercel AI SDK | `generateText`, `withRetry` wrapper |
 | Database (web) | Prisma 6 + SQLite | `prisma/dev.db` |
-| Database (desktop) | tauri-plugin-sql + SQLite | No Prisma/Node at runtime |
+| Database (static) | IndexedDB | For GitHub Pages builds |
 | State management | Zustand | Persisted to `localStorage` as `handai-storage` |
-| Testing | Vitest | 76 tests across 4 suites |
-| Desktop | Tauri 2 | Plugins: shell, window-state, dialog |
+| Testing | Vitest | 115 tests across 4 suites |
 
 ---
 
 ## Project Layout
 
 ```
-web/
 ├── src/
 │   ├── app/
-│   │   ├── api/                    ← 10 server-side API routes (web deployment only)
-│   │   │   ├── process-row/        ← Core LLM dispatch route
-│   │   │   ├── consensus/          ← Multi-worker + judge logic
-│   │   │   ├── local-models/       ← Probes Ollama + LM Studio for available models
+│   │   ├── api/                    <- Server-side API routes (web deployment only)
+│   │   │   ├── process-row/        <- Core LLM dispatch route
+│   │   │   ├── consensus-row/      <- Multi-worker + judge logic
+│   │   │   ├── local-models/       <- Probes Ollama + LM Studio for available models
 │   │   │   └── ...
-│   │   ├── manual-coder/           ← Manual Coder page
-│   │   ├── ai-coder/               ← AI Coder page
-│   │   ├── qualitative-coder/      ← Qualitative Coder page
-│   │   ├── consensus-coder/        ← Consensus Coder page
-│   │   ├── codebook-generator/     ← Codebook Generator page
-│   │   ├── transform/              ← Transform page
-│   │   ├── automator/              ← Automator page
-│   │   ├── generate/               ← Generate page
-│   │   ├── process-documents/      ← Process Documents page
-│   │   ├── model-comparison/       ← Model Comparison page
-│   │   ├── history/                ← History browser page
-│   │   └── settings/               ← Settings page
+│   │   ├── ai-coder/               <- AI Coder page
+│   │   ├── qualitative-coder/      <- Qualitative Coder page
+│   │   ├── consensus-coder/        <- Consensus Coder page
+│   │   ├── codebook-generator/     <- Codebook Generator page
+│   │   ├── abstract-screener/      <- Abstract Screener page
+│   │   ├── transform/              <- Transform page
+│   │   ├── automator/              <- Automator page
+│   │   ├── generate/               <- Generate page
+│   │   ├── process-documents/      <- Process Documents page
+│   │   ├── model-comparison/       <- Model Comparison page
+│   │   ├── history/                <- History browser + detail page
+│   │   └── settings/               <- Settings page
 │   ├── components/
-│   │   ├── ui/                     ← shadcn/ui primitives (Button, Dialog, etc.)
-│   │   ├── tools/                  ← Shared tool components (file upload, column selector, etc.)
-│   │   └── AppSidebar.tsx          ← Navigation sidebar + local model detection
+│   │   ├── ui/                     <- shadcn/ui primitives (Button, Dialog, etc.)
+│   │   ├── tools/                  <- Shared tool components (file upload, column selector, etc.)
+│   │   └── AppSidebar.tsx          <- Navigation sidebar + local model detection
+│   ├── hooks/                      <- Reusable React hooks (batch processor, restore, etc.)
 │   └── lib/
 │       ├── ai/
-│       │   └── providers.ts        ← getModel() — returns AI SDK model for any provider
-│       ├── analytics.ts            ← Cohen's κ, pairwise agreement calculations
-│       ├── db-tauri.ts             ← SQLite helpers for the Tauri path (no Prisma)
-│       ├── document-browser.ts     ← Browser-side PDF/DOCX text extraction
-│       ├── export.ts               ← downloadCSV() — blob download or Tauri native dialog
-│       ├── llm-browser.ts          ← Browser-side LLM functions used by the Tauri path
-│       ├── prompts.ts              ← Prompt registry + per-tool localStorage overrides
-│       ├── retry.ts                ← withRetry() with auth-error fast-fail
-│       ├── store.ts                ← Zustand store for provider config
-│       └── validation.ts           ← Zod schemas for all API route inputs
+│       │   └── providers.ts        <- getModel() — returns AI SDK model for any provider
+│       ├── analytics.ts            <- Cohen's kappa, pairwise agreement calculations
+│       ├── db-indexeddb.ts         <- IndexedDB persistence for static builds
+│       ├── document-browser.ts     <- Browser-side PDF/DOCX text extraction
+│       ├── export.ts               <- downloadCSV() — blob download
+│       ├── llm-browser.ts          <- Browser-side LLM functions for static builds
+│       ├── llm-dispatch.ts         <- Unified dispatch layer (web vs static)
+│       ├── processing-store.ts     <- Global processing state (survives navigation)
+│       ├── restore-store.ts        <- Session restore from history
+│       ├── prompts.ts              <- Prompt registry + per-tool localStorage overrides
+│       ├── retry.ts                <- withRetry() with auth-error fast-fail
+│       ├── store.ts                <- Zustand store for provider config
+│       └── validation.ts           <- Zod schemas for all API route inputs
 ├── prisma/
-│   ├── schema.prisma               ← Database schema
-│   └── dev.db                      ← SQLite database (created on first run)
-├── desktop/
-│   └── tauri/                      ← Tauri desktop wrapper
-│       ├── src-tauri/
-│       │   ├── src/main.rs         ← Tauri application entry point
-│       │   ├── capabilities/       ← Plugin permission declarations
-│       │   └── tauri.conf.json     ← App config (name, bundle ID, window size)
-│       └── package.json
-├── public/                         ← Static assets
-├── next.config.ts                  ← Next.js config (build target switched by env var)
+│   ├── schema.prisma               <- Database schema
+│   └── dev.db                      <- SQLite database (created on first run)
+├── scripts/
+│   └── build-static.sh             <- Static export script for GitHub Pages
+├── public/                         <- Static assets
+├── next.config.ts                  <- Next.js config (build target switched by env var)
 ├── package.json
 └── tsconfig.json
 ```
@@ -395,40 +325,37 @@ web/
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the complete technical reference, including:
 
-- LLM call path (web vs. Tauri)
+- LLM call path (web vs. static)
 - All API routes and their responsibilities
 - Database schema (tables, columns, relations)
 - Autosave system design
 - State management and localStorage keys
 - Consensus Coder worker/judge protocol
-- Desktop packaging pipeline
 
 ### LLM call path (quick summary)
 
 **Web app:**
 ```
-Browser → /api/process-row → providers.ts (getModel) → Provider API
-                           ↘ prisma (log result to SQLite)
+Browser -> /api/process-row -> providers.ts (getModel) -> Provider API
+                            -> prisma (log result to SQLite)
 ```
 
-**Tauri desktop app:**
+**Static build (GitHub Pages):**
 ```
-Browser → llm-browser.ts (getModel) → Provider API (direct, no server)
-                                     ↘ db-tauri.ts (log result to SQLite)
+Browser -> llm-browser.ts (getModel) -> Provider API (direct, no server)
+                                     -> db-indexeddb.ts (log result to IndexedDB)
 ```
 
-The same React components render in both contexts. The difference is whether the LLM call goes through a Next.js API route (web) or directly from the WebView (Tauri).
+The same React components render in both contexts. The difference is whether the LLM call goes through a Next.js API route (web) or directly from the browser (static).
 
 ### Autosave
 
-Manual Coder and AI Coder write the current session state to `localStorage` after every action:
+AI Coder and Abstract Screener write the current session state to `localStorage` after every action:
 
 | Key | Content |
 |---|---|
-| `mc_autosave` | Current Manual Coder session |
-| `mc_autosave_prev` | Previous Manual Coder session (one-step undo) |
 | `aic_autosave` | Current AI Coder session |
-| `aic_autosave_prev` | Previous AI Coder session |
+| `as_autosave` | Current Abstract Screener session |
 
 On page load, a recovery banner appears if an autosaved session is detected. The user can resume or discard it.
 
@@ -437,14 +364,14 @@ On page load, a recovery banner appears if an autosaved session is detected. The
 ## Contributing
 
 1. Fork the repository and create a feature branch.
-2. Run `npm test` to confirm the baseline passes (76 tests).
+2. Run `npm test` to confirm the baseline passes (115 tests).
 3. Make your changes. Add or update tests for any modified behaviour.
 4. Run `npm run build` to confirm the TypeScript build passes with 0 errors.
-5. Run `npm run lint` and fix any issues.
+5. Run `npm run lint` and fix any issues — the codebase targets 0 lint errors.
 6. Open a pull request with a clear description of what changed and why.
 
 ---
 
 ## License
 
-See [LICENSE](../LICENSE) in the repository root.
+See [LICENSE](LICENSE) in the repository root.

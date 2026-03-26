@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import * as XLSX from "xlsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
@@ -13,7 +14,9 @@ import { usePersistedPrompt } from "@/hooks/usePersistedPrompt";
 import { useColumnSelection } from "@/hooks/useColumnSelection";
 import { useBatchProcessor } from "@/hooks/useBatchProcessor";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { dispatchProcessRow } from "@/lib/llm-dispatch";
+import { useProcessingStore } from "@/lib/processing-store";
 
 import { UploadPreview } from "@/components/tools/UploadPreview";
 import { ColumnSelector } from "@/components/tools/ColumnSelector";
@@ -25,17 +28,16 @@ import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection"
 type Row = Record<string, unknown>;
 type CodeEntry = { id: string; code: string; description: string; example: string };
 
-const CODEBOOK_KEY = "handai_codebook_qualcoder";
+const DEFAULT_PROMPT = `Read the text carefully and apply ALL codes from the codebook that are supported by evidence in the text.
 
-const DEFAULT_PROMPT = `Analyze the provided data and assign qualitative codes.
+Key principles:
+- A single text can receive MULTIPLE codes if it genuinely addresses multiple themes
+- Consider both explicit statements and implied meaning
+- Only apply a code when the text clearly speaks to that theme — do not stretch to fit
+- If genuinely no code applies, return "Uncoded"
 
-Instructions:
-- Read the text carefully
-- Apply the most relevant codes from your codebook
-- Return ONLY the code labels, comma-separated (e.g. "Burnout, Resilience")
-- If no codes apply, return "Uncoded"
-
-Respond with ONLY the comma-separated codes. Nothing else.`;
+Return the applicable codes as a comma-separated list (e.g. "Burnout, Resilience, Work-Life Impact").
+Return ONLY the codes. Nothing else.`;
 
 // ─── Sample codebooks ───────────────────────────────────────────────────────
 const SAMPLE_CODEBOOKS: Record<string, Omit<CodeEntry, "id">[]> = {
@@ -122,7 +124,7 @@ export default function QualitativeCoderPage() {
   const [dataName, setDataName] = useState("");
   const [systemPrompt, setSystemPrompt] = usePersistedPrompt("handai_prompt_qualcoder", DEFAULT_PROMPT);
   const [codebook, setCodebook] = useState<CodeEntry[]>([]);
-  const [isMounted, setIsMounted] = useState(false);
+  const [, setIsMounted] = useState(false);
   const csvImportRef = useRef<HTMLInputElement>(null);
 
   const provider = useActiveModel();
@@ -131,7 +133,7 @@ export default function QualitativeCoderPage() {
   const { selectedCols, toggleCol, toggleAll } = useColumnSelection(allColumns, false);
 
   useEffect(() => {
-    setIsMounted(true);
+    queueMicrotask(() => setIsMounted(true));
   }, []);
 
   const buildAutoInstructions = useCallback(() => {
@@ -174,6 +176,7 @@ export default function QualitativeCoderPage() {
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
   const batch = useBatchProcessor({
+    toolId: "/qualitative-coder",
     runType: "qualitative-coder",
     activeModel: provider,
     systemSettings,
@@ -185,7 +188,7 @@ export default function QualitativeCoderPage() {
       if (selectedCols.length === 0) return "Select at least one column";
       return null;
     },
-    processRow: async (row: Row, _idx: number) => {
+    processRow: async (row: Row) => {
       const subset: Row = {};
       selectedCols.forEach((col) => (subset[col] = row[col]));
 
@@ -210,6 +213,25 @@ export default function QualitativeCoderPage() {
       errorMessage: r.error_msg as string | undefined,
     }),
   });
+
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("qualitative-coder");
+  useEffect(() => {
+    if (!restored) return;
+    queueMicrotask(() => {
+      setData(restored.data);
+      setDataName(restored.dataName);
+      setSystemPrompt(restored.systemPrompt);
+      const errors = restored.results.filter((r) => r.status === "error").length;
+      useProcessingStore.getState().completeJob(
+        "/qualitative-coder",
+        restored.results,
+        { success: restored.results.length - errors, errors, avgLatency: 0 },
+        restored.runId,
+      );
+      toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+    });
+  }, [restored, setSystemPrompt]);
 
   const handleDataLoaded = (newData: Row[], name: string) => {
     setData(newData);
@@ -244,27 +266,54 @@ export default function QualitativeCoderPage() {
   const deleteCode = (id: string) =>
     setCodebook((prev) => prev.filter((e) => e.id !== id));
 
-  const importCodebookCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const importCodebook = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length < 2) { toast.error("CSV must have a header row and at least one data row"); return; }
-      const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
-      const codeIdx = headers.indexOf("code");
-      const descIdx = headers.indexOf("description");
-      const exIdx = headers.indexOf("example");
-      if (codeIdx === -1) { toast.error("CSV must have a 'code' column"); return; }
-      const entries: CodeEntry[] = lines.slice(1).map((line) => {
-        const cols = parseCSVLine(line);
-        return { id: crypto.randomUUID(), code: (cols[codeIdx] ?? "").trim(), description: descIdx !== -1 ? (cols[descIdx] ?? "").trim() : "", example: exIdx !== -1 ? (cols[exIdx] ?? "").trim() : "" };
-      }).filter((entry) => entry.code.length > 0);
+
+    const buildEntries = (rows: Record<string, string>[]) => {
+      const entries: CodeEntry[] = rows.map((row) => {
+        const lowerRow: Record<string, string> = {};
+        Object.entries(row).forEach(([k, v]) => { lowerRow[k.trim().toLowerCase()] = String(v ?? "").trim(); });
+        if (!lowerRow.code) return null;
+        return { id: crypto.randomUUID(), code: lowerRow.code, description: lowerRow.description ?? "", example: lowerRow.example ?? "" };
+      }).filter((x): x is CodeEntry => x !== null && x.code.length > 0);
+      if (entries.length === 0) { toast.error("No valid codes found (need a 'code' column)"); return; }
       setCodebook(entries);
       toast.success(`Imported ${entries.length} codes`);
     };
-    reader.readAsText(file);
+
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    if (ext === "xlsx" || ext === "xls") {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const wb = XLSX.read(new Uint8Array(ev.target?.result as ArrayBuffer), { type: "array" });
+        const rows = XLSX.utils.sheet_to_json<Record<string, string>>(wb.Sheets[wb.SheetNames[0]]);
+        buildEntries(rows);
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target?.result as string;
+        const lines = text.split(/\r?\n/).filter(Boolean);
+        if (lines.length < 2) { toast.error("File must have a header row and at least one data row"); return; }
+        const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
+        const codeIdx = headers.indexOf("code");
+        const descIdx = headers.indexOf("description");
+        const exIdx = headers.indexOf("example");
+        if (codeIdx === -1) { toast.error("File must have a 'code' column"); return; }
+        const rows = lines.slice(1).map((line) => {
+          const cols = parseCSVLine(line);
+          const row: Record<string, string> = {};
+          if (codeIdx !== -1) row.code = cols[codeIdx] ?? "";
+          if (descIdx !== -1) row.description = cols[descIdx] ?? "";
+          if (exIdx !== -1) row.example = cols[exIdx] ?? "";
+          return row;
+        });
+        buildEntries(rows);
+      };
+      reader.readAsText(file);
+    }
     e.target.value = "";
   };
 
@@ -336,9 +385,9 @@ export default function QualitativeCoderPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <input ref={csvImportRef} type="file" accept=".csv,text/csv" className="hidden" onChange={importCodebookCSV} />
+            <input ref={csvImportRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={importCodebook} />
             <Button variant="outline" size="sm" onClick={() => csvImportRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" />Import CSV
+              <Upload className="h-3.5 w-3.5 mr-1.5" />Import
             </Button>
             <Button variant="outline" size="sm" disabled={codebook.length === 0} onClick={exportCodebookCSV}>
               <Upload className="h-3.5 w-3.5 mr-1.5" />Export CSV
@@ -376,9 +425,9 @@ export default function QualitativeCoderPage() {
               ) : (
                 codebook.map((entry) => (
                   <tr key={entry.id} className="border-b last:border-0 hover:bg-muted/10 transition-colors">
-                    <td className="px-2 py-1.5"><Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="h-7 text-sm font-medium border-0 shadow-none bg-transparent focus-visible:ring-1 px-1" /></td>
-                    <td className="px-2 py-1.5"><Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="What this code means…" className="h-7 text-sm border-0 shadow-none bg-transparent focus-visible:ring-1 px-1" /></td>
-                    <td className="px-2 py-1.5"><Input value={entry.example} onChange={(e) => updateCode(entry.id, "example", e.target.value)} placeholder="e.g. an illustrative quote" className="h-7 text-sm border-0 shadow-none bg-transparent focus-visible:ring-1 px-1" /></td>
+                    <td className="px-2 py-1.5"><Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="h-7 text-sm font-medium px-2" /></td>
+                    <td className="px-2 py-1.5"><Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="What this code means…" className="h-7 text-sm px-2" /></td>
+                    <td className="px-2 py-1.5"><Input value={entry.example} onChange={(e) => updateCode(entry.id, "example", e.target.value)} placeholder="e.g. an illustrative quote" className="h-7 text-sm px-2" /></td>
                     <td className="px-2 py-1.5 text-center">
                       <button onClick={() => deleteCode(entry.id)} className="text-muted-foreground hover:text-destructive transition-colors p-0.5" aria-label="Delete code">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -422,6 +471,8 @@ export default function QualitativeCoderPage() {
           disabled={data.length === 0 || !provider || !systemPrompt.trim() || selectedCols.length === 0}
           onRun={batch.run}
           onAbort={batch.abort}
+          onResume={batch.resume}
+          failedCount={batch.failedCount}
           progressColor="bg-violet-500"
           showSuccessErrors
           successCount={batch.stats?.success ?? 0}

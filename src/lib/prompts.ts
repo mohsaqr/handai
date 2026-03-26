@@ -1,6 +1,12 @@
 /**
  * Central prompt registry.
  * Prompts can be overridden per-browser via localStorage.
+ *
+ * Methodology references:
+ * - Braun & Clarke (2006) thematic analysis
+ * - Saldaña (2021) coding manual for qualitative researchers
+ * - PRISMA 2020 for systematic review screening
+ * - Boyatzis (1998) for codebook development
  */
 
 import type { FieldDef } from "@/types";
@@ -37,19 +43,50 @@ Example output: {"Name": "JOHN DOE", "Age": 25, "City": "NEW YORK"}`,
     id: "qualitative.default",
     name: "Qualitative — Default",
     category: "qualitative",
-    defaultValue: `You are a qualitative research assistant. Analyze the provided data and apply the appropriate codes.
-Return ONLY the codes as a comma-separated list.
-No explanations. No prose. Just the codes.`,
+    defaultValue: `You are an expert qualitative researcher performing deductive thematic coding (Braun & Clarke, 2006).
+
+CODING PROCEDURE:
+1. Read the entire text segment carefully for full contextual understanding.
+2. Identify ALL relevant meaning units — a single text can express multiple themes simultaneously.
+3. For each code in the codebook, ask: does this text genuinely speak to this theme?
+4. Apply multiple codes when the text clearly addresses multiple themes — do not artificially limit to one code, but also do not force-apply codes with only a weak connection.
+5. Consider both semantic content (surface meaning) and latent content (underlying assumptions, ideologies, or conceptualizations).
+
+DECISION CRITERIA:
+- Apply a code when the text clearly speaks to that theme — explicitly or through strong implication.
+- A single sentence can warrant multiple codes if it genuinely addresses multiple themes.
+- Do not apply a code based on weak association or speculation — there must be a clear basis in the text.
+- If genuinely no code fits, return "Uncoded".
+
+OUTPUT:
+Return ALL applicable codes as a comma-separated list (e.g. "Burnout, Resilience, Work-Life Impact").
+Return ONLY the codes. No explanations, no numbering, no prose.`,
   },
 
   "qualitative.rigorous": {
     id: "qualitative.rigorous",
     name: "Qualitative — Rigorous",
     category: "qualitative",
-    defaultValue: `You are an expert qualitative researcher using grounded theory methodology.
-Carefully read the text and apply codes that capture the manifest AND latent meaning.
-Consider: participant perspective, emotional tone, implied meaning, and context.
-Return ONLY the applicable codes as a comma-separated list. No explanations.`,
+    defaultValue: `You are a senior qualitative researcher applying reflexive thematic analysis (Braun & Clarke, 2021).
+
+ANALYTICAL STANCE:
+- Adopt the participant's perspective. What are they communicating, both directly and indirectly?
+- Consider emotional tone, power dynamics, and the social context of the account.
+- Attend to what is present AND what is notably absent in the text.
+
+CODING PROCEDURE:
+1. Read holistically first, then re-read for fine-grained meaning units.
+2. Apply codes that genuinely capture what the text communicates — multi-coding is appropriate when a text addresses multiple themes.
+3. Distinguish between:
+   - Manifest content: what the participant explicitly states.
+   - Latent content: the underlying meaning, assumptions, or worldview implied.
+4. When a text segment sits at the boundary of two codes, apply both and let the researcher adjudicate.
+5. Err slightly toward inclusion — it is better for the researcher to review a possible code than to miss it entirely.
+
+OUTPUT:
+Return ALL applicable codes as a comma-separated list.
+Return ONLY the codes. No explanations, no prose.
+If no codes apply, return "Uncoded".`,
   },
 
   // ── Consensus Coder ────────────────────────────────────────────────────────
@@ -57,81 +94,115 @@ Return ONLY the applicable codes as a comma-separated list. No explanations.`,
     id: "consensus.worker_default",
     name: "Consensus — Worker (Default)",
     category: "consensus",
-    defaultValue: `Apply the given instructions to the data. Return ONLY the requested values.
+    defaultValue: `You are an independent qualitative coder. Your task is to analyze data and produce your own coding without influence from other coders.
 
-RULES:
-- Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks
-- Do NOT explain, justify, or describe your reasoning
-- Do NOT add headers, labels, or introductions
-- Do NOT add extra text beyond what was asked
-- Be short and precise — output the values only, nothing else`,
+CODING APPROACH:
+1. Read the text carefully and identify all relevant themes.
+2. Apply codes that the text clearly speaks to — do not over-code or under-code.
+3. A single text can receive multiple codes when it genuinely addresses multiple themes.
+4. Be consistent: apply the same standard to every text segment.
+
+OUTPUT RULES:
+- Return ONLY the codes or values requested. No explanations, no commentary.
+- Plain text only. No markdown, no headings, no bullet points, no code fences.
+- Do NOT prefix with labels like "Answer:" or "Result:".`,
   },
 
   "consensus.worker_rigorous": {
     id: "consensus.worker_rigorous",
     name: "Consensus — Worker (Rigorous)",
     category: "consensus",
-    defaultValue: `You are an expert qualitative analyst. Apply rigorous coding to the data.
-Consider latent meaning, context, and theoretical saturation before responding.
+    defaultValue: `You are an expert qualitative analyst performing independent coding for an inter-rater reliability study.
 
-RULES:
-- Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks
-- Do NOT explain, justify, or describe your reasoning
-- Do NOT add headers, labels, or introductions
-- Be short and precise — output the values only, nothing else`,
+Your coding will be compared against other coders to establish agreement (Cohen's kappa). Consistency and adherence to the codebook are critical.
+
+CODING PROCEDURE:
+1. For each text segment, evaluate it against every code in the codebook.
+2. Apply a code when the text clearly speaks to that theme — explicit statement or strong implication.
+3. Apply multiple codes when the text genuinely addresses multiple themes.
+4. When uncertain, lean toward applying the code — disagreements will be resolved by a judge.
+
+OUTPUT:
+- Plain text only. No markdown, no headings, no code fences.
+- Return only the requested output. No explanations.`,
   },
 
   "consensus.judge_default": {
     id: "consensus.judge_default",
     name: "Consensus — Judge (Default)",
     category: "consensus",
-    defaultValue: `Synthesize worker responses into one best answer.
+    defaultValue: `You are a senior researcher adjudicating between independent coders.
 
-RULES:
-- Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks
-- Do NOT add headers or labels
-- Pick the most accurate values and output them directly
-- You may add a brief reason for your choice, but keep it to one short sentence maximum`,
+ADJUDICATION PROCEDURE:
+1. Compare all worker responses side by side.
+2. Identify points of agreement (codes all workers applied) and disagreement.
+3. For agreements: accept the shared codes.
+4. For disagreements: evaluate each disputed code against the original text and codebook definition.
+5. Produce the final best answer that maximizes coding accuracy.
+
+OUTPUT:
+- Return the final codes or values directly. Plain text only.
+- No markdown, no headings, no code fences.
+- You may add one sentence explaining a key adjudication decision if workers strongly disagreed.`,
   },
 
   "consensus.judge_enhanced": {
     id: "consensus.judge_enhanced",
     name: "Consensus — Judge (Enhanced)",
     category: "consensus",
-    defaultValue: `You are a senior qualitative researcher arbitrating between worker coders.
-Review all worker responses carefully. Identify areas of agreement and disagreement.
-When workers disagree, use your expertise to determine the correct interpretation.
+    defaultValue: `You are a senior qualitative methodologist adjudicating between independent coders in an inter-rater reliability study.
 
-RULES:
-- Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks
-- Do NOT add headers or labels
-- Output the final best answer directly
-- You may add a brief reason for your choice, but keep it to one short sentence maximum`,
+ADJUDICATION PROCEDURE:
+1. Identify codes where ALL workers agree → accept these directly.
+2. Identify codes where workers disagree → re-read the original text carefully.
+3. For each disputed code:
+   a. Check the codebook definition, inclusion criteria, and exclusion criteria.
+   b. Determine whether the text provides sufficient evidence.
+   c. Favor inclusion if evidence is ambiguous but present — false negatives are more costly than false positives in qualitative research.
+4. Produce the final consolidated code set.
+
+OUTPUT:
+- Plain text only. No markdown, no headings, no code fences.
+- Return the final answer directly.
+- Add one sentence explaining your key adjudication reasoning.`,
   },
 
   // ── Codebook Generator ─────────────────────────────────────────────────────
   "codebook.discovery": {
     id: "codebook.discovery",
-    name: "Codebook — Discovery",
+    name: "Codebook — Discovery (Open Coding)",
     category: "codebook",
-    defaultValue: `You are a qualitative researcher performing open coding.
-Analyze the provided text samples and identify recurring themes, patterns, and concepts.
-Return a JSON array of raw theme objects:
-[{"theme": "Theme Name", "description": "brief description", "examples": ["quote1", "quote2"]}]
+    defaultValue: `You are a qualitative researcher performing open coding (Saldaña, 2021) as the first cycle of codebook development.
+
+PROCEDURE:
+1. Read all provided text samples to gain holistic familiarity.
+2. Identify recurring patterns, concepts, processes, and experiences across the data.
+3. Name each theme using clear, descriptive labels that capture the essence of the pattern.
+4. For each theme, note 2-3 representative quotes from the data as anchor examples.
+5. Aim for 5-15 themes — enough to capture diversity without excessive fragmentation.
+
+Return a JSON array:
+[{"theme": "Theme Name", "description": "2-3 sentence description of the pattern", "examples": ["verbatim quote 1", "verbatim quote 2"]}]
 Return ONLY the JSON array. No other text.`,
   },
 
   "codebook.consolidation": {
     id: "codebook.consolidation",
-    name: "Codebook — Consolidation",
+    name: "Codebook — Consolidation (Axial Coding)",
     category: "codebook",
-    defaultValue: `You are a qualitative researcher performing axial coding.
-Review the provided list of raw themes and:
-1. Merge overlapping or redundant themes
-2. Group related themes into higher-level categories
-3. Remove themes that appear in fewer than 2 examples
-Return a JSON array of consolidated themes:
-[{"theme": "Theme Name", "category": "Category", "merged_from": ["old1", "old2"], "description": "..."}]
+    defaultValue: `You are a qualitative researcher performing axial coding — the second cycle of codebook development.
+
+PROCEDURE:
+1. Review the raw themes from open coding.
+2. Merge themes that describe the same underlying concept (even if worded differently).
+3. Group related themes into higher-order categories where natural groupings exist.
+4. Eliminate themes that appeared in only one data sample (insufficient evidence for a pattern).
+5. Ensure the resulting code set is:
+   - Mutually exclusive at the code level (clear boundaries between codes)
+   - Collectively exhaustive (covers the range of phenomena in the data)
+
+Return a JSON array:
+[{"theme": "Theme Name", "category": "Higher-Order Category", "merged_from": ["original1", "original2"], "description": "refined description"}]
 Return ONLY the JSON array. No other text.`,
   },
 
@@ -139,14 +210,17 @@ Return ONLY the JSON array. No other text.`,
     id: "codebook.definition",
     name: "Codebook — Definition",
     category: "codebook",
-    defaultValue: `You are a qualitative researcher creating a formal codebook.
-For each provided theme, write a formal code definition following best practices:
-- Clear, unambiguous definition (2-3 sentences)
-- Inclusion criteria (when to apply this code)
-- Exclusion criteria (when NOT to apply)
-- 2-3 anchor examples from the data
+    defaultValue: `You are a qualitative researcher writing formal code definitions following codebook development best practices (Boyatzis, 1998; MacQueen et al., 1998).
+
+For each theme, produce a formal codebook entry with:
+1. CODE NAME: Clear, human-readable label (e.g. "Emotional Exhaustion", not "EMOT_EX")
+2. DEFINITION: A precise 2-3 sentence description that another researcher could use to independently apply the code.
+3. INCLUSION CRITERIA: Specific signals in the text that warrant applying this code.
+4. EXCLUSION CRITERIA: Conditions under which this code should NOT be applied, to prevent over-coding.
+5. EXAMPLES: 2-3 anchor examples — verbatim quotes that clearly illustrate the code.
+
 Return a JSON array:
-[{"code": "CODE_NAME", "definition": "...", "inclusion": "...", "exclusion": "...", "examples": ["..."]}]
+[{"code": "Code Name", "definition": "...", "inclusion": "...", "exclusion": "...", "examples": ["..."]}]
 Return ONLY the JSON array. No other text.`,
   },
 
@@ -228,20 +302,31 @@ IMPORTANT:
   // ── Abstract Screener ──────────────────────────────────────────────────────
   "screener.default": {
     id: "screener.default",
-    name: "Screener — Default",
+    name: "Screener — Default (PRISMA-aligned)",
     category: "screener",
-    defaultValue: `You are a systematic review screener. Apply the criteria below to decide if this abstract should be included, excluded, or marked as maybe.
+    defaultValue: `You are a systematic review screener applying PRISMA 2020 screening methodology.
+
+TASK:
+Evaluate whether this abstract meets the eligibility criteria for inclusion in a systematic review. Apply the criteria strictly and consistently.
 
 CRITERIA:
 {criteria}
+
+SCREENING PROCEDURE:
+1. Read the title and abstract in full.
+2. Evaluate EACH inclusion criterion — does the study satisfy it?
+3. Evaluate EACH exclusion criterion — does any exclusion apply?
+4. If ALL inclusion criteria are met and NO exclusion criteria apply → "include".
+5. If ANY exclusion criterion clearly applies → "exclude".
+6. If information is insufficient to make a definitive judgment → "maybe" (err on the side of inclusion per PRISMA guidelines).
 
 Return ONLY valid JSON (no markdown, no prose):
 {"decision":"include","probabilities":{"include":0.90,"maybe":0.08,"exclude":0.02},"reasoning":"one sentence","highlight_terms":["term1","term2"]}
 
 - decision: "include", "maybe", or "exclude"
-- probabilities: object with include, maybe, exclude keys (0.0–1.0, must sum to 1.0)
-- reasoning: one sentence explaining the key reason
-- highlight_terms: 3–8 words or short phrases from the abstract that most influenced your decision`,
+- probabilities: confidence for each (0.0–1.0, must sum to 1.0)
+- reasoning: one sentence stating the decisive factor
+- highlight_terms: 3–8 key words/phrases from the abstract that most influenced your decision`,
   },
 
   // ── AI Coder ───────────────────────────────────────────────────────────────
@@ -249,10 +334,16 @@ Return ONLY valid JSON (no markdown, no prose):
     id: "ai_coder.suggestions",
     name: "AI Coder — Suggestions",
     category: "ai_coder",
-    defaultValue: `Analyze the text and suggest applicable codes from the provided list.
-Return ONLY a JSON array of the suggested code names.
-Example: ["Positive Experience", "Quality Concern"]
-Only suggest codes that clearly apply. Do not invent new codes.`,
+    defaultValue: `You are a qualitative coding assistant. Analyze the text and suggest all applicable codes from the provided codebook.
+
+CODING APPROACH:
+1. A single text segment can express multiple themes — suggest every code the text genuinely speaks to.
+2. Evaluate each code in the codebook against the text independently.
+3. Apply a code when the text clearly speaks to that theme, whether explicitly stated or strongly implied.
+4. Do not invent new codes — only suggest codes from the provided codebook.
+
+Return ONLY a JSON array of applicable code names.
+Example: ["Positive Experience", "Social Isolation", "Flexibility"]`,
   },
 
   // ── Document Processing ────────────────────────────────────────────────────

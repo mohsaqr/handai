@@ -29,8 +29,6 @@ export function ResultsPanel({
   runId,
   title = "Results",
   subtitle,
-  onExportCSV,
-  onExportXLSX,
   extraActions,
   children,
 }: ResultsPanelProps) {
@@ -64,13 +62,11 @@ export function ResultsPanel({
 
       {children}
 
-      <div className="border border-gray-300 overflow-hidden">
-        <div className="px-4 py-2.5 border-b border-gray-300 bg-gray-50 text-sm font-medium flex items-center justify-between">
-          <span>{title} — {results.length} rows</span>
-          <ExportDropdown data={results as any[]} filename="results" />
-        </div>
-        <DataTable data={results} showAll />
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium text-muted-foreground">{results.length} rows</span>
+        <ExportDropdown data={results as Record<string, unknown>[]} filename="results" />
       </div>
+      <DataTable data={results} />
     </div>
   );
 }

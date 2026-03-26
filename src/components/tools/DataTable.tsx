@@ -9,7 +9,6 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import {
     Dialog,
     DialogContent,
@@ -21,14 +20,13 @@ import { ChevronLeft, ChevronRight, Download, ChevronDown } from "lucide-react";
 import * as XLSX from "xlsx";
 
 interface DataTableProps {
-    data: any[];
+    data: Record<string, unknown>[];
     maxRows?: number;
-    showAll?: boolean;
 }
 
 type ExportFormat = "csv" | "tsv" | "json" | "xlsx";
 
-export function exportData(data: any[], format: ExportFormat, filename?: string) {
+export function exportData(data: Record<string, unknown>[], format: ExportFormat, filename?: string) {
     if (format === "xlsx") {
         const ws = XLSX.utils.json_to_sheet(data);
         const wb = XLSX.utils.book_new();
@@ -76,7 +74,7 @@ export function exportData(data: any[], format: ExportFormat, filename?: string)
 }
 
 /** Dropdown button for exporting data in multiple formats. */
-export function ExportDropdown({ data, filename }: { data: any[]; filename?: string }) {
+export function ExportDropdown({ data, filename }: { data: Record<string, unknown>[]; filename?: string }) {
     const [showMenu, setShowMenu] = useState(false);
 
     if (!data || data.length === 0) return null;
@@ -116,22 +114,19 @@ export function ExportDropdown({ data, filename }: { data: any[]; filename?: str
     );
 }
 
-export function DataTable({ data, maxRows = 100, showAll = false }: DataTableProps) {
+export function DataTable({ data, maxRows = 10 }: DataTableProps) {
     const [expanded, setExpanded] = useState<{ col: string; value: string } | null>(null);
     const [sortCol, setSortCol] = useState<string | null>(null);
     const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
     const [tablePage, setTablePage] = useState(0);
 
     useEffect(() => {
-        setTablePage(0);
+        queueMicrotask(() => setTablePage(0));
     }, [data]);
 
-    if (!data || data.length === 0) return null;
-
-    const headers = Object.keys(data[0]);
-
-    // Sort
+    // Sort — must be called before early return to satisfy hook rules
     const sortedData = useMemo(() => {
+        if (!data || data.length === 0) return [];
         if (!sortCol) return data;
         return [...data].sort((a, b) => {
             const va = String(a[sortCol] ?? "");
@@ -142,9 +137,12 @@ export function DataTable({ data, maxRows = 100, showAll = false }: DataTablePro
         });
     }, [data, sortCol, sortDir]);
 
-    // Pagination (only when not showAll)
-    const totalPages = showAll ? 1 : Math.ceil(sortedData.length / maxRows);
-    const displayData = showAll ? sortedData : sortedData.slice(tablePage * maxRows, (tablePage + 1) * maxRows);
+    if (!data || data.length === 0) return null;
+
+    const headers = Object.keys(data[0]);
+
+    const totalPages = Math.ceil(sortedData.length / maxRows);
+    const displayData = sortedData.slice(tablePage * maxRows, (tablePage + 1) * maxRows);
 
     const handleHeaderClick = (header: string) => {
         if (sortCol === header) {
@@ -156,64 +154,52 @@ export function DataTable({ data, maxRows = 100, showAll = false }: DataTablePro
         }
     };
 
-    const tableContent = (
-        <Table>
-            <TableHeader className="sticky top-0 bg-gray-100 z-10">
-                <TableRow>
-                    {headers.map((header) => (
-                        <TableHead
-                            key={header}
-                            className="font-bold cursor-pointer hover:bg-gray-200 select-none"
-                            onClick={() => handleHeaderClick(header)}
-                        >
-                            <div className="flex items-center gap-1">
-                                {header}
-                                {sortCol === header && (
-                                    <span className="text-xs opacity-60">
-                                        {sortDir === "asc" ? "↑" : "↓"}
-                                    </span>
-                                )}
-                            </div>
-                        </TableHead>
-                    ))}
-                </TableRow>
-            </TableHeader>
-            <TableBody>
-                {displayData.map((row, i) => (
-                    <TableRow key={i}>
+    return (
+        <>
+            <Table>
+                <TableHeader className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--color-border)]">
+                    <TableRow>
                         {headers.map((header) => (
-                            <TableCell
-                                key={`${i}-${header}`}
-                                className="whitespace-pre-wrap max-w-md truncate cursor-pointer hover:bg-muted/20"
-                                onClick={() => setExpanded({ col: header, value: String(row[header] ?? "") })}
+                            <TableHead
+                                key={header}
+                                className="font-bold cursor-pointer hover:bg-muted/80 select-none whitespace-nowrap"
+                                onClick={() => handleHeaderClick(header)}
                             >
-                                {String(row[header] ?? "")}
-                            </TableCell>
+                                <div className="flex items-center gap-1">
+                                    {header}
+                                    {sortCol === header && (
+                                        <span className="text-xs opacity-60">
+                                            {sortDir === "asc" ? "\u2191" : "\u2193"}
+                                        </span>
+                                    )}
+                                </div>
+                            </TableHead>
                         ))}
                     </TableRow>
-                ))}
-            </TableBody>
-        </Table>
-    );
+                </TableHeader>
+                <TableBody>
+                    {displayData.map((row, i) => (
+                        <TableRow key={i}>
+                            {headers.map((header) => (
+                                <TableCell
+                                    key={`${i}-${header}`}
+                                    className="whitespace-pre-wrap max-w-md truncate cursor-pointer hover:bg-muted/20"
+                                    onClick={() => setExpanded({ col: header, value: String(row[header] ?? "") })}
+                                >
+                                    {String(row[header] ?? "")}
+                                </TableCell>
+                            ))}
+                        </TableRow>
+                    ))}
+                </TableBody>
+            </Table>
 
-    return (
-        <div className="border border-gray-300 bg-card text-card-foreground">
-            {showAll ? (
-                <div className="w-full border-gray-300 overflow-x-auto">
-                    {tableContent}
-                </div>
-            ) : (
-                <ScrollArea className="h-[400px] w-full border-gray-300">
-                    {tableContent}
-                    <ScrollBar orientation="horizontal" />
-                </ScrollArea>
-            )}
-            <div className="px-3 py-2 border-t flex items-center justify-between text-xs text-muted-foreground">
-                <span>{data.length} rows</span>
-                {!showAll && totalPages > 1 && (
+            {totalPages > 1 && (
+                <div className="px-3 py-2 flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{data.length} rows</span>
                     <div className="flex items-center gap-2">
                         <span>
-                            {tablePage * maxRows + 1}–{Math.min((tablePage + 1) * maxRows, sortedData.length)} of {sortedData.length}
+                            {tablePage * maxRows + 1}&ndash;{Math.min((tablePage + 1) * maxRows, sortedData.length)} of {sortedData.length}
                         </span>
                         <Button
                             variant="outline"
@@ -234,8 +220,8 @@ export function DataTable({ data, maxRows = 100, showAll = false }: DataTablePro
                             <ChevronRight className="h-3 w-3" />
                         </Button>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
 
             <Dialog open={!!expanded} onOpenChange={() => setExpanded(null)}>
                 <DialogContent className="max-w-2xl max-h-[80vh]">
@@ -247,6 +233,6 @@ export function DataTable({ data, maxRows = 100, showAll = false }: DataTablePro
                     </pre>
                 </DialogContent>
             </Dialog>
-        </div>
+        </>
     );
 }

@@ -11,7 +11,7 @@ import { useAppStore, DEFAULT_SYSTEM_SETTINGS } from "@/lib/store";
 import { useSystemSettings, useConfiguredProviders } from "@/lib/hooks";
 import { PROMPTS, getPrompt, setPromptOverride, clearPromptOverride } from "@/lib/prompts";
 import { toast } from "sonner";
-import { Key, ShieldCheck, Loader2, Wifi, RotateCcw, ChevronDown, Bot, Sliders, RefreshCw, SlidersHorizontal, Minus, Plus, FolderOpen } from "lucide-react";
+import { Key, ShieldCheck, Loader2, Wifi, RotateCcw, ChevronDown, Bot, Sliders, RefreshCw, SlidersHorizontal, Minus, Plus } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 
@@ -60,7 +60,6 @@ export default function SettingsPage() {
 
   const systemSettings = useSystemSettings();
   const setSystemSettings = useAppStore((s) => s.setSystemSettings);
-  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   const isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
 
   const configured = useConfiguredProviders();
@@ -70,12 +69,13 @@ export default function SettingsPage() {
   useEffect(() => {
     setPromptValues(Object.fromEntries(Object.keys(PROMPTS).map((id) => [id, getPrompt(id)])));
     detectLocalModels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- detectLocalModels is stable but not wrapped in useCallback; runs once on mount
   }, []);
 
   const detectLocalModels = async () => {
     setIsDetecting(true);
     try {
-      if (isTauri || isStatic) {
+      if (isStatic) {
         const [ollama, lm] = await Promise.all([
           fetch("http://localhost:11434/api/tags").then((r) => r.json()).catch(() => null),
           fetch("http://localhost:1234/v1/models").then((r) => r.json()).catch(() => null),
@@ -118,7 +118,7 @@ export default function SettingsPage() {
         userContent: "Reply with the single word: OK",
         temperature: 0,
       };
-      if (isTauri || isStatic) {
+      if (isStatic) {
         const { processRowDirect } = await import("@/lib/llm-browser");
         await processRowDirect(params);
       } else {
@@ -147,23 +147,6 @@ export default function SettingsPage() {
       prompts: promptsRef,
     };
     refs[section]?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
-  const handleBrowse = async () => {
-    if (!isTauri) {
-      toast.info("Folder picker is available in the desktop app only");
-      return;
-    }
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mod = await (import("@tauri-apps/api/core") as any);
-      const selected = await mod.invoke("plugin:dialog|open", { directory: true, multiple: false });
-      if (typeof selected === "string") {
-        setSystemSettings({ autoSavePath: selected });
-      }
-    } catch {
-      toast.error("Could not open folder picker");
-    }
   };
 
   const getStatus = (id: string) => {
@@ -528,33 +511,6 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {/* Storage */}
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/50 mb-3 px-0.5">
-                Storage
-              </p>
-              <div className="rounded-xl border bg-card p-5 space-y-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs font-medium">Auto-save Path</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      readOnly={!isTauri}
-                      placeholder={isTauri ? "Select a folder…" : "Desktop app only"}
-                      value={systemSettings.autoSavePath}
-                      onChange={(e) => { if (isTauri) setSystemSettings({ autoSavePath: e.target.value }); }}
-                      className="flex-1 h-8 text-xs font-mono"
-                    />
-                    <Button variant="outline" size="sm" className="h-8 px-2.5" onClick={handleBrowse}>
-                      <FolderOpen className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">
-                    Automatically save results to this folder after each run.
-                  </p>
-                </div>
-              </div>
-            </div>
-
             {/* Reset */}
             <Button
               variant="outline"
@@ -595,7 +551,7 @@ export default function SettingsPage() {
                     onClick={() =>
                       setOpenCategories((prev) => {
                         const next = new Set(prev);
-                        next.has(category) ? next.delete(category) : next.add(category);
+                        if (next.has(category)) { next.delete(category); } else { next.add(category); }
                         return next;
                       })
                     }

@@ -43,9 +43,10 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { useActiveModel, useConfiguredProviders } from "@/lib/hooks"
 import { useAppStore } from "@/lib/store"
+import { useProcessingStore } from "@/lib/processing-store"
 import Link from "next/link"
 import { toast } from "sonner"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname } from "next/navigation"
 
 const PROVIDER_LABELS: Record<string, string> = {
     openai: "OpenAI",
@@ -227,12 +228,11 @@ function useLocalProviderDetection() {
     const { providers, setProviderConfig } = useAppStore();
 
     React.useEffect(() => {
-        const _isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
         const _isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
 
-        // In Tauri or static web builds there is no /api/local-models server endpoint.
+        // In static web builds there is no /api/local-models server endpoint.
         // Probe localhost directly (CORS may block this in browsers, but we catch errors).
-        const fetchDetected = (_isTauri || _isStatic)
+        const fetchDetected = _isStatic
             ? Promise.all([
                   fetch("http://localhost:11434/api/tags").then((r) => r.json()).catch(() => null),
                   fetch("http://localhost:1234/v1/models").then((r) => r.json()).catch(() => null),
@@ -283,13 +283,15 @@ function useLocalProviderDetection() {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     useLocalProviderDetection();
     const router = useRouter();
+    const pathname = usePathname();
+    const jobs = useProcessingStore((s) => s.jobs);
 
     return (
         <Sidebar collapsible="icon" {...props}>
                 <SidebarHeader>
                     <SidebarMenu>
                         <SidebarMenuItem>
-                            <SidebarMenuButton size="lg" asChild>
+                            <SidebarMenuButton size="lg" asChild isActive={pathname === "/"}>
                                 <Link href="/">
                                     <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                                         <LayoutDashboard className="size-4" />
@@ -309,16 +311,28 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                             <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
                             <SidebarGroupContent>
                                 <SidebarMenu>
-                                    {group.items.map((item) => (
-                                        <SidebarMenuItem key={item.title}>
-                                            <SidebarMenuButton asChild tooltip={item.title}>
-                                                <Link href={item.url}>
-                                                    <item.icon />
-                                                    <span>{item.title}</span>
-                                                </Link>
-                                            </SidebarMenuButton>
-                                        </SidebarMenuItem>
-                                    ))}
+                                    {group.items.map((item) => {
+                                        const isActive = pathname === item.url;
+                                        const isRunning = jobs[item.url]?.isProcessing ?? false;
+                                        return (
+                                            <SidebarMenuItem key={item.title}>
+                                                <SidebarMenuButton asChild isActive={isActive} tooltip={item.title}>
+                                                    <Link href={item.url}>
+                                                        <div className="relative">
+                                                            <item.icon />
+                                                            {isRunning && (
+                                                                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                                                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <span>{item.title}</span>
+                                                    </Link>
+                                                </SidebarMenuButton>
+                                            </SidebarMenuItem>
+                                        );
+                                    })}
                                 </SidebarMenu>
                             </SidebarGroupContent>
                         </SidebarGroup>

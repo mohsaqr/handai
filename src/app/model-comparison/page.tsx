@@ -1,25 +1,27 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from "react";
-import { Button } from "@/components/ui/button";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PromptEditor } from "@/components/tools/PromptEditor";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { useAppStore } from "@/lib/store";
 import { useSystemSettings } from "@/lib/hooks";
-import { Download, Loader2, AlertCircle, ExternalLink } from "lucide-react";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
+import { AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import pLimit from "p-limit";
 import Link from "next/link";
 
 import { useColumnSelection } from "@/hooks/useColumnSelection";
-import { dispatchCreateRun, dispatchSaveResults, dispatchComparisonRow } from "@/lib/llm-dispatch";
+import { dispatchComparisonRow } from "@/lib/llm-dispatch";
+import { useBatchProcessor } from "@/hooks/useBatchProcessor";
+import { useProcessingStore } from "@/lib/processing-store";
 
 import { UploadPreview } from "@/components/tools/UploadPreview";
 import { ColumnSelector } from "@/components/tools/ColumnSelector";
 import { NoModelWarning } from "@/components/tools/NoModelWarning";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
-import { DataTable, ExportDropdown } from "@/components/tools/DataTable";
+import { ExecutionPanel } from "@/components/tools/ExecutionPanel";
+import { ResultsPanel } from "@/components/tools/ResultsPanel";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 
 type Row = Record<string, unknown>;
@@ -45,13 +47,6 @@ export default function ModelComparisonPage() {
     "Analyze the following data and provide a concise, structured response."
   );
   const [selectedProviders, setSelectedProviders] = useState<string[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [runMode, setRunMode] = useState<RunMode>("full");
-  const [progress, setProgress] = useState({ completed: 0, total: 0 });
-  const [results, setResults] = useState<Row[]>([]);
-  const [runId, setRunId] = useState<string | null>(null);
-  const abortRef = useRef(false);
-  const startedAtRef = useRef<number>(0);
 
   const providers = useAppStore((state) => state.providers);
   const systemSettings = useSystemSettings();
@@ -102,10 +97,123 @@ export default function ModelComparisonPage() {
 
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
+  // Use the first selected provider as a "representative" activeModel for the batch processor.
+  // The actual multi-model dispatch happens inside processRow via dispatchComparisonRow.
+  const representativeModel = useMemo(() => {
+    if (selectedProviders.length === 0) return null;
+    const firstId = selectedProviders[0];
+    return providers[firstId] ?? null;
+  }, [selectedProviders, providers]);
+
+  // Reorder columns: original cols → all outputs → all latencies
+  const reorderColumns = useCallback((rows: Row[]): Row[] => {
+    if (rows.length === 0) return rows;
+    const allKeys = Object.keys(rows[0]);
+    const originalKeys = allKeys.filter((k) => !k.endsWith("_output") && !k.endsWith("_latency_ms") && k !== "error_msg" && k !== "status" && k !== "latency_ms");
+    const outputKeys = allKeys.filter((k) => k.endsWith("_output"));
+    const latencyKeys = allKeys.filter((k) => k.endsWith("_latency_ms") && k !== "latency_ms");
+    const errorKeys = allKeys.filter((k) => k === "error_msg");
+    const orderedKeys = [...originalKeys, ...outputKeys, ...latencyKeys, ...errorKeys];
+
+    return rows.map((row) => {
+      const ordered: Row = {};
+      orderedKeys.forEach((k) => { if (k in row) ordered[k] = row[k]; });
+      return ordered;
+    });
+  }, []);
+
+  const batch = useBatchProcessor({
+    toolId: "/model-comparison",
+    runType: "model-comparison",
+    activeModel: representativeModel,
+    systemSettings,
+    data,
+    dataName,
+    systemPrompt: aiInstructions,
+    concurrency,
+    validate: () => {
+      if (selectedProviders.length < 2) return "Select at least 2 models to compare";
+      if (!systemPrompt.trim()) return "Enter instructions first";
+      if (selectedCols.length === 0) return "Select at least one column";
+      // Verify all selected providers have valid credentials
+      const activeModels = selectedProviders
+        .map((id) => ({ id, provider: id, model: providers[id]?.defaultModel ?? "", apiKey: providers[id]?.apiKey ?? "", baseUrl: providers[id]?.baseUrl }))
+        .filter((m) => m.apiKey || providers[m.id]?.isLocal);
+      if (activeModels.length < 2) return "Some selected providers have missing API keys";
+      return null;
+    },
+    selectData: (_data: Row[], mode: RunMode) => {
+      return mode === "preview" ? _data.slice(0, 3)
+        : mode === "test" ? _data.slice(0, 10)
+        : _data;
+    },
+    runParams: {
+      provider: selectedProviders.join(","),
+      model: representativeModel?.defaultModel ?? "unknown",
+      temperature: systemSettings.temperature,
+    },
+    processRow: async (row: Row) => {
+      const activeModels = selectedProviders
+        .map((id) => ({ id, provider: id, model: providers[id]?.defaultModel ?? "", apiKey: providers[id]?.apiKey ?? "", baseUrl: providers[id]?.baseUrl }))
+        .filter((m) => m.apiKey || providers[m.id]?.isLocal);
+
+      const subset: Row = {};
+      selectedCols.forEach((col) => (subset[col] = row[col]));
+
+      const result = await dispatchComparisonRow({
+        models: activeModels,
+        systemPrompt: aiInstructions,
+        userContent: JSON.stringify(subset),
+      });
+
+      const outputUpdates: Row = {};
+      const latencyUpdates: Row = {};
+      (result.results as { id: string; output: string; latency?: number }[]).forEach((r) => {
+        outputUpdates[`${r.id}_output`] = r.output;
+        if (r.latency !== undefined) latencyUpdates[`${r.id}_latency_ms`] = String(Math.round(r.latency * 1000));
+      });
+      // Order: original row → outputs → latencies
+      return { ...row, ...outputUpdates, ...latencyUpdates, status: "success" };
+    },
+    buildResultEntry: (r: Row, i: number) => ({
+      rowIndex: i,
+      input: r as Record<string, unknown>,
+      output: JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => k.endsWith("_output")))),
+      status: (r.status as string) ?? (r.error_msg ? "error" : "success"),
+      errorMessage: r.error_msg as string | undefined,
+    }),
+    onComplete: () => {
+      // no-op; results handled by useBatchProcessor
+    },
+  });
+
+  // Reordered results for display
+  const displayResults = useMemo(() => reorderColumns(batch.results), [batch.results, reorderColumns]);
+
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("model-comparison");
+  useEffect(() => {
+    if (!restored) return;
+    queueMicrotask(() => {
+      setData(restored.data);
+      setDataName(restored.dataName);
+      setSystemPrompt(restored.systemPrompt);
+      // Populate results in global processing store
+      const errors = restored.results.filter((r) => r.status === "error").length;
+      useProcessingStore.getState().completeJob(
+        "/model-comparison",
+        restored.results,
+        { success: restored.results.length - errors, errors, avgLatency: 0 },
+        restored.runId,
+      );
+      toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+    });
+  }, [restored]);
+
   const handleDataLoaded = (newData: Row[], name: string) => {
     setData(newData);
     setDataName(name);
-    setResults([]);
+    batch.clearResults();
     toast.success(`Loaded ${newData.length} rows from ${name}`);
   };
 
@@ -116,127 +224,6 @@ export default function ModelComparisonPage() {
 
   const toggleProvider = (id: string) =>
     setSelectedProviders((prev) => prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]);
-
-  const startComparison = async (mode: RunMode) => {
-    if (data.length === 0) return toast.error("No data loaded");
-    if (selectedProviders.length < 2) return toast.error("Select at least 2 models to compare");
-    if (!systemPrompt.trim()) return toast.error("Enter instructions first");
-
-    const activeModels = selectedProviders
-      .map((id) => ({ id, provider: id, model: providers[id]?.defaultModel ?? "", apiKey: providers[id]?.apiKey ?? "", baseUrl: providers[id]?.baseUrl }))
-      .filter((m) => m.apiKey || providers[m.id]?.isLocal);
-
-    if (activeModels.length < 2) return toast.error("Some selected providers have missing API keys");
-
-    const targetData =
-      mode === "preview" ? data.slice(0, 3) :
-      mode === "test"    ? data.slice(0, 10) :
-      data;
-
-    abortRef.current = false;
-    startedAtRef.current = Date.now();
-    setRunId(null);
-    setIsProcessing(true);
-    setRunMode(mode);
-    setProgress({ completed: 0, total: targetData.length });
-
-    const limit = pLimit(concurrency);
-    const newResults: Row[] = [...targetData];
-
-    const firstProvider = providers[selectedProviders[0]];
-    const localRunId = await dispatchCreateRun({
-      runType: "model-comparison",
-      provider: selectedProviders.join(","),
-      model: firstProvider?.defaultModel ?? "unknown",
-      temperature: systemSettings.temperature,
-      systemPrompt: aiInstructions,
-      inputFile: dataName || "unnamed",
-      inputRows: targetData.length,
-    });
-
-    const tasks = targetData.map((row, idx) =>
-      limit(async () => {
-        if (abortRef.current) return;
-        try {
-          const subset: Row = {};
-          selectedCols.forEach((col) => (subset[col] = row[col]));
-
-          const result = await dispatchComparisonRow({
-            models: activeModels,
-            systemPrompt: aiInstructions,
-            userContent: JSON.stringify(subset),
-          });
-
-          const outputUpdates: Row = {};
-          const latencyUpdates: Row = {};
-          (result.results as { id: string; output: string; latency?: number }[]).forEach((r) => {
-            outputUpdates[`${r.id}_output`] = r.output;
-            if (r.latency !== undefined) latencyUpdates[`${r.id}_latency_ms`] = String(Math.round(r.latency * 1000));
-          });
-          // Order: original row → outputs → latencies
-          newResults[idx] = { ...row, ...outputUpdates, ...latencyUpdates };
-        } catch (err) {
-          console.error(err);
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          const updates: Row = {};
-          activeModels.forEach((m) => { updates[`${m.id}_output`] = "ERROR"; });
-          updates["error_msg"] = errorMsg;
-          newResults[idx] = { ...row, ...updates };
-        }
-        setProgress((prev) => ({ ...prev, completed: prev.completed + 1 }));
-      })
-    );
-
-    await Promise.all(tasks);
-
-    // Reorder columns: original → outputs → latencies
-    const reorderedResults = reorderColumns(newResults);
-    setResults(reorderedResults);
-
-    if (localRunId) {
-      const resultRows = reorderedResults.map((r, i) => ({
-        rowIndex: i,
-        input: r as Record<string, unknown>,
-        output: JSON.stringify(Object.fromEntries(Object.entries(r).filter(([k]) => k.endsWith("_output")))),
-        status: r.error_msg ? "error" : "success",
-        errorMessage: r.error_msg as string | undefined,
-      }));
-      await dispatchSaveResults(localRunId, resultRows);
-    }
-
-    setRunId(localRunId);
-    setIsProcessing(false);
-    toast.success("Comparison complete!");
-  };
-
-  // Reorder columns: original cols → all outputs → all latencies
-  const reorderColumns = (rows: Row[]): Row[] => {
-    if (rows.length === 0) return rows;
-    const allKeys = Object.keys(rows[0]);
-    const originalKeys = allKeys.filter((k) => !k.endsWith("_output") && !k.endsWith("_latency_ms") && k !== "error_msg");
-    const outputKeys = allKeys.filter((k) => k.endsWith("_output"));
-    const latencyKeys = allKeys.filter((k) => k.endsWith("_latency_ms"));
-    const errorKeys = allKeys.filter((k) => k === "error_msg");
-    const orderedKeys = [...originalKeys, ...outputKeys, ...latencyKeys, ...errorKeys];
-
-    return rows.map((row) => {
-      const ordered: Row = {};
-      orderedKeys.forEach((k) => { if (k in row) ordered[k] = row[k]; });
-      return ordered;
-    });
-  };
-
-  const handleExport = () => {
-    if (!results.length) return;
-    const headers = Object.keys(results[0]);
-    const csv = [headers.join(","), ...results.map((r) => headers.map((h) => `"${String(r[h] ?? "").replace(/"/g, '""')}"`).join(","))].join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `comparison_results_${dataName || Date.now()}.csv`; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const progressPct = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
 
   return (
     <div className="space-y-0 pb-16">
@@ -365,74 +352,30 @@ export default function ModelComparisonPage() {
       {/* ── 6. Execute */}
       <div className="space-y-4 py-8">
         <h2 className="text-2xl font-bold">6. Execute</h2>
-
-        {isProcessing && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Comparing {selectedProviders.length} models across {progress.total} rows…
-                {startedAtRef.current > 0 && <span className="ml-1">{Math.round((Date.now() - startedAtRef.current) / 1000)}s elapsed</span>}
-              </span>
-              <div className="flex items-center gap-2">
-                <span>{progress.completed} / {progress.total}</span>
-                <Button variant="outline" size="sm" onClick={() => { abortRef.current = true; }}
-                  className="h-6 px-2 text-[11px] border-red-300 text-red-600 hover:bg-red-50">Stop</Button>
-              </div>
-            </div>
-            <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
-              <div className="bg-blue-500 h-full transition-all duration-300" style={{ width: `${progressPct}%` }} />
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Button variant="outline" size="lg" className="h-12 text-sm border-dashed"
-            disabled={data.length === 0 || isProcessing || selectedProviders.length < 2 || !systemPrompt.trim() || selectedCols.length === 0}
-            onClick={() => startComparison("preview")}>
-            {isProcessing && runMode === "preview" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Preview (3 rows)
-          </Button>
-          <Button size="lg" className="h-12 text-base bg-red-500 hover:bg-red-600 text-white"
-            disabled={data.length === 0 || isProcessing || selectedProviders.length < 2 || !systemPrompt.trim() || selectedCols.length === 0}
-            onClick={() => startComparison("test")}>
-            {isProcessing && runMode === "test" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Test (10 rows)
-          </Button>
-          <Button variant="outline" size="lg" className="h-12 text-base"
-            disabled={data.length === 0 || isProcessing || selectedProviders.length < 2 || !systemPrompt.trim() || selectedCols.length === 0}
-            onClick={() => startComparison("full")}>
-            {isProcessing && runMode === "full" ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Full Run ({data.length} rows)
-          </Button>
-        </div>
+        <ExecutionPanel
+          isProcessing={batch.isProcessing}
+          runMode={batch.runMode}
+          progress={batch.progress}
+          etaStr={batch.etaStr}
+          dataCount={data.length}
+          disabled={data.length === 0 || selectedProviders.length < 2 || !systemPrompt.trim() || selectedCols.length === 0}
+          onRun={batch.run}
+          onAbort={batch.abort}
+          onResume={batch.resume}
+          failedCount={batch.failedCount}
+          fullLabel={`Full Run (${data.length} rows)`}
+        />
       </div>
 
       {/* ── Results */}
-      {results.length > 0 && (
-        <div className="space-y-4 border-t pt-6 pb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Results</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">{results.length} rows × {selectedProviders.length} models</p>
-            </div>
-            <div className="flex items-center gap-3">
-              {runId && (
-                <Link href={`/history/${runId}`} className="flex items-center gap-1.5 text-xs text-indigo-500 hover:underline">
-                  <ExternalLink className="h-3 w-3" />View in History
-                </Link>
-              )}
-            </div>
-          </div>
-          <div className="border rounded-lg overflow-hidden">
-            <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between">
-              <span>Comparison Results — {results.length} rows</span>
-              <ExportDropdown data={results} filename="comparison_results" />
-            </div>
-            <DataTable data={results} showAll />
-          </div>
-        </div>
-      )}
+      <ResultsPanel
+        results={displayResults}
+        runId={batch.runId}
+        runMode={batch.runMode}
+        totalDataCount={data.length}
+        title="Results"
+        subtitle={`${displayResults.length} rows × ${selectedProviders.length} models`}
+      />
     </div>
   );
 }

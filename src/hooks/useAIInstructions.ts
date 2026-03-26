@@ -20,7 +20,7 @@ export function useAIInstructions(
   const [aiInstructions, setAiInstructions] = useState("");
 
   useEffect(() => {
-    setAiInstructions((prev) => {
+    queueMicrotask(() => setAiInstructions((prev) => {
       const marker = [AI_INSTRUCTIONS_MARKER, ...OLD_MARKERS].find((m) =>
         prev.includes(m)
       );
@@ -29,7 +29,7 @@ export function useAIInstructions(
           ? prev.slice(prev.indexOf(marker) + marker.length)
           : "";
       return buildAutoInstructions() + userRemarks;
-    });
+    }));
   }, [buildAutoInstructions]);
 
   return [aiInstructions, setAiInstructions];

@@ -1,8 +1,8 @@
 /**
  * Browser-side LLM functions — mirror of the six /api/* route handlers.
  *
- * Used in Tauri (static export, no API routes). Pages detect
- * `__TAURI_INTERNALS__` and call these instead of fetch('/api/...').
+ * Used in static builds (GitHub Pages, no API routes).
+ * llm-dispatch.ts routes here when NEXT_PUBLIC_STATIC is set.
  *
  * All utilities used here (getModel, withRetry, cohenKappa, pairwiseAgreement)
  * are pure fetch / pure JS — no Node.js APIs — so they run in the browser as-is.
@@ -362,8 +362,6 @@ export async function consensusRowDirect(params: {
     { maxAttempts: 3, baseDelayMs: 100 }
   );
   const judgeLatency = (Date.now() - judgeStart) / 1000;
-  const totalLatency = judgeLatency + Math.max(...workerResults.map((r) => r.latency));
-
   // Step 4 (optional): Quality scoring
   let qualityScores: number[] | undefined;
   if (params.enableQualityScoring) {

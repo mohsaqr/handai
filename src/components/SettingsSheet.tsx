@@ -20,7 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
   Key, ShieldCheck, Loader2, Wifi, RotateCcw, ChevronDown, RefreshCw,
-  Minus, Plus, FolderOpen,
+  Minus, Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -57,7 +57,6 @@ const PROMPT_CATEGORY_LABELS: Record<string, string> = {
   ai_coder: "AI Coder",
 };
 
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
 
 export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
@@ -83,8 +82,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const detectLocalModels = async () => {
     setIsDetecting(true);
     try {
-      if (isTauri || isStatic) {
-        // No server endpoint — probe localhost directly (CORS may block in browsers)
+      if (isStatic) {
         const [ollama, lm] = await Promise.all([
           fetch("http://localhost:11434/api/tags").then((r) => r.json()).catch(() => null),
           fetch("http://localhost:1234/v1/models").then((r) => r.json()).catch(() => null),
@@ -125,7 +123,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
         userContent: "Reply with the single word: OK",
         temperature: 0,
       };
-      if (isTauri || isStatic) {
+      if (isStatic) {
         const { processRowDirect } = await import("@/lib/llm-browser");
         await processRowDirect(params);
       } else {
@@ -143,23 +141,6 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
       toast.error(`${PROVIDER_LABELS[id] ?? id} failed`, { description: msg });
     } finally {
       setIsTesting(null);
-    }
-  };
-
-  const handleBrowse = async () => {
-    if (!isTauri) {
-      toast.info("Folder picker is available in the desktop app only");
-      return;
-    }
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mod = await (import("@tauri-apps/api/core") as any);
-      const selected = await mod.invoke("plugin:dialog|open", { directory: true, multiple: false });
-      if (typeof selected === "string") {
-        setSystemSettings({ autoSavePath: selected });
-      }
-    } catch {
-      toast.error("Could not open folder picker");
     }
   };
 
@@ -330,19 +311,6 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 </div>
               </div>
 
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50 pt-2">Storage</p>
-              <div className="rounded-lg border bg-card p-4 space-y-2">
-                <Label className="text-[10px]">Auto-save Path</Label>
-                <div className="flex gap-1.5">
-                  <Input readOnly={!isTauri} placeholder={isTauri ? "Select a folder…" : "Desktop app only"} value={systemSettings.autoSavePath}
-                    onChange={(e) => { if (isTauri) setSystemSettings({ autoSavePath: e.target.value }); }}
-                    className="flex-1 h-7 text-[11px] font-mono" />
-                  <Button variant="outline" size="sm" className="h-7 px-2" onClick={handleBrowse}>
-                    <FolderOpen className="h-3 w-3" />
-                  </Button>
-                </div>
-              </div>
-
               <Button variant="outline" size="sm" className="text-[10px] mt-2"
                 onClick={() => { setSystemSettings(DEFAULT_SYSTEM_SETTINGS); toast.success("Reset to defaults"); }}>
                 <RotateCcw className="h-3 w-3 mr-1" /> Reset System Settings
@@ -361,7 +329,7 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
                 return (
                   <div key={category} className="border rounded-lg overflow-hidden">
                     <button
-                      onClick={() => setOpenCategories((prev) => { const next = new Set(prev); next.has(category) ? next.delete(category) : next.add(category); return next; })}
+                      onClick={() => setOpenCategories((prev) => { const next = new Set(prev); if (next.has(category)) { next.delete(category); } else { next.add(category); } return next; })}
                       className="w-full flex items-center gap-2 px-3 py-2 hover:bg-muted/20 transition-colors text-left"
                     >
                       <span className="text-xs font-medium flex-1">{PROMPT_CATEGORY_LABELS[category] ?? category}</span>

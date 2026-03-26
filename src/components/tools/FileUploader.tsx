@@ -2,15 +2,14 @@
 
 import React, { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
-import { Upload, FileText, CheckCircle2, AlertCircle } from "lucide-react";
+import { Upload, AlertCircle } from "lucide-react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { parseRis } from "@/lib/ris-parser";
 
 interface FileUploaderProps {
-    onDataLoaded: (data: any[], fileName: string) => void;
+    onDataLoaded: (data: Record<string, unknown>[], fileName: string) => void;
     accept?: Record<string, string[]>;
 }
 
@@ -35,14 +34,14 @@ export function FileUploader({ onDataLoaded, accept }: FileUploaderProps) {
                 const fileExt = file.name.split(".").pop()?.toLowerCase();
 
                 if (fileExt === "csv") {
-                    Papa.parse(result as string, {
+                    Papa.parse<Record<string, unknown>>(result as string, {
                         header: true,
                         skipEmptyLines: true,
                         complete: (results) => {
                             onDataLoaded(results.data, file.name);
                             setIsProcessing(false);
                         },
-                        error: (err: any) => {
+                        error: (err: Error) => {
                             setError(`Error parsing CSV: ${err.message}`);
                             setIsProcessing(false);
                         },
@@ -51,12 +50,12 @@ export function FileUploader({ onDataLoaded, accept }: FileUploaderProps) {
                     const workbook = XLSX.read(result, { type: "binary" });
                     const firstSheetName = workbook.SheetNames[0];
                     const worksheet = workbook.Sheets[firstSheetName];
-                    const data = XLSX.utils.sheet_to_json(worksheet);
+                    const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet);
                     onDataLoaded(data, file.name);
                     setIsProcessing(false);
                 } else if (fileExt === "json") {
-                    const data = JSON.parse(result as string);
-                    onDataLoaded(Array.isArray(data) ? data : [data], file.name);
+                    const data: unknown = JSON.parse(result as string);
+                    onDataLoaded(Array.isArray(data) ? data as Record<string, unknown>[] : [data as Record<string, unknown>], file.name);
                     setIsProcessing(false);
                 } else if (fileExt === "ris") {
                     const rows = parseRis(result as string);
@@ -68,8 +67,8 @@ export function FileUploader({ onDataLoaded, accept }: FileUploaderProps) {
                     onDataLoaded(rows, file.name);
                     setIsProcessing(false);
                 }
-            } catch (err: any) {
-                setError(`Failed to process file: ${err.message}`);
+            } catch (err: unknown) {
+                setError(`Failed to process file: ${err instanceof Error ? err.message : String(err)}`);
                 setIsProcessing(false);
             }
         };

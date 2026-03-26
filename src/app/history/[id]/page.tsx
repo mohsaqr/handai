@@ -1,5 +1,5 @@
-// Web-only page — excluded from Tauri static export build (see build:tauri script).
-// In Tauri, history detail is rendered inline in /history via ?id= search param.
+// Web-only page — excluded from static export build (see build:static script).
+// In static builds, history detail is rendered inline in /history via ?id= search param.
 import RunDetailClient from "./RunDetailClient";
 
 export default async function RunDetailPage({

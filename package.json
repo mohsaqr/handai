@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "next dev --webpack",
     "build": "next build",
-    "build:tauri": "bash -c 'set -e; trap \"[ -d /tmp/handai_api_backup ] && mv /tmp/handai_api_backup src/app/api || true; [ -f /tmp/handai_histid_page.tsx ] && mv /tmp/handai_histid_page.tsx src/app/history/[id]/page.tsx || true\" EXIT; mv src/app/api /tmp/handai_api_backup && mv src/app/history/\\[id\\]/page.tsx /tmp/handai_histid_page.tsx && TAURI_BUILD=1 next build'",
     "build:static": "bash scripts/build-static.sh",
     "start": "next start",
     "lint": "eslint",
@@ -20,8 +19,6 @@
     "@ai-sdk/groq": "^3.0.24",
     "@ai-sdk/openai": "^3.0.30",
     "@prisma/client": "^6.19.2",
-    "@tauri-apps/api": "^2.10.1",
-    "@tauri-apps/plugin-sql": "^2.3.2",
     "@types/papaparse": "^5.5.2",
     "@types/react-dropzone": "^4.2.2",
     "ai": "^6.0.97",

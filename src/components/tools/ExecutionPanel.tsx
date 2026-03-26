@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { Loader2, RotateCcw } from "lucide-react";
 
 type RunMode = "preview" | "test" | "full";
 
@@ -15,6 +15,10 @@ interface ExecutionPanelProps {
   disabled?: boolean;
   onRun: (mode: RunMode) => void;
   onAbort: () => void;
+  /** Called when "Resume Failed" is clicked. If omitted, button is hidden. */
+  onResume?: () => void;
+  /** Number of failed rows from previous run. Shows resume button when > 0. */
+  failedCount?: number;
   progressColor?: string;
   showSuccessErrors?: boolean;
   successCount?: number;
@@ -32,6 +36,8 @@ export function ExecutionPanel({
   disabled = false,
   onRun,
   onAbort,
+  onResume,
+  failedCount = 0,
   progressColor = "bg-blue-500",
   showSuccessErrors = false,
   successCount = 0,
@@ -91,6 +97,19 @@ export function ExecutionPanel({
       )}
 
       {children}
+
+      {/* Resume button — shown when there are failed rows from a previous run */}
+      {!isProcessing && onResume && failedCount > 0 && (
+        <Button
+          size="lg"
+          className="w-full h-12 text-base bg-amber-500 hover:bg-amber-600 text-white"
+          disabled={disabled}
+          onClick={onResume}
+        >
+          <RotateCcw className="h-4 w-4 mr-2" />
+          Resume Failed ({failedCount} rows)
+        </Button>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Button

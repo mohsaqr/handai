@@ -1,8 +1,8 @@
 /**
  * IndexedDB helpers for static web deployment (GitHub Pages).
  *
- * Mirrors the db-tauri.ts API exactly so llm-dispatch.ts can branch
- * transparently between Tauri, web server, and static web modes.
+ * IndexedDB persistence for static web deployment (GitHub Pages).
+ * Used by llm-dispatch.ts when NEXT_PUBLIC_STATIC is set.
  *
  * Object stores: sessions, runs, runResults
  */

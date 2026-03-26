@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PromptEditor } from "@/components/tools/PromptEditor";
 import { useActiveModel } from "@/lib/hooks";
+import { useProcessingFlag } from "@/hooks/useProcessingFlag";
 import { Sparkles, Plus, Trash2, Download, Loader2, Minus, ExternalLink, Check, X } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -17,8 +18,6 @@ import { NoModelWarning } from "@/components/tools/NoModelWarning";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { getPrompt } from "@/lib/prompts";
-import * as XLSX from "xlsx";
-
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface SuggestedField {
@@ -70,16 +69,16 @@ function parseJsonResponse(text: string): Array<{ name: string; type: string; de
 
 export default function GeneratePage() {
   const activeModel = useActiveModel();
+  const { markProcessing, markIdle } = useProcessingFlag("/generate");
 
   const [description, setDescription] = useState("");
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("tabular");
-  const [structure, setStructure] = useState<Structure>("ai_decide");
+  const [, setStructure] = useState<Structure>("ai_decide");
   const [rowCount, setRowCount] = useState(100);
   const [variationIdx, setVariationIdx] = useState(1); // Medium
   const [columns, setColumns] = useState<GenerateColumn[]>([
     { name: "", type: "text" },
   ]);
-  const [templateText, setTemplateText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [runMode, setRunMode] = useState<RunMode>("full");
   const [generatedData, setGeneratedData] = useState<Row[]>([]);
@@ -211,6 +210,7 @@ export default function GeneratePage() {
 
     setRunId(null);
     setIsGenerating(true);
+    markProcessing();
     setRunMode(mode);
     setGeneratedData([]);
     setGeneratedRaw("");
@@ -262,33 +262,8 @@ export default function GeneratePage() {
       toast.error("Generation failed", { description: msg });
     } finally {
       setIsGenerating(false);
+      markIdle();
     }
-  };
-
-  const exportXlsx = () => {
-    if (generatedData.length === 0) return;
-    const ws = XLSX.utils.json_to_sheet(generatedData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Generated Data");
-    XLSX.writeFile(wb, `generated_data_${Date.now()}.xlsx`);
-  };
-
-  const exportCsv = () => {
-    if (generatedData.length === 0) return;
-    const headers = Object.keys(generatedData[0]);
-    const csv = [
-      headers.join(","),
-      ...generatedData.map((row) =>
-        headers.map((h) => `"${String(row[h] ?? "").replace(/"/g, '""')}"`).join(",")
-      ),
-    ].join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `generated_data_${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   const checkedCount = suggestedFields.filter((f) => f.checked).length;
@@ -685,7 +660,7 @@ export default function GeneratePage() {
                 <span>Generated Data — {generatedData.length} rows</span>
                 <ExportDropdown data={generatedData} filename="generated_data" />
               </div>
-              <DataTable data={generatedData} showAll />
+              <DataTable data={generatedData} />
             </div>
           ) : (
             <div className="border rounded-lg overflow-hidden">

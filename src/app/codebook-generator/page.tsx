@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PromptEditor } from "@/components/tools/PromptEditor";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
+import { useProcessingFlag } from "@/hooks/useProcessingFlag";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { useColumnSelection } from "@/hooks/useColumnSelection";
 import { getPrompt } from "@/lib/prompts";
@@ -64,6 +66,7 @@ function cleanCodeName(raw: string): string {
 }
 
 export default function CodebookGeneratorPage() {
+  const { markProcessing, markIdle } = useProcessingFlag("/codebook-generator");
   const [data, setData] = useState<Row[]>([]);
   const [dataName, setDataName] = useState("");
   const [codebookDescription, setCodebookDescription] = useState("");
@@ -79,7 +82,28 @@ export default function CodebookGeneratorPage() {
   const systemSettings = useSystemSettings();
 
   const allColumns = data.length > 0 ? Object.keys(data[0]) : [];
-  const { selectedCols, setSelectedCols, toggleCol, toggleAll } = useColumnSelection(allColumns, false);
+  const { selectedCols, toggleCol, toggleAll } = useColumnSelection(allColumns, false);
+
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("codebook-generator");
+  React.useEffect(() => {
+    if (!restored) return;
+    setData(restored.data as Row[]);
+    setDataName(restored.dataName);
+    // Try to restore codebook from results
+    const codebook: CodeEntry[] = restored.results
+      .filter((r) => r.Code || r.code)
+      .map((r) => ({
+        code: String(r.Code ?? r.code ?? ""),
+        description: String(r.Description ?? r.description ?? ""),
+        example: String(r.Example ?? r.example ?? ""),
+      }));
+    if (codebook.length > 0) {
+      setCodebookStructured(codebook);
+      setStage("done");
+    }
+    toast.success(`Restored session from "${restored.dataName}"`);
+  }, [restored]);
 
   // ── Auto-generate AI Instructions ──
   const buildAutoInstructions = useCallback(() => {
@@ -159,6 +183,7 @@ export default function CodebookGeneratorPage() {
 
     try {
       setStage("discovery");
+      markProcessing();
       const discoveryOutput = await callLLM(
         aiInstructions || getPrompt("codebook.discovery"),
         `Analyze these ${filteredRows.length} data samples:\n\n${JSON.stringify(filteredRows, null, 2)}`
@@ -225,6 +250,7 @@ export default function CodebookGeneratorPage() {
 
       setCodebookStructured(structured);
       setStage("done");
+      markIdle();
       toast.success("Codebook generated (3 stages complete)!");
 
       // Save to history DB
@@ -253,6 +279,7 @@ export default function CodebookGeneratorPage() {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Codebook generation failed", { description: msg });
       setStage("idle");
+      markIdle();
     }
   };
 

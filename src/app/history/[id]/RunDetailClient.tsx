@@ -16,6 +16,7 @@ import {
     Loader2,
     Trash2,
     ChevronRight,
+    RotateCcw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
@@ -33,30 +34,33 @@ import {
     DialogHeader,
     DialogTitle,
 } from "@/components/ui/dialog";
-import { getRun as tauriGetRun, deleteRun as tauriDeleteRun } from "@/lib/db-tauri";
 import { getRun as idbGetRun, deleteRun as idbDeleteRun } from "@/lib/db-indexeddb";
+import { useRestoreStore, type RestorePayload } from "@/lib/restore-store";
+import { useBrowserStorage } from "@/lib/llm-dispatch";
+import type { RunMeta, RunResult } from "@/types";
 
-const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-const isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
-const useBrowserDb = isTauri || isStatic;
+const useBrowserDb = useBrowserStorage;
 
 export default function RunDetailClient({ id }: { id: string }) {
     const router = useRouter();
-    const [run, setRun] = useState<any>(null);
-    const [results, setResults] = useState<any[]>([]);
+    const [run, setRun] = useState<RunMeta | null>(null);
+    const [results, setResults] = useState<Record<string, unknown>[]>([]);
+    const [rawResults, setRawResults] = useState<RunResult[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [showDeleteDialog, setShowDeleteDialog] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
+    const setPendingRestore = useRestoreStore((s) => s.setPending);
 
     useEffect(() => {
         const fetchRunDetail = async () => {
             try {
                 if (useBrowserDb) {
-                    const getFn = isTauri ? tauriGetRun : idbGetRun;
-                    const data = await getFn(id);
+                    const data = await idbGetRun(id);
                     if (!data) throw new Error("Run not found");
                     setRun(data.run);
-                    setResults(data.results.map((r: any) => ({
+                    const typedResults = data.results as RunResult[];
+                    setRawResults(typedResults);
+                    setResults(typedResults.map((r: RunResult) => ({
                         ...JSON.parse(r.inputJson ?? "{}"),
                         output: r.output,
                         status: r.status,
@@ -68,7 +72,8 @@ export default function RunDetailClient({ id }: { id: string }) {
                     const data = await res.json();
                     if (data.error) throw new Error(data.error);
                     setRun(data.run);
-                    setResults(data.results.map((r: any) => ({
+                    setRawResults(data.results);
+                    setResults(data.results.map((r: RunResult) => ({
                         ...JSON.parse(r.inputJson ?? "{}"),
                         output: r.output,
                         status: r.status,
@@ -89,8 +94,7 @@ export default function RunDetailClient({ id }: { id: string }) {
         setIsDeleting(true);
         try {
             if (useBrowserDb) {
-                const deleteFn = isTauri ? tauriDeleteRun : idbDeleteRun;
-                const result = await deleteFn(id);
+                const result = await idbDeleteRun(id);
                 if (!result.ok) throw new Error("Delete failed");
             } else {
                 const res = await fetch(`/api/runs/${id}`, { method: "DELETE" });
@@ -103,6 +107,45 @@ export default function RunDetailClient({ id }: { id: string }) {
             setIsDeleting(false);
         }
     };
+
+    const handleRestore = () => {
+        if (!run || rawResults.length === 0) return;
+
+        // Reconstruct original data rows from inputJson
+        const data = rawResults.map((r: RunResult) => JSON.parse(r.inputJson ?? "{}"));
+
+        // Build merged result rows (same shape tool pages expect)
+        const mergedResults = rawResults.map((r: RunResult) => ({
+            ...JSON.parse(r.inputJson ?? "{}"),
+            ...(r.output ? { ai_output: r.output, ai_code: r.output } : {}),
+            status: r.status ?? "success",
+            latency_ms: Math.round((r.latency ?? 0) * 1000),
+            ...(r.errorMessage ? { error_msg: r.errorMessage } : {}),
+        }));
+
+        const payload: RestorePayload = {
+            runId: run.id,
+            runType: run.runType,
+            data,
+            dataName: run.inputFile ?? "restored",
+            systemPrompt: run.systemPrompt ?? "",
+            results: mergedResults,
+            provider: run.provider,
+            model: run.model,
+            temperature: run.temperature ?? 0,
+        };
+
+        setPendingRestore(payload);
+        router.push(`/${run.runType}`);
+    };
+
+    // Tools that support session restore (have row-level input data)
+    const restorableTools = new Set([
+        "transform", "qualitative-coder", "consensus-coder",
+        "model-comparison", "automator", "abstract-screener",
+        "ai-coder", "codebook-generator",
+    ]);
+    const canRestore = run && rawResults.length > 0 && restorableTools.has(run.runType);
 
     if (isLoading) {
         return (
@@ -152,7 +195,12 @@ export default function RunDetailClient({ id }: { id: string }) {
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
-                    <Button onClick={handleExport} size="sm">
+                    {canRestore && (
+                        <Button onClick={handleRestore} size="sm" variant="default">
+                            <RotateCcw className="h-4 w-4 mr-2" /> Restore Session
+                        </Button>
+                    )}
+                    <Button onClick={handleExport} size="sm" variant="outline">
                         <Download className="h-4 w-4 mr-2" /> Export CSV
                     </Button>
                     <Button
@@ -222,19 +270,16 @@ export default function RunDetailClient({ id }: { id: string }) {
                     </CardContent>
                 </Card>
 
-                <Card className="md:col-span-3">
-                    <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
-                        <CardTitle className="text-sm">Processed Results</CardTitle>
-                        <Badge variant="secondary" className="text-[10px]">{results.length} Rows</Badge>
-                    </CardHeader>
-                    <CardContent className="p-0">
-                        <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between">
-                            <span>Results — {results.length} rows</span>
+                <div className="md:col-span-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold">Processed Results</h3>
+                        <div className="flex items-center gap-2">
+                            <Badge variant="secondary" className="text-[10px]">{results.length} Rows</Badge>
                             <ExportDropdown data={results} filename="run_results" />
                         </div>
-                        <DataTable data={results} showAll />
-                    </CardContent>
-                </Card>
+                    </div>
+                    <DataTable data={results} />
+                </div>
             </div>
 
             <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>

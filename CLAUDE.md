@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Handai is a qualitative/quantitative data analysis suite powered by LLMs. It runs as a Next.js web app or a Tauri desktop app (~10 MB) from the same codebase. Users upload CSV/XLSX files, pick an analysis tool and LLM provider, and run batch processing. Results are stored in SQLite and exportable as CSV.
+Handai is a qualitative/quantitative data analysis suite powered by LLMs. It runs as a Next.js web app with an optional static export for GitHub Pages. Users upload CSV/XLSX files, pick an analysis tool and LLM provider, and run batch processing. Results are stored in SQLite (web) or IndexedDB (static) and exportable as CSV.
 
 ## Prerequisites
 
-Node.js 20+ and npm 10+. For the Tauri desktop app: Rust toolchain + Tauri CLI.
+Node.js 20+ and npm 10+.
 
 ## Commands
 
@@ -16,8 +16,7 @@ Node.js 20+ and npm 10+. For the Tauri desktop app: Rust toolchain + Tauri CLI.
 npm run dev          # Dev server at http://localhost:3000 (uses Webpack, not Turbopack)
 npm run build        # Production build (standalone output, 0 TS errors required)
 npm start            # Serve production build on port 3000
-npm run build:tauri  # Static export for Tauri desktop (produces out/)
-npm test             # Vitest — run all 80 tests across 4 suites
+npm test             # Vitest — run all tests across 4 suites
 npm run test:watch   # Vitest in watch mode
 npm run lint         # ESLint (flat config, next/core-web-vitals + next/typescript)
 npx tsc --noEmit     # TypeScript type-check (strict mode)
@@ -27,15 +26,7 @@ Run a single test file: `npx vitest run src/lib/__tests__/retry.test.ts`
 
 Run a single test by name: `npx vitest run -t "test name pattern"`
 
-Test files live in `src/lib/__tests__/` (analytics, prompts, retry, validation).
-
-### Tauri Desktop Development
-
-From `desktop/tauri/`:
-```bash
-npm run tauri dev        # Dev mode with hot reload + Rust compilation
-npm run tauri build      # Production native installer (~10 MB)
-```
+Test files live in `src/lib/__tests__/` (analytics, prompts, retry, validation). Vitest runs in Node.js environment (not jsdom) — see `vitest.config.ts`.
 
 ### First-Time Setup
 
@@ -49,35 +40,37 @@ For web deployments, server-side API key defaults can be set in `.env.local` (e.
 
 For exhaustive detail, see `ARCHITECTURE.md`. Below is what you need to get productive quickly.
 
-### Dual LLM Call Path
+### Dual LLM Dispatch
 
-The core architectural decision: the same React components work in both web and Tauri contexts, but LLM calls take different paths:
+The same React components work across two runtime contexts, but LLM calls and persistence take different paths:
 
 - **Web**: Browser → `/api/process-row` (Next.js API route) → `src/lib/ai/providers.ts` (`getModel()`) → Provider API. Results logged via Prisma to SQLite.
-- **Tauri**: Browser → `src/lib/llm-browser.ts` (`getModel()`) → Provider API (direct from WebView, no server). Results logged via `src/lib/db-tauri.ts` to SQLite (tauri-plugin-sql).
+- **Static (GitHub Pages)**: Browser → `src/lib/llm-browser.ts` (`getModel()`) → Provider API direct. Results logged via `src/lib/db-indexeddb.ts` to IndexedDB (no server).
 
-`src/lib/llm-dispatch.ts` is the unified dispatch layer — tool pages call its functions (e.g., `dispatchProcessRow`, `dispatchCreateRun`, `dispatchSaveResults`) which internally branch on `isTauri` to route to the correct path. Use this instead of checking Tauri context in page code.
+`src/lib/llm-dispatch.ts` is the unified dispatch layer — tool pages call its functions (e.g., `dispatchProcessRow`, `dispatchCreateRun`, `dispatchSaveResults`) which internally branch on `isStatic` (checks `NEXT_PUBLIC_STATIC === "1"`). Use dispatch functions instead of checking runtime context in page code.
 
 ### Build Targets
 
-Controlled by `TAURI_BUILD` env var in `next.config.ts`:
+Controlled by `STATIC_BUILD` env var in `next.config.ts`:
 - `output: "standalone"` (default) — web deployment/Docker
-- `output: "export"` (when `TAURI_BUILD=1`) — static HTML for Tauri. The `build:tauri` script temporarily moves `src/app/api/` out because static export can't include API routes.
+- `output: "export"` (when `STATIC_BUILD=1`) — static HTML for GitHub Pages (adds `basePath` + `assetPrefix` via `PAGES_BASE_PATH`)
+
+The `build:static` script (`bash scripts/build-static.sh`) temporarily moves `src/app/api/` and `src/app/history/[id]/page.tsx` out of the source tree (bash `trap` ensures restore on exit) because `output: "export"` cannot include API routes or dynamic routes.
 
 ### Key Libraries
 
 | Layer | What | Where |
 |---|---|---|
 | Provider registry | `getModel()` — returns Vercel AI SDK model for any of 10 providers | `src/lib/ai/providers.ts` |
-| Unified dispatch | Tauri/Web branching for LLM calls, run history, and results | `src/lib/llm-dispatch.ts` |
+| Unified dispatch | Static/Web branching for LLM calls, run history, and results | `src/lib/llm-dispatch.ts` |
 | State | Zustand store persisted to localStorage as `handai-storage` | `src/lib/store.ts` |
 | Validation | Zod schemas for all API route request bodies | `src/lib/validation.ts` |
 | Retry | `withRetry()` — exponential backoff, fast-fail on auth/400 errors | `src/lib/retry.ts` |
 | Prompts | Prompt registry with per-tool localStorage overrides | `src/lib/prompts.ts` |
 | Analytics | Cohen's kappa, pairwise agreement calculations | `src/lib/analytics.ts` |
 | DB (web) | Prisma 6 + SQLite (`prisma/dev.db`) | `src/lib/prisma.ts` |
-| DB (Tauri) | tauri-plugin-sql + SQLite (no Prisma at runtime) | `src/lib/db-tauri.ts` |
-| CSV export | `downloadCSV()` — blob download or Tauri native save dialog | `src/lib/export.ts` |
+| DB (Static) | IndexedDB for GitHub Pages static builds | `src/lib/db-indexeddb.ts` |
+| CSV export | `downloadCSV()` — blob download | `src/lib/export.ts` |
 | Types | Shared interfaces (Row, ProviderConfig, RunMeta, etc.) | `src/types/index.ts` |
 
 ### API Routes (web only)
@@ -89,13 +82,17 @@ All in `src/app/api/`. Each route validates input with Zod schemas from `src/lib
 - `comparison-row` — Parallel multi-model dispatch for Model Comparison
 - `automator-row` — Multi-step pipeline execution
 - `generate-row` — Synthetic data generation
-- `document-extract` / `document-analyze` — PDF/DOCX processing (web uses Node.js `pdf-parse` + `mammoth`; Tauri uses `pdfjs-dist` WASM + mammoth browser build via `src/lib/document-browser.ts`)
+- `document-extract` / `document-analyze` — PDF/DOCX processing (web uses Node.js `pdf-parse` + `mammoth`; static uses `pdfjs-dist` WASM + mammoth browser build via `src/lib/document-browser.ts`)
 - `local-models` — Probes Ollama (port 11434) + LM Studio (port 1234)
 - `runs` / `runs/[id]` / `results` — CRUD for run history
 
 ### Database Schema (Prisma)
 
-Models: `Session`, `Run`, `RunResult`, `LogEntry`, `ProviderSetting`, `ConfiguredProvider`, `SystemPromptOverride`. Schema at `prisma/schema.prisma`.
+Schema at `prisma/schema.prisma`. Key models:
+- **Run** — runType, provider, model, temperature, maxTokens, systemPrompt, inputFile, inputRows, status, successCount, errorCount, avgLatency, totalDuration, jsonMode, maxConcurrency, autoRetry
+- **RunResult** — rowIndex, inputJson, output, status, errorType, errorMessage, latency, retryAttempt
+- **ConfiguredProvider** — providerType, displayName, baseUrl, apiKey, defaultModel, isEnabled, temperature, maxTokens, capabilities, totalRequests, totalTokens, lastTested
+- Also: `Session`, `LogEntry`, `ProviderSetting`, `SystemPromptOverride`
 
 ### Page Structure
 
@@ -107,9 +104,11 @@ Each tool is a page at `src/app/<tool-name>/page.tsx`. Pages are `"use client"` 
 
 | Hook | Purpose |
 |---|---|
-| `useBatchProcessor` | Reusable parallel batch LLM processing with progress, abort, stats, and run history logging. Used by most tool pages. |
+| `useBatchProcessor` | Reusable parallel batch LLM processing with progress, abort, resume, stats, and run history logging. Used by most tool pages. |
 | `useColumnSelection` | Manages which CSV columns are selected for processing. |
 | `usePersistedPrompt` | Persists a prompt textarea to localStorage with a given key. |
+| `useProcessingFlag` | Registers processing status in global store for sidebar indicators. |
+| `useRestoreSession` | Consumes session restore payload from history page. |
 
 ### Shared Tool Components (`src/components/tools/`)
 
@@ -117,7 +116,7 @@ Each tool is a page at `src/app/<tool-name>/page.tsx`. Pages are `"use client"` 
 |---|---|
 | `UploadPreview` | CSV/XLSX file upload + data preview table, with optional sample dataset picker |
 | `ColumnSelector` | Checkbox grid for selecting which columns to process |
-| `ExecutionPanel` | Preview/Test/Full run buttons + progress bar (wraps `useBatchProcessor` UI) |
+| `ExecutionPanel` | Preview/Test/Full run buttons + progress bar + Resume Failed button |
 | `ResultsPanel` | DataTable for batch results + export buttons + run history link |
 | `NoModelWarning` | Inline warning when no LLM provider is configured |
 | `PromptEditor` | Textarea with prompt persistence and reset-to-default |
@@ -146,23 +145,22 @@ localStorage keys: `aic_autosave` (session recovery), `aic_settings` (UI setting
 
 ### CI/CD
 
-GitHub Pages deployment via `.github/workflows/` on push to `main` or `fix`. Uses `STATIC_BUILD=1`, `NEXT_PUBLIC_STATIC=1`, and `PAGES_BASE_PATH=/<repo-name>` env vars. The `build:static` script (`bash scripts/build-static.sh`) handles static export similarly to `build:tauri`.
+GitHub Pages deployment via `.github/workflows/deploy.yml` on push to `main` or `fix`. Sets `STATIC_BUILD=1`, `NEXT_PUBLIC_STATIC=1`, and `PAGES_BASE_PATH=/handai`. The `build:static` script (`bash scripts/build-static.sh`) handles static export, adding a `.nojekyll` file to `out/` for GitHub Pages compatibility.
 
 ### Conventions
 
+- Default system settings: `temperature: 0`, `maxTokens: null`, `maxConcurrency: 5`, `autoRetry: true`
+- Dispatch error contract: `dispatchCreateRun`/`dispatchSaveResults` never throw (log + return null/void); `dispatchProcessRow` and other row-level dispatch functions throw on error (caller catches per-row)
 - All fetch calls must check `if (!res.ok) throw new Error(...)` before `res.json()`
 - Concurrency is controlled globally via `pLimit(systemSettings.maxConcurrency)`, not per-page state
 - `@/*` path alias maps to `./src/*`
 - API keys are stored in browser localStorage (Zustand persist), never in `.env` for local dev
-- `db-tauri.ts` has pre-existing TS errors (Tauri types only resolve in Tauri build context) — this is expected
-- Tauri runtime detection: `typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window`
 - Document encoding fallback chain: check UTF-8 BOM → try UTF-8 → fall back to Windows-1252 if replacement chars detected (`document-extract/route.ts`, `document-browser.ts`)
 - 10 LLM providers supported: OpenAI, Anthropic, Google, Groq, Together, Azure, OpenRouter, Ollama, LM Studio, Custom — all configured via `src/lib/store.ts`
-- Each tool page mirrors its API route in `src/lib/llm-browser.ts` for Tauri (e.g., `processRowDirect()` mirrors `/api/process-row`)
+- Each tool page mirrors its API route in `src/lib/llm-browser.ts` for static builds (e.g., `processRowDirect()` mirrors `/api/process-row`)
 - Validate all API route inputs with Zod schemas from `src/lib/validation.ts` — add a new schema there when adding a new route
-- The `build:tauri` script uses bash `trap` to temporarily move `src/app/api/` and `src/app/history/[id]/page.tsx` out of the source tree during static export, then restores them
 - When adding a new tool page: create `src/app/<tool-name>/page.tsx` as a `"use client"` component, add its API route in `src/app/api/`, add a matching browser-side function in `src/lib/llm-browser.ts`, and add navigation entry in `src/components/AppSidebar.tsx`
 - DB logging is async and non-blocking — a Prisma/SQLite failure must never mask a successful LLM result
 - Worker failures are isolated with `Promise.allSettled` (consensus workers, comparison workers) — one failing model must not abort others
 - All localStorage reads must happen inside `useEffect(() => {}, [])` to avoid SSR/hydration mismatches
-- TypeScript strict mode is enforced — builds must produce 0 new TS errors (pre-existing `db-tauri.ts` errors are the exception)
+- TypeScript strict mode is enforced — builds must produce 0 TS errors, 0 lint errors

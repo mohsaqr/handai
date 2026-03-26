@@ -1,0 +1,192 @@
+/**
+ * Global processing state store.
+ *
+ * Tracks which tools are actively processing so that:
+ * 1. The sidebar can show processing indicators
+ * 2. Processing survives navigation (component unmount)
+ * 3. Users can navigate back and see progress/results
+ *
+ * useBatchProcessor writes full state here (progress, results, stats).
+ * Custom-loop tools use setProcessingFlag() for sidebar indicators.
+ */
+
+import { create } from "zustand";
+
+type Row = Record<string, unknown>;
+type RunMode = "preview" | "test" | "full";
+
+export interface ProcessingStats {
+  success: number;
+  errors: number;
+  avgLatency: number;
+}
+
+export interface ProcessingJob {
+  isProcessing: boolean;
+  runMode: RunMode;
+  progress: { completed: number; total: number };
+  results: Row[];
+  stats: ProcessingStats | null;
+  runId: string | null;
+  startedAt: number;
+  /** Generation counter — prevents stale loops from updating a superseded run */
+  generation: number;
+}
+
+// ── Abort flags (outside Zustand — non-serializable) ─────────────────────────
+
+const abortFlags = new Map<string, boolean>();
+
+export function getAbortFlag(toolId: string): boolean {
+  return abortFlags.get(toolId) ?? false;
+}
+
+// ── Generation tracking (outside Zustand — checked synchronously) ────────────
+
+const generations = new Map<string, number>();
+
+export function currentGeneration(toolId: string): number {
+  return generations.get(toolId) ?? 0;
+}
+
+// ── Store ────────────────────────────────────────────────────────────────────
+
+interface ProcessingState {
+  jobs: Record<string, ProcessingJob>;
+
+  /** Start a new batch job — aborts any existing run for this tool */
+  startJob: (toolId: string, mode: RunMode, total: number) => number;
+
+  /** Increment completed count by 1 */
+  incrementProgress: (toolId: string) => void;
+
+  /** Mark job done with final results */
+  completeJob: (
+    toolId: string,
+    results: Row[],
+    stats: ProcessingStats,
+    runId: string | null
+  ) => void;
+
+  /** Remove job entirely (clears results) */
+  clearJob: (toolId: string) => void;
+
+  /** Set abort flag for a tool */
+  requestAbort: (toolId: string) => void;
+
+  /** For custom-loop tools — just toggle the processing flag for sidebar indicator */
+  setProcessingFlag: (toolId: string, isProcessing: boolean) => void;
+}
+
+export const useProcessingStore = create<ProcessingState>((set) => ({
+  jobs: {},
+
+  startJob: (toolId, mode, total) => {
+    // Abort any existing run
+    abortFlags.set(toolId, false);
+    const gen = (generations.get(toolId) ?? 0) + 1;
+    generations.set(toolId, gen);
+
+    set((state) => ({
+      jobs: {
+        ...state.jobs,
+        [toolId]: {
+          isProcessing: true,
+          runMode: mode,
+          progress: { completed: 0, total },
+          results: [],
+          stats: null,
+          runId: null,
+          startedAt: Date.now(),
+          generation: gen,
+        },
+      },
+    }));
+
+    return gen;
+  },
+
+  incrementProgress: (toolId) => {
+    set((state) => {
+      const job = state.jobs[toolId];
+      if (!job) return state;
+      return {
+        jobs: {
+          ...state.jobs,
+          [toolId]: {
+            ...job,
+            progress: {
+              ...job.progress,
+              completed: job.progress.completed + 1,
+            },
+          },
+        },
+      };
+    });
+  },
+
+  completeJob: (toolId, results, stats, runId) => {
+    set((state) => {
+      const existing = state.jobs[toolId];
+      return {
+        jobs: {
+          ...state.jobs,
+          [toolId]: {
+            runMode: existing?.runMode ?? ("full" as RunMode),
+            progress: existing?.progress ?? { completed: 0, total: 0 },
+            startedAt: existing?.startedAt ?? 0,
+            generation: existing?.generation ?? 0,
+            isProcessing: false,
+            results,
+            stats,
+            runId,
+          },
+        },
+      };
+    });
+  },
+
+  clearJob: (toolId) => {
+    abortFlags.delete(toolId);
+    generations.delete(toolId);
+    set((state) => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { [toolId]: _removed, ...rest } = state.jobs;
+      return { jobs: rest };
+    });
+  },
+
+  requestAbort: (toolId) => {
+    abortFlags.set(toolId, true);
+  },
+
+  setProcessingFlag: (toolId, isProcessing) => {
+    set((state) => {
+      const existing = state.jobs[toolId];
+      if (existing) {
+        return {
+          jobs: {
+            ...state.jobs,
+            [toolId]: { ...existing, isProcessing },
+          },
+        };
+      }
+      if (!isProcessing) return state; // Don't create entry just to mark it idle
+      return {
+        jobs: {
+          ...state.jobs,
+          [toolId]: {
+            isProcessing: true,
+            runMode: "full" as RunMode,
+            progress: { completed: 0, total: 0 },
+            results: [],
+            stats: null,
+            runId: null,
+            startedAt: Date.now(),
+            generation: 0,
+          },
+        },
+      };
+    });
+  },
+}));

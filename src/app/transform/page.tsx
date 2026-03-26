@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback, useRef } from "react";
+import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,7 +14,9 @@ import { usePersistedPrompt } from "@/hooks/usePersistedPrompt";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { useColumnSelection } from "@/hooks/useColumnSelection";
 import { useBatchProcessor } from "@/hooks/useBatchProcessor";
+import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { dispatchProcessRow } from "@/lib/llm-dispatch";
+import { useProcessingStore } from "@/lib/processing-store";
 
 import { UploadPreview } from "@/components/tools/UploadPreview";
 import { ColumnSelector } from "@/components/tools/ColumnSelector";
@@ -124,6 +126,7 @@ export default function TransformPage() {
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
   const batch = useBatchProcessor({
+    toolId: "/transform",
     runType: "transform",
     activeModel,
     systemSettings,
@@ -200,6 +203,28 @@ export default function TransformPage() {
     },
   });
 
+  // ── Session restore from history ───────────────────────────────────────────
+  const restored = useRestoreSession("transform");
+  useEffect(() => {
+    if (!restored) return;
+    queueMicrotask(() => {
+      setData(restored.data);
+      setDataName(restored.dataName);
+      setSystemPrompt(restored.systemPrompt);
+      setSelectedRows(new Set(restored.data.map((_, i) => i)));
+      // Populate results in global processing store
+      const errors = restored.results.filter((r) => r.status === "error").length;
+      useProcessingStore.getState().completeJob(
+        "/transform",
+        restored.results,
+        { success: restored.results.length - errors, errors, avgLatency: 0 },
+        restored.runId,
+      );
+      toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+    });
+  }, [restored, setSystemPrompt]);
+
+  const { clearResults: batchClearResults } = batch;
   const restoreVersion = useCallback((index: number) => {
     const entry = history[index];
     if (!entry) return;
@@ -208,11 +233,11 @@ export default function TransformPage() {
     setDataName(entry.dataName);
     setSelectedCols([]);
     setSelectedRows(new Set(entry.data.map((_, i) => i)));
-    batch.clearResults();
+    batchClearResults();
     setExplanations([]);
     toast.success(`Restored "${entry.dataName}"`);
     uploadRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [history, pushHistory, batch]);
+  }, [history, pushHistory, batchClearResults, setSelectedCols]);
 
   const handleDataLoaded = (newData: Row[], name: string) => {
     pushHistory();
@@ -375,6 +400,8 @@ export default function TransformPage() {
           disabled={data.length === 0 || !activeModel || !systemPrompt.trim() || selectedCols.length === 0}
           onRun={batch.run}
           onAbort={batch.abort}
+          onResume={batch.resume}
+          failedCount={batch.failedCount}
           fullLabel={`Full Run (${data.length} rows — ${selectedRows.size} to transform)`}
         />
       </div>

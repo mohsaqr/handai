@@ -533,12 +533,12 @@ export function AnalyticsPanel({
 
   // Overall KPIs — weighted
   const overallKappa = hasOverrides ? weightedMultiLabelKappa(aiConfNorm, humanWeightsPerRow, allCodeLabels) : NaN;
-  const overallF1 = useMemo(() => {
+  const overallF1 = (() => {
     const f1s = codeStats
       .map((s) => (s.f1 !== "—" ? parseFloat(s.f1) : NaN))
       .filter((v) => !isNaN(v));
     return f1s.length > 0 ? (f1s.reduce((s, v) => s + v, 0) / f1s.length).toFixed(0) : "—";
-  }, [codeStats]);
+  })();
 
   // Disagreements — compare human's N codes against AI's top-N by probability
   const disagreements = results

@@ -16,7 +16,7 @@ export function usePersistedPrompt(
   // Load from localStorage after mount
   useEffect(() => {
     const saved = localStorage.getItem(key);
-    if (saved) setValue(saved);
+    if (saved) queueMicrotask(() => setValue(saved));
     isMounted.current = true;
   }, [key]);
 
