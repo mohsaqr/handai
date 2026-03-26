@@ -330,9 +330,16 @@ export default function ConsensusCoderPage() {
     <div className="space-y-0 pb-16">
 
       {/* Header */}
-      <div className="pb-6 space-y-1 max-w-3xl">
-        <h1 className="text-4xl font-bold">Consensus Coder</h1>
-        <p className="text-muted-foreground text-sm">Multi-model consensus coding with inter-rater reliability (Cohen&apos;s Kappa)</p>
+      <div className="pb-6 flex items-start justify-between">
+        <div className="space-y-1 max-w-3xl">
+          <h1 className="text-4xl font-bold">Consensus Coder</h1>
+          <p className="text-muted-foreground text-sm">Multi-model consensus coding with inter-rater reliability (Cohen&apos;s Kappa)</p>
+        </div>
+        {data.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => { setData([]); setDataName(""); setWorkerPrompt(""); setJudgePrompt(""); setKappaStats(null); batch.clearResults(); }}>
+            Start Over
+          </Button>
+        )}
       </div>
 
       {/* ── 1. Upload Data ────────────────────────────────────────────────── */}

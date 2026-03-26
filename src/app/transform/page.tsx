@@ -266,9 +266,16 @@ export default function TransformPage() {
     <div className="space-y-0 pb-16">
 
       {/* Header */}
-      <div className="pb-6 space-y-1 max-w-3xl">
-        <h1 className="text-4xl font-bold">Transform Data</h1>
-        <p className="text-muted-foreground text-sm">Apply AI transformations to each row of your dataset</p>
+      <div className="pb-6 flex items-start justify-between">
+        <div className="space-y-1 max-w-3xl">
+          <h1 className="text-4xl font-bold">Transform Data</h1>
+          <p className="text-muted-foreground text-sm">Apply AI transformations to each row of your dataset</p>
+        </div>
+        {data.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => { setData([]); setDataName(""); setSelectedCols([]); setSelectedRows(new Set()); setExplanations([]); setSystemPrompt(""); batch.clearResults(); }}>
+            Start Over
+          </Button>
+        )}
       </div>
 
       {/* ── 1. Upload Data ────────────────────────────────────────────────── */}

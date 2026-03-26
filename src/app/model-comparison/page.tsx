@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useCallback, useEffect, useMemo } from "react";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PromptEditor } from "@/components/tools/PromptEditor";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
@@ -218,9 +219,16 @@ export default function ModelComparisonPage() {
 
   return (
     <div className="space-y-0 pb-16">
-      <div className="pb-6 space-y-1 max-w-3xl">
-        <h1 className="text-4xl font-bold">Model Comparison</h1>
-        <p className="text-muted-foreground text-sm">Compare outputs from multiple LLMs side-by-side on your dataset</p>
+      <div className="pb-6 flex items-start justify-between">
+        <div className="space-y-1 max-w-3xl">
+          <h1 className="text-4xl font-bold">Model Comparison</h1>
+          <p className="text-muted-foreground text-sm">Compare outputs from multiple LLMs side-by-side on your dataset</p>
+        </div>
+        {data.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => { setData([]); setDataName(""); setSelectedProviders([]); batch.clearResults(); }}>
+            Start Over
+          </Button>
+        )}
       </div>
 
       {/* ── 1. Upload Data */}

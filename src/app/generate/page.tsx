@@ -273,11 +273,18 @@ export default function GeneratePage() {
     <div className="space-y-0 pb-16">
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="space-y-1 pb-6 max-w-3xl">
-        <h1 className="text-4xl font-bold">Generate Data</h1>
-        <p className="text-muted-foreground text-sm">
-          Create synthetic datasets with AI-powered generation. Describe what you need and let AI build it for you.
-        </p>
+      <div className="pb-6 flex items-start justify-between">
+        <div className="space-y-1 max-w-3xl">
+          <h1 className="text-4xl font-bold">Generate Data</h1>
+          <p className="text-muted-foreground text-sm">
+            Create synthetic datasets with AI-powered generation. Describe what you need and let AI build it for you.
+          </p>
+        </div>
+        {generatedData.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => { setGeneratedData([]); setGeneratedRaw(""); setDescription(""); setRunId(null); }}>
+            Start Over
+          </Button>
+        )}
       </div>
 
       {/* ── 1. Describe Your Data ───────────────────────────────────────── */}

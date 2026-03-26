@@ -818,11 +818,18 @@ export default function AbstractScreenerPage() {
     <div className="space-y-0 pb-16">
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
-      <div className="pb-6 space-y-1 max-w-3xl">
-        <h1 className="text-4xl font-bold">Abstract Screener</h1>
-        <p className="text-muted-foreground text-sm">
-          AI-assisted systematic review screening — batch pre-screen then review
-        </p>
+      <div className="pb-6 flex items-start justify-between">
+        <div className="space-y-1 max-w-3xl">
+          <h1 className="text-4xl font-bold">Abstract Screener</h1>
+          <p className="text-muted-foreground text-sm">
+            AI-assisted systematic review screening — batch pre-screen then review
+          </p>
+        </div>
+        {data.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => { setData([]); setDataName(""); setAiResults({}); setDecisions({}); setIncludeCriteria(""); setExcludeCriteria(""); setCurrentIndex(0); batch.clearResults(); }}>
+            Start Over
+          </Button>
+        )}
       </div>
 
       {/* ── Recovery banner ──────────────────────────────────────────────── */}

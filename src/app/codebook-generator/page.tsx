@@ -303,9 +303,16 @@ export default function CodebookGeneratorPage() {
     <div className="space-y-0 pb-16">
 
       {/* Header */}
-      <div className="pb-6 space-y-1 max-w-3xl">
-        <h1 className="text-4xl font-bold">Codebook Generator</h1>
-        <p className="text-muted-foreground text-sm">3-stage AI pipeline: Discovery → Consolidation → Definition</p>
+      <div className="pb-6 flex items-start justify-between">
+        <div className="space-y-1 max-w-3xl">
+          <h1 className="text-4xl font-bold">Codebook Generator</h1>
+          <p className="text-muted-foreground text-sm">3-stage AI pipeline: Discovery &rarr; Consolidation &rarr; Definition</p>
+        </div>
+        {data.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => { setData([]); setDataName(""); setCodebookStructured([]); setStage("idle"); setDiscoveryThemes([]); setDiscoveryRaw(""); setAwaitingReview(false); }}>
+            Start Over
+          </Button>
+        )}
       </div>
 
       {/* ── 1. Upload Data ────────────────────────────────────────────────── */}

@@ -866,9 +866,16 @@ export default function AICoderPage() {
 
   return (
     <div className="space-y-0 pb-16">
-      <div className="pb-4 space-y-1 max-w-3xl">
-        <h1 className="text-4xl font-bold">AI Coder</h1>
-        <p className="text-muted-foreground text-sm">AI-assisted qualitative coding with review &amp; analytics</p>
+      <div className="pb-4 flex items-start justify-between">
+        <div className="space-y-1 max-w-3xl">
+          <h1 className="text-4xl font-bold">AI Coder</h1>
+          <p className="text-muted-foreground text-sm">AI-assisted qualitative coding with review &amp; analytics</p>
+        </div>
+        {data.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => { setData([]); setDataName(""); setCodebook([]); setCodingData({}); setAiData({}); setCurrentIndex(0); batch.clearResults(); }}>
+            Start Over
+          </Button>
+        )}
       </div>
 
       {/* ── 1. Upload Data ────────────────────────────────────────────────── */}
