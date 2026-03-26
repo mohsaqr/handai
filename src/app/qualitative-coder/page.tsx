@@ -483,13 +483,9 @@ export default function QualitativeCoderPage() {
       {/* ── Results ────────────────────────────────────────────────────────── */}
       <ResultsPanel
         results={batch.results}
-        stats={batch.stats}
         runId={batch.runId}
-        runMode={batch.runMode}
-        totalDataCount={data.length}
         title="Results"
         subtitle={`${batch.results.length} rows coded`}
-        accentColor="violet"
       />
     </div>
   );

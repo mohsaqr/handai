@@ -509,8 +509,6 @@ export default function ConsensusCoderPage() {
       <ResultsPanel
         results={batch.results}
         runId={batch.runId}
-        runMode={batch.runMode}
-        totalDataCount={data.length}
         title="Results"
         subtitle={`${batch.results.length} rows coded`}
       >

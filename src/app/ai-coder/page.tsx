@@ -860,7 +860,6 @@ export default function AICoderPage() {
   const ctxText = settings.lightMode ? "#555" : "#bbb";
 
   // ── Batch progress percentage ───────────────────────────────────────────
-  const batchPct = batch.progressPct;
 
   // ── Render ──────────────────────────────────────────────────────────────
   if (!isMounted) return null;
@@ -1052,7 +1051,7 @@ export default function AICoderPage() {
                     </div>
                   </div>
                   <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
-                    <div className="bg-orange-500 h-full transition-all duration-300" style={{ width: `${batchPct}%` }} />
+                    <div className="bg-orange-500 h-full transition-all duration-300" style={{ width: `${batch.progressPct}%` }} />
                   </div>
                 </div>
               )}

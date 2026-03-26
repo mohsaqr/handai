@@ -410,8 +410,6 @@ export default function TransformPage() {
       <ResultsPanel
         results={batch.results}
         runId={batch.runId}
-        runMode={batch.runMode}
-        totalDataCount={data.length}
         title="Results"
         subtitle={`${batch.results.length} rows total — ${batch.results.filter(r => (r as Row).status === "success").length} transformed`}
         extraActions={

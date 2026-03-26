@@ -217,8 +217,7 @@ export default function AutomatorPage() {
           await new Promise(r => setTimeout(r, 500 * attempt));
         }
       }
-      // Fallback (should not be reached)
-      return { ...row, status: "error", error_msg: "Unexpected retry exhaustion", latency_ms: Date.now() - t0 };
+      return { ...row, status: "error", error_msg: "Retry limit reached", latency_ms: Date.now() - t0 };
     },
     buildResultEntry: (r: Row, i: number) => ({
       rowIndex: i,
@@ -460,8 +459,6 @@ export default function AutomatorPage() {
       <ResultsPanel
         results={batch.results}
         runId={batch.runId}
-        runMode={batch.runMode}
-        totalDataCount={data.length}
         title="Results"
         subtitle={`${batch.results.length} rows · ${steps.length}-step pipeline`}
       >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import pLimit from "p-limit";
 import { toast } from "sonner";
 import {
@@ -189,6 +189,10 @@ export function useBatchProcessor(
 ): BatchProcessorReturn {
   const { toolId } = config;
 
+  // Keep latest config in a ref so callbacks are stable across renders
+  const configRef = useRef(config);
+  useEffect(() => { configRef.current = config; });
+
   const job = useProcessingStore((s) => s.jobs[toolId]);
   const requestAbort = useProcessingStore((s) => s.requestAbort);
   const clearJob = useProcessingStore((s) => s.clearJob);
@@ -245,11 +249,12 @@ export function useBatchProcessor(
 
   const run = useCallback(
     async (mode: RunMode) => {
+      const cfg = configRef.current;
       const {
         activeModel, data, validate, selectData, onComplete,
         runType, systemSettings, dataName, systemPrompt,
         processRow, buildResultEntry, runParams, concurrency,
-      } = config;
+      } = cfg;
 
       if (data.length === 0) { toast.error("No data loaded"); return; }
       if (!activeModel) { toast.error("No model configured. Go to Settings."); return; }
@@ -271,7 +276,6 @@ export function useBatchProcessor(
 
       const allIndices = targetData.map((_, i) => i);
 
-      // Launch in module-level runner (survives unmount)
       const outcome = await launchProcessing({
         toolId, mode, targetData, indicesToProcess: allIndices,
         baseResults: [...targetData],
@@ -293,18 +297,17 @@ export function useBatchProcessor(
       }
       onComplete?.(mergedResults, computedStats);
     },
-    [config, toolId]
+    [toolId]
   );
-
-  // ── resume: re-process only failed rows ──────────────────────────────────
 
   const resume = useCallback(
     async () => {
+      const cfg = configRef.current;
       const {
         activeModel, data, onComplete,
         runType, systemSettings, dataName, systemPrompt,
         processRow, buildResultEntry, runParams, concurrency,
-      } = config;
+      } = cfg;
 
       if (data.length === 0) { toast.error("No data loaded"); return; }
       if (!activeModel) { toast.error("No model configured. Go to Settings."); return; }
@@ -339,7 +342,7 @@ export function useBatchProcessor(
       }
       onComplete?.(mergedResults, computedStats);
     },
-    [config, toolId]
+    [toolId]
   );
 
   return {

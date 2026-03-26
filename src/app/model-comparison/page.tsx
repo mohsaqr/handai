@@ -25,7 +25,6 @@ import { ResultsPanel } from "@/components/tools/ResultsPanel";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 
 type Row = Record<string, unknown>;
-type RunMode = "preview" | "test" | "full";
 
 function providerLabel(id: string) {
   if (id === "lmstudio") return "LM Studio";
@@ -142,11 +141,6 @@ export default function ModelComparisonPage() {
       if (activeModels.length < 2) return "Some selected providers have missing API keys";
       return null;
     },
-    selectData: (_data: Row[], mode: RunMode) => {
-      return mode === "preview" ? _data.slice(0, 3)
-        : mode === "test" ? _data.slice(0, 10)
-        : _data;
-    },
     runParams: {
       provider: selectedProviders.join(","),
       model: representativeModel?.defaultModel ?? "unknown",
@@ -182,9 +176,6 @@ export default function ModelComparisonPage() {
       status: (r.status as string) ?? (r.error_msg ? "error" : "success"),
       errorMessage: r.error_msg as string | undefined,
     }),
-    onComplete: () => {
-      // no-op; results handled by useBatchProcessor
-    },
   });
 
   // Reordered results for display
@@ -371,8 +362,6 @@ export default function ModelComparisonPage() {
       <ResultsPanel
         results={displayResults}
         runId={batch.runId}
-        runMode={batch.runMode}
-        totalDataCount={data.length}
         title="Results"
         subtitle={`${displayResults.length} rows × ${selectedProviders.length} models`}
       />

@@ -5,23 +5,13 @@ import { DataTable, ExportDropdown } from "./DataTable";
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 
-type Row = Record<string, unknown>;
-type RunMode = "preview" | "test" | "full";
-
 interface ResultsPanelProps {
-  results: Row[];
-  /** @deprecated No longer rendered. Kept for backward compatibility. */
-  stats?: unknown;
+  results: Record<string, unknown>[];
   runId: string | null;
-  runMode: RunMode;
-  totalDataCount: number;
   title?: string;
   subtitle?: string;
-  onExportCSV?: () => void;
-  onExportXLSX?: () => void;
   extraActions?: React.ReactNode;
   children?: React.ReactNode;
-  accentColor?: string;
 }
 
 export function ResultsPanel({
