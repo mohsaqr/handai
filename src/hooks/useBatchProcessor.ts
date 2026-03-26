@@ -184,6 +184,10 @@ function launchProcessing(params: ProcessRowsParams): Promise<{ mergedResults: R
 // React hook — thin wrapper that launches jobs and reads from the store
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Stable references for default selector values (avoids new object per render)
+const defaultProgress = { completed: 0, total: 0 };
+const emptyResults: Row[] = [];
+
 export function useBatchProcessor(
   config: BatchProcessorConfig
 ): BatchProcessorReturn {
@@ -193,17 +197,16 @@ export function useBatchProcessor(
   const configRef = useRef(config);
   useEffect(() => { configRef.current = config; });
 
-  const job = useProcessingStore((s) => s.jobs[toolId]);
+  // Fine-grained selectors — progress changes don't trigger results re-computation
+  const isProcessing = useProcessingStore((s) => s.jobs[toolId]?.isProcessing ?? false);
+  const runMode = useProcessingStore((s) => s.jobs[toolId]?.runMode ?? "full");
+  const progress = useProcessingStore((s) => s.jobs[toolId]?.progress ?? defaultProgress);
+  const results = useProcessingStore((s) => s.jobs[toolId]?.results ?? emptyResults);
+  const stats = useProcessingStore((s) => s.jobs[toolId]?.stats ?? null);
+  const runId = useProcessingStore((s) => s.jobs[toolId]?.runId ?? null);
+  const startedAt = useProcessingStore((s) => s.jobs[toolId]?.startedAt ?? 0);
   const requestAbort = useProcessingStore((s) => s.requestAbort);
   const clearJob = useProcessingStore((s) => s.clearJob);
-
-  const isProcessing = job?.isProcessing ?? false;
-  const runMode = job?.runMode ?? "full";
-  const progress = job?.progress ?? { completed: 0, total: 0 };
-  const results = useMemo(() => job?.results ?? [], [job?.results]);
-  const stats = job?.stats ?? null;
-  const runId = job?.runId ?? null;
-  const startedAt = job?.startedAt ?? 0;
 
   const failedCount = useMemo(
     () => results.filter((r) => r.status === "error").length,

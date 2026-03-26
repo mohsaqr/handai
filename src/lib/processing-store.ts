@@ -41,6 +41,11 @@ export function getAbortFlag(toolId: string): boolean {
   return abortFlags.get(toolId) ?? false;
 }
 
+// ── Batched progress increments (avoids per-row Zustand writes) ──────────────
+
+const pendingIncrements = new Map<string, number>();
+let flushScheduled = false;
+
 // ── Generation tracking (outside Zustand — checked synchronously) ────────────
 
 const generations = new Map<string, number>();
@@ -107,22 +112,31 @@ export const useProcessingStore = create<ProcessingState>((set) => ({
   },
 
   incrementProgress: (toolId) => {
-    set((state) => {
-      const job = state.jobs[toolId];
-      if (!job) return state;
-      return {
-        jobs: {
-          ...state.jobs,
-          [toolId]: {
-            ...job,
-            progress: {
-              ...job.progress,
-              completed: job.progress.completed + 1,
-            },
-          },
-        },
-      };
-    });
+    // Accumulate increments and flush on next animation frame to avoid
+    // per-row Zustand writes (1000 rows = 1000 re-renders otherwise).
+    pendingIncrements.set(toolId, (pendingIncrements.get(toolId) ?? 0) + 1);
+    if (!flushScheduled) {
+      flushScheduled = true;
+      (typeof requestAnimationFrame !== "undefined" ? requestAnimationFrame : setTimeout)(() => {
+        flushScheduled = false;
+        set((state) => {
+          let jobs = state.jobs;
+          for (const [id, count] of pendingIncrements) {
+            const job = jobs[id];
+            if (!job) continue;
+            jobs = {
+              ...jobs,
+              [id]: {
+                ...job,
+                progress: { ...job.progress, completed: job.progress.completed + count },
+              },
+            };
+          }
+          pendingIncrements.clear();
+          return { jobs };
+        });
+      });
+    }
   },
 
   completeJob: (toolId, results, stats, runId) => {

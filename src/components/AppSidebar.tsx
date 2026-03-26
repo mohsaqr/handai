@@ -284,7 +284,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     useLocalProviderDetection();
     const router = useRouter();
     const pathname = usePathname();
-    const jobs = useProcessingStore((s) => s.jobs);
+    // Only extract isProcessing flags — avoids re-render on every progress tick
+    const runningTools = useProcessingStore((s) => {
+        const keys: string[] = [];
+        for (const [k, v] of Object.entries(s.jobs)) {
+            if (v.isProcessing) keys.push(k);
+        }
+        return keys.join(",");
+    });
 
     return (
         <Sidebar collapsible="icon" {...props}>
@@ -313,7 +320,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 <SidebarMenu>
                                     {group.items.map((item) => {
                                         const isActive = pathname === item.url;
-                                        const isRunning = jobs[item.url]?.isProcessing ?? false;
+                                        const isRunning = runningTools.includes(item.url);
                                         return (
                                             <SidebarMenuItem key={item.title}>
                                                 <SidebarMenuButton asChild isActive={isActive} tooltip={item.title}>
