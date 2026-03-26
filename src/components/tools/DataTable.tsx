@@ -183,10 +183,12 @@ export function DataTable({ data, maxRows = 10 }: DataTableProps) {
                             {headers.map((header) => (
                                 <TableCell
                                     key={`${i}-${header}`}
-                                    className="whitespace-pre-wrap max-w-md truncate cursor-pointer hover:bg-muted/20"
+                                    className="max-w-xs cursor-pointer hover:bg-muted/20"
                                     onClick={() => setExpanded({ col: header, value: String(row[header] ?? "") })}
                                 >
-                                    {String(row[header] ?? "")}
+                                    <div className="line-clamp-2 break-words text-sm">
+                                        {String(row[header] ?? "")}
+                                    </div>
                                 </TableCell>
                             ))}
                         </TableRow>

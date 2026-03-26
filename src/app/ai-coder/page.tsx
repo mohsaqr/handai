@@ -621,6 +621,8 @@ export default function AICoderPage() {
     dataName,
     systemPrompt: aiInstructions,
     concurrency: batchConcurrency,
+    selectData: (_data: Record<string, unknown>[], mode: string) =>
+      mode === "preview" ? _data.slice(0, 3) : mode === "test" ? _data.slice(0, 20) : _data,
     validate: () => {
       if (codes.length === 0) return "Define at least one code";
       return null;
@@ -1029,14 +1031,24 @@ export default function AICoderPage() {
                   </span>
                 )}
                 {!batch.isProcessing && (
-                  <Button
-                    onClick={() => batch.run("full")}
-                    disabled={!provider || batch.isProcessing}
-                    size="sm"
-                    className="ml-auto bg-orange-500 hover:bg-orange-600 text-white"
-                  >
-                    Run AI Batch ({data.length} rows)
-                  </Button>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <Button
+                      onClick={() => batch.run("test")}
+                      disabled={!provider || batch.isProcessing}
+                      size="sm"
+                      variant="outline"
+                    >
+                      Test (20 rows)
+                    </Button>
+                    <Button
+                      onClick={() => batch.run("full")}
+                      disabled={!provider || batch.isProcessing}
+                      size="sm"
+                      className="bg-orange-500 hover:bg-orange-600 text-white"
+                    >
+                      Full Batch ({data.length} rows)
+                    </Button>
+                  </div>
                 )}
               </div>
               {batch.isProcessing && (
