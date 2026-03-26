@@ -221,7 +221,6 @@ export async function POST(req: NextRequest) {
           model: aiModel,
           system: effectivePrompt,
           prompt: `Document: ${fileName ?? "untitled"}\n\n${rawText}`,
-          temperature: 0,
           maxOutputTokens: 4096,
         }),
       { maxAttempts: 3, baseDelayMs: 200 }

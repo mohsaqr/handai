@@ -99,7 +99,6 @@ export async function POST(req: NextRequest) {
           model: aiModel,
           system: getPrompt("document.analysis"),
           prompt: promptParts.join(""),
-          temperature: 0,
           maxOutputTokens: 1024,
         }),
       { maxAttempts: 2, baseDelayMs: 200 }

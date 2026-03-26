@@ -63,7 +63,6 @@ export async function POST(req: NextRequest) {
             model: aiModel,
             system: systemPrompt,
             prompt: `Input Data: ${JSON.stringify(inputData)}`,
-            temperature: 0,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );

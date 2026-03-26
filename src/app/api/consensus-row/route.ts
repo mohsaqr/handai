@@ -49,7 +49,6 @@ export async function POST(req: NextRequest) {
             model,
             system: enforced,
             prompt: userContent,
-            temperature: 0,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
@@ -120,7 +119,6 @@ export async function POST(req: NextRequest) {
           model: judgeModel,
           system: judgePrompt,
           prompt: combinedContent,
-          temperature: 0,
         }),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
@@ -138,7 +136,6 @@ export async function POST(req: NextRequest) {
               model: judgeModel,
               system: `You are a quality assessor. Rate each worker response on a scale of 1-10 for accuracy and completeness. Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10.`,
               prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`,
-              temperature: 0,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
         );
@@ -162,7 +159,6 @@ export async function POST(req: NextRequest) {
               model: judgeModel,
               system: `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`,
               prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`,
-              temperature: 0,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
         );

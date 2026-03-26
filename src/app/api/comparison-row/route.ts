@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
               model: aiModel,
               system: systemPrompt,
               prompt: userContent,
-              temperature: temperature ?? 0,
+              ...(temperature !== undefined && { temperature }),
             }),
           { maxAttempts: 3, baseDelayMs: 100 }
         );

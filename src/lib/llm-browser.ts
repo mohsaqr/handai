@@ -15,6 +15,14 @@ import { cohenKappa, pairwiseAgreement } from "./analytics";
 import { getPrompt, formatExtractionSchema } from "./prompts";
 import type { FieldDef } from "@/types";
 
+/** Build generateText options — only includes temperature when explicitly provided (reasoning models reject it). */
+function genOpts(model: ReturnType<typeof getModel>, system: string, prompt: string, temperature?: number, maxOutputTokens?: number): Parameters<typeof generateText>[0] {
+  const opts: Parameters<typeof generateText>[0] = { model, system, prompt };
+  if (temperature !== undefined && temperature !== null) opts.temperature = temperature;
+  if (maxOutputTokens !== undefined) opts.maxOutputTokens = maxOutputTokens;
+  return opts;
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface WorkerResult {
@@ -254,13 +262,7 @@ export async function comparisonRowDirect(params: {
       const aiModel = getModel(m.provider, m.model, m.apiKey, m.baseUrl);
       const start = Date.now();
       const { text } = await withRetry(
-        () =>
-          generateText({
-            model: aiModel,
-            system: params.systemPrompt,
-            prompt: params.userContent,
-            temperature: params.temperature ?? 0,
-          }),
+        () => generateText(genOpts(aiModel, params.systemPrompt, params.userContent, params.temperature)),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
       return { id: m.id, output: text, latency: (Date.now() - start) / 1000, success: true };
@@ -299,13 +301,7 @@ export async function consensusRowDirect(params: {
     const model = getModel(w.provider, w.model, w.apiKey || "local", w.baseUrl);
     const start = Date.now();
     const { text } = await withRetry(
-      () =>
-        generateText({
-          model,
-          system: enforced,
-          prompt: params.userContent,
-          temperature: 0,
-        }),
+      () => generateText(genOpts(model, enforced, params.userContent)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
     return { id: `worker_${i + 1}`, output: text, latency: (Date.now() - start) / 1000 };
@@ -361,12 +357,7 @@ export async function consensusRowDirect(params: {
   const judgeStart = Date.now();
   const { text: judgeOutput } = await withRetry(
     () =>
-      generateText({
-        model: judgeModel,
-        system: params.judgePrompt,
-        prompt: combinedContent,
-        temperature: 0,
-      }),
+      generateText(genOpts(judgeModel, params.judgePrompt, combinedContent)),
     { maxAttempts: 3, baseDelayMs: 100 }
   );
   const judgeLatency = (Date.now() - judgeStart) / 1000;
@@ -376,12 +367,7 @@ export async function consensusRowDirect(params: {
     try {
       const { text: qsText } = await withRetry(
         () =>
-          generateText({
-            model: judgeModel,
-            system: `You are a quality assessor. Rate each worker response on a scale of 1-10 for accuracy and completeness. Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10.`,
-            prompt: `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`,
-            temperature: 0,
-          }),
+          generateText(genOpts(judgeModel, `You are a quality assessor. Rate each worker response on a scale of 1-10 for accuracy and completeness. Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       const clean = qsText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
@@ -396,12 +382,7 @@ export async function consensusRowDirect(params: {
     try {
       const { text: drText } = await withRetry(
         () =>
-          generateText({
-            model: judgeModel,
-            system: `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`,
-            prompt: `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`,
-            temperature: 0,
-          }),
+          generateText(genOpts(judgeModel, `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       disagreementReason = drText.trim();
@@ -465,12 +446,7 @@ export async function automatorRowDirect(params: {
 
     const { text } = await withRetry(
       () =>
-        generateText({
-          model: aiModel,
-          system: systemPrompt,
-          prompt: `Input Data: ${JSON.stringify(inputData)}`,
-          temperature: 0,
-        }),
+        generateText(genOpts(aiModel, systemPrompt, `Input Data: ${JSON.stringify(inputData)}`)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
 
@@ -534,14 +510,7 @@ export async function documentExtractDirect(params: {
   const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
 
   const { text } = await withRetry(
-    () =>
-      generateText({
-        model: aiModel,
-        system: effectivePrompt,
-        prompt: `Document: ${params.file.name}\n\n${rawText}`,
-        temperature: 0,
-        maxOutputTokens: 4096,
-      }),
+    () => generateText(genOpts(aiModel, effectivePrompt, `Document: ${params.file.name}\n\n${rawText}`, undefined, 4096)),
     { maxAttempts: 3, baseDelayMs: 200 }
   );
 
@@ -595,13 +564,7 @@ export async function documentAnalyzeDirect(params: {
 
   const { text } = await withRetry(
     () =>
-      generateText({
-        model: aiModel,
-        system: getPrompt("document.analysis"),
-        prompt: promptParts.join(""),
-        temperature: 0,
-        maxOutputTokens: 1024,
-      }),
+      generateText(genOpts(aiModel, getPrompt("document.analysis"), promptParts.join(""), undefined, 1024)),
     { maxAttempts: 2, baseDelayMs: 200 }
   );
 
