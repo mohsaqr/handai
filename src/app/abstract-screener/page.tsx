@@ -1172,10 +1172,10 @@ export default function AbstractScreenerPage() {
 
             {/* ── Content: Abstract display card ────────────────────────── */}
             <div className={cn(
-              "border rounded-xl overflow-hidden",
+              "border rounded-xl overflow-hidden max-w-4xl",
               settings.lightMode ? "bg-slate-50 dark:bg-slate-900/50" : "bg-slate-900 text-slate-100"
             )}>
-              <div className="p-5 space-y-3">
+              <div className="p-5 space-y-3 break-words">
                 {titleText ? (
                   <h2 className="text-xl font-semibold leading-snug">{titleText}</h2>
                 ) : (
@@ -1199,7 +1199,7 @@ export default function AbstractScreenerPage() {
                 )}
 
                 {abstractText ? (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                  <p className="text-sm leading-relaxed">
                     {(aiTerms.length > 0 || includeWords.length > 0 || excludeWords.length > 0)
                       ? highlightAbstract(abstractText, aiTerms, includeWords, excludeWords)
                       : abstractText}
