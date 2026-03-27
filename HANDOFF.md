@@ -1,60 +1,52 @@
-# Session Handoff — 2026-03-06
+# Session Handoff — 2026-03-27
 
 ## Completed
 
-### Full Audit Fixes (8 phases)
-Implemented all items from the Audit Fixes Plan across 29 files.
+### Navigation & Processing Persistence
+- Sidebar active page highlight + pulsing blue dot for active processing
+- Processing survives navigation via module-level runner in `useBatchProcessor.ts` + Zustand `processing-store.ts`
+- 7 tools converted to `useBatchProcessor`: transform, qualitative-coder, model-comparison, consensus-coder, automator, abstract-screener, ai-coder
+- Resume failed rows without reprocessing (amber "Resume Failed" button)
+- Throttled progress via `requestAnimationFrame` batching; fine-grained selectors
 
-| Phase | What | Files |
-|---|---|---|
-| 1A | `res.ok` guards before every `res.json()` | 7 page files |
-| 1B | DataTable: column filters, CSV/TSV/JSON export, "X of Y shown" | `DataTable.tsx` |
-| 1C | Remove page-local concurrency controls | `transform/page.tsx`, `qualitative-coder/page.tsx` |
-| 2 | Transform: re-transform chaining, row selection + filter bar | `transform/page.tsx` |
-| 3 | Process Docs: encoding fix (UTF-8 BOM → UTF-8 → Win-1252), X button for all statuses, Clear All | `process-documents/page.tsx`, `document-extract/route.ts`, `document-browser.ts` |
-| 4 | Automator: detect output=input bug, warning banner | `automator/page.tsx` |
-| 5 | Qualitative Coder: sample codebook dropdown (6 codebooks) | `qualitative-coder/page.tsx` |
-| 6 | Consensus Coder: WorkerCard moved out, empty prompts + sample dropdown | `consensus-coder/page.tsx` |
-| 7 | Delete Manual Coder, AI Coder: remove auto-accept, add Accept All/Dismiss buttons | `manual-coder/` deleted, `ai-coder/page.tsx`, `AppSidebar.tsx`, `page.tsx` |
-| 8 | Abstract Screener: DataTable preview, colMap validation | `abstract-screener/page.tsx` |
+### Session Restore from History
+- "Restore Session" button on history detail page
+- `restore-store.ts` + `useRestoreSession` hook in all tool pages
 
----
+### Tauri Removal
+- Deleted `db-tauri.ts` and `desktop/tauri/`; zero Tauri references in `src/`
+
+### Browser Storage for Public Deployment
+- `NEXT_PUBLIC_BROWSER_STORAGE=1` → LLM calls + storage run in browser (IndexedDB)
+- API keys stay in browser; local models work from user's machine
+- `DATABASE_URL` fallback in `prisma.ts`
+
+### Lint Cleanup (78 → 0)
+- All `any` replaced, hooks purity fixed, unused vars removed
+
+### UI
+- DataTable: 10 rows/page, sticky header, 2-line cell clamp
+- "Start Over" on all 10 tools; AI Coder batch exposed with Test (20 rows)
+- Abstract Screener card constrained; codebook accepts Excel; visible input borders
+
+### Transform & Generate
+- Transform: plain text output, originals preserved in `ai_output`
+- Generate: temperature optional, removed output cap, fallback for unparseable
+
+### Prompts
+- Research-grounded (Braun & Clarke, PRISMA, Saldana); multi-coding support
+
+### Docs
+- CLAUDE.md, README.md updated; 45-slide PPTX with citations
 
 ## Current State
-
-### Build / Tests
-- `npm test -- --run` → **80/80 tests pass** (4 test files)
-- `npx tsc --noEmit` → **0 new errors** (only pre-existing `db-tauri.ts` ones)
-- Manual Coder deleted — sidebar and home page updated
-
-### Key Patterns Applied
-- `if (!res.ok) throw new Error(...)` before every `res.json()` in all fetch calls
-- `pLimit(systemSettings.maxConcurrency)` instead of page-local concurrency state
-- Encoding detection: check UTF-8 BOM → try UTF-8 → fallback Windows-1252 if replacement chars
-- DataTable enhancements (column filters + multi-export) apply to ALL modules automatically
-
----
+- TS: 0 errors | Lint: 0 errors, 0 warnings | Tests: 115/115 | Build: pass | Git: pushed
 
 ## Open Issues
-
-1. **db-tauri.ts TS errors** — pre-existing, not from this session
-2. **Encoding fallback** — Windows-1252 is a good default fallback but won't cover all encodings (e.g., Shift-JIS). Could add charset detection library if needed.
-
----
+- 3 tools not on `useBatchProcessor` (codebook-generator, generate, process-documents)
+- `Row` type duplicated locally in ~9 files
+- 6 research slides appended after Thank You in PPTX — reorder manually
 
 ## Next Steps
-
-1. Manual test each page in `npm run dev`
-2. Verify Tauri build still works (`npm run build:tauri`)
-3. Test encoding fix with a Windows-1252 encoded file
-
----
-
-## Environment
-
-```bash
-node 22, npm 10
-Next.js 16.1.6, React 19, TypeScript strict
-Tailwind v4, shadcn/ui, Vercel AI SDK
-Vitest — 80 tests, 4 test files
-```
+- Background-safe pattern for remaining 3 tools if needed
+- Dark mode toggle
