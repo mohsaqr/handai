@@ -21,7 +21,7 @@ interface Props {
   onLoadSample: (key: string) => void;
 }
 
-export function ConsensusUpload({ file, status, errorMessage, previewRows, onDrop, onClear, onLoadSample }: Props) {
+export function SmartFileUpload({ file, status, errorMessage, previewRows, onDrop, onClear, onLoadSample }: Props) {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, multiple: false });
 
   return (

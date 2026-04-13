@@ -14,7 +14,7 @@ import { useProcessingStore } from "@/lib/processing-store";
 import { HelpCircle, Plus, X, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { dispatchConsensusRow } from "@/lib/llm-dispatch";
-import { ConsensusUpload, type FileStatus } from "./ConsensusUpload";
+import { SmartFileUpload, type FileStatus } from "@/components/tools/SmartFileUpload";
 import { ColumnSelector } from "@/components/tools/ColumnSelector";
 import { useColumnSelection } from "@/hooks/useColumnSelection";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
@@ -491,7 +491,7 @@ export default function ConsensusCoderPage() {
       {/* ── 1. Upload Data ────────────────────────────────────────────────── */}
       <div className="space-y-4 pb-8">
         <h2 className="text-2xl font-bold">1. Upload Data</h2>
-        <ConsensusUpload
+        <SmartFileUpload
           file={currentFile}
           status={fileStatus}
           errorMessage={fileError}
