@@ -598,6 +598,7 @@ export async function documentExtractDirect(params: {
   baseUrl?: string;
   systemPrompt?: string;
   fields?: FieldDef[];
+  maxTokens?: number;
 }): Promise<{
   records: Record<string, unknown>[];
   fileName: string;
@@ -643,7 +644,7 @@ ABSOLUTE RULES:
   const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
 
   const { text } = await withRetry(
-    () => generateText(genOpts(aiModel, effectivePrompt, `Document: ${params.file.name}\n\n${rawText}`, undefined, 4096)),
+    () => generateText(genOpts(aiModel, effectivePrompt, `Document: ${params.file.name}\n\n${rawText}`, undefined, params.maxTokens)),
     { maxAttempts: 3, baseDelayMs: 200 }
   );
 
@@ -670,7 +671,7 @@ RULES:
 3. Use null for missing values.
 4. If the text describes one subject, return [{ ... }]. If multiple, return one object per subject.`;
     const { text: reformatted } = await withRetry(
-      () => generateText(genOpts(aiModel, reformatPrompt, proseText, undefined, 4096)),
+      () => generateText(genOpts(aiModel, reformatPrompt, proseText, undefined, params.maxTokens)),
       { maxAttempts: 2, baseDelayMs: 200 }
     );
     return reformatted;
@@ -816,6 +817,7 @@ export async function documentProcessDirect(params: {
   apiKey: string;
   baseUrl?: string;
   systemPrompt: string;
+  maxTokens?: number;
 }): Promise<{
   text: string;
   fileName: string;
@@ -832,7 +834,7 @@ export async function documentProcessDirect(params: {
   const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
 
   const { text } = await withRetry(
-    () => generateText(genOpts(aiModel, params.systemPrompt, `Document: ${params.file.name}\n\n${rawText}`, undefined, 4096)),
+    () => generateText(genOpts(aiModel, params.systemPrompt, `Document: ${params.file.name}\n\n${rawText}`, undefined, params.maxTokens)),
     { maxAttempts: 3, baseDelayMs: 200 }
   );
 

@@ -340,6 +340,7 @@ export async function dispatchDocumentExtract(params: {
   baseUrl?: string;
   systemPrompt?: string;
   fields?: FieldDef[];
+  maxTokens?: number;
 }): Promise<{
   records: Record<string, unknown>[];
   fileName: string;
@@ -368,6 +369,7 @@ export async function dispatchDocumentExtract(params: {
         baseUrl: params.baseUrl,
         systemPrompt: params.systemPrompt,
         fields: params.fields,
+        maxTokens: params.maxTokens,
       }),
     });
     if (!res.ok) {
@@ -428,6 +430,7 @@ export async function dispatchDocumentProcess(params: {
   apiKey: string;
   baseUrl?: string;
   systemPrompt: string;
+  maxTokens?: number;
 }): Promise<{
   text: string;
   fileName: string;
@@ -454,6 +457,7 @@ export async function dispatchDocumentProcess(params: {
         apiKey: params.apiKey,
         baseUrl: params.baseUrl,
         systemPrompt: params.systemPrompt,
+        maxTokens: params.maxTokens,
       }),
     });
     if (!res.ok) {

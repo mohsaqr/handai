@@ -331,6 +331,7 @@ export default function ExtractDataPage() {
         baseUrl: activeModel!.baseUrl,
         systemPrompt,
         fields: namedFields.length > 0 ? namedFields : undefined,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       const latency = Date.now() - t0;

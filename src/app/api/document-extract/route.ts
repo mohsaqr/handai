@@ -214,7 +214,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt, fields } =
+    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt, fields, maxTokens } =
       parsed.data;
 
     const { text: rawText, truncated, charCount } = await extractText(fileContent, fileType);
@@ -262,7 +262,7 @@ ABSOLUTE RULES:
           model: aiModel,
           system: effectivePrompt,
           prompt: `Document: ${fileName ?? "untitled"}\n\n${rawText}`,
-          maxOutputTokens: 4096,
+          ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
         }),
       { maxAttempts: 3, baseDelayMs: 200 }
     );
@@ -289,7 +289,7 @@ RULES:
             model: aiModel,
             system: reformatPrompt,
             prompt: proseText,
-            maxOutputTokens: 4096,
+            ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
           }),
         { maxAttempts: 2, baseDelayMs: 200 }
       );

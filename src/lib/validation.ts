@@ -137,6 +137,7 @@ export const DocumentExtractSchema = z.object({
   baseUrl: z.string().optional(),
   systemPrompt: z.string().optional(),
   fields: z.array(FieldDefSchema).optional(),
+  maxTokens: z.number().int().positive().optional(),
 });
 
 // ── /api/document-analyze ─────────────────────────────────────────────────────
@@ -161,6 +162,7 @@ export const DocumentProcessSchema = z.object({
   apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
   systemPrompt: z.string().min(1),
+  maxTokens: z.number().int().positive().optional(),
 });
 
 // ── /api/runs POST ────────────────────────────────────────────────────────────

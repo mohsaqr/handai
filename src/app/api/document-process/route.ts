@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt } =
+    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt, maxTokens } =
       parsed.data;
 
     const { text: rawText, truncated, charCount } = await extractText(fileContent, fileType);
@@ -153,7 +153,7 @@ export async function POST(req: NextRequest) {
           model: aiModel,
           system: systemPrompt,
           prompt: `Document: ${fileName ?? "untitled"}\n\n${rawText}`,
-          maxOutputTokens: 4096,
+          ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
         }),
       { maxAttempts: 3, baseDelayMs: 200 }
     );

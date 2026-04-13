@@ -201,6 +201,7 @@ export default function ProcessDocumentsPage() {
         apiKey: activeModel!.apiKey || "",
         baseUrl: activeModel!.baseUrl,
         systemPrompt,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       const latency = Date.now() - t0;
