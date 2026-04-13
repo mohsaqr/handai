@@ -175,7 +175,8 @@ export default function CodebookGeneratorPage() {
       baseUrl: providerConfig.baseUrl,
       systemPrompt,
       userContent,
-      temperature: systemSettings.temperature || 0.3,
+      temperature: systemSettings.temperature ?? 0.3,
+      maxTokens: systemSettings.maxTokens ?? undefined,
     });
     return output;
   };
@@ -294,7 +295,7 @@ export default function CodebookGeneratorPage() {
           runType: "codebook-generator",
           provider: providerConfig.providerId,
           model: providerConfig.defaultModel,
-          temperature: systemSettings.temperature || 0.3,
+          temperature: systemSettings.temperature ?? 0.3,
           systemPrompt: "3-stage codebook pipeline",
           inputFile: dataName || "unnamed",
           inputRows: data.length,
@@ -351,11 +352,9 @@ export default function CodebookGeneratorPage() {
           <h1 className="text-4xl font-bold">Codebook Generator</h1>
           <p className="text-muted-foreground text-sm">3-stage AI pipeline: Discovery &rarr; Consolidation &rarr; Definition</p>
         </div>
-        {data.length > 0 && (
-          <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("codebookgen_"); setData([]); setDataName(""); setCodebookStructured([]); setStage("idle"); setDiscoveryThemes([]); setDiscoveryRaw(""); setAwaitingReview(false); setAwaitingReview2(false); setConsolidatedThemes([]); setLastRunId(null); setCodebookDescription(""); setAiInstructions(""); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("codebookgen_"); setData([]); setDataName(""); setCodebookStructured([]); setStage("idle"); setDiscoveryThemes([]); setDiscoveryRaw(""); setAwaitingReview(false); setAwaitingReview2(false); setConsolidatedThemes([]); setLastRunId(null); setCodebookDescription(""); setAiInstructions(""); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
-        )}
       </div>
 
       {/* ── 1. Upload Data ────────────────────────────────────────────────── */}
@@ -475,7 +474,7 @@ export default function CodebookGeneratorPage() {
           {discoveryRaw ? (
             <div className="space-y-2">
               <p className="text-xs text-amber-600">Stage 1 output could not be parsed as JSON. Edit manually if needed.</p>
-              <pre className="text-xs font-mono bg-muted/20 border rounded p-3 max-h-60 overflow-y-auto whitespace-pre-wrap">{discoveryRaw}</pre>
+              <pre className="text-xs font-mono bg-muted/20 border rounded p-3 whitespace-pre-wrap">{discoveryRaw}</pre>
             </div>
           ) : (
             <div className="space-y-2">

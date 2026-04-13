@@ -119,17 +119,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { provider, model, apiKey, baseUrl, rowCount, columns, freeformPrompt, outputFormat, temperature, systemPrompt: incomingSystemPrompt } =
+    const { provider, model, apiKey, baseUrl, rowCount, columns, freeformPrompt, outputFormat, temperature, maxTokens, systemPrompt: incomingSystemPrompt } =
       parsed.data;
 
-    const isFreetext = outputFormat === "freetext" || outputFormat === "markdown";
+    const isFreetext = outputFormat === "freetext" || outputFormat === "markdown" || outputFormat === "gift";
     const aiModel = getModel(provider, model, apiKey, baseUrl);
 
     let systemPrompt: string;
     let userPrompt: string;
 
     if (isFreetext) {
-      systemPrompt = incomingSystemPrompt || getPrompt(outputFormat === "markdown" ? "generate.markdown" : "generate.freetext");
+      systemPrompt = incomingSystemPrompt || getPrompt(outputFormat === "markdown" ? "generate.markdown" : outputFormat === "gift" ? "generate.gift" : "generate.freetext");
       userPrompt = freeformPrompt ?? "Generate realistic content.";
     } else if (incomingSystemPrompt) {
       systemPrompt = incomingSystemPrompt;
@@ -161,6 +161,9 @@ export async function POST(req: NextRequest) {
     };
     if (temperature !== undefined) {
       genOpts.temperature = temperature;
+    }
+    if (maxTokens) {
+      genOpts.maxOutputTokens = maxTokens;
     }
 
     const { text } = await withRetry(

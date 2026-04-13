@@ -164,6 +164,8 @@ export async function dispatchConsensusRow(params: {
   enableQualityScoring?: boolean;
   enableDisagreementAnalysis?: boolean;
   includeReasoning?: boolean;
+  temperature?: number;
+  maxTokens?: number;
   rowIdx?: number;
 }): Promise<ConsensusResult> {
   if (useBrowserDirect) {
@@ -197,6 +199,7 @@ export async function dispatchComparisonRow(params: {
   systemPrompt: string;
   userContent: string;
   temperature?: number;
+  maxTokens?: number;
 }): Promise<{
   results: Array<{
     id: string;
@@ -234,6 +237,8 @@ export async function dispatchAgentsRow(params: {
   }>;
   userContent: string;
   maxRounds: number;
+  temperature?: number;
+  maxTokens?: number;
   rowIdx?: number;
 }): Promise<AgentsResult> {
   if (useBrowserDirect) {
@@ -268,6 +273,8 @@ export async function dispatchAutomatorRow(params: {
   model: string;
   apiKey: string;
   baseUrl?: string;
+  temperature?: number;
+  maxTokens?: number;
 }): Promise<{
   output: Record<string, unknown>;
   stepResults: Array<{
@@ -309,6 +316,7 @@ export async function dispatchGenerateRow(params: {
   freeformPrompt?: string;
   outputFormat?: string;
   temperature?: number;
+  maxTokens?: number;
   systemPrompt?: string;
 }): Promise<{
   rows: Record<string, string>[];

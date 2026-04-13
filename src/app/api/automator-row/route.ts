@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { row, steps, provider, model, apiKey, baseUrl } = parsed.data;
+    const { row, steps, provider, model, apiKey, baseUrl, temperature, maxTokens } = parsed.data;
     const aiModel = getModel(provider, model, apiKey, baseUrl);
 
     let cumulativeData: Record<string, unknown> = { ...row };
@@ -77,6 +77,8 @@ RULES:
             model: aiModel,
             system: systemPrompt,
             prompt: `Input Data (keys are field identifiers — do NOT translate them):\n${JSON.stringify(inputData)}`,
+            ...(temperature !== undefined && { temperature }),
+            ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );

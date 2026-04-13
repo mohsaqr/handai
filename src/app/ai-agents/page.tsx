@@ -398,6 +398,8 @@ export default function AIAgentsPage() {
         agents: agentConfigs,
         userContent,
         maxRounds,
+        temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
         rowIdx: idx,
       });
 

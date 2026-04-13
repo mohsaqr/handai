@@ -202,6 +202,8 @@ export default function AutomatorPage() {
             model: provider!.defaultModel,
             apiKey: provider!.apiKey || "",
             baseUrl: provider!.baseUrl,
+            temperature: systemSettings.temperature,
+            maxTokens: systemSettings.maxTokens ?? undefined,
           });
 
           // Check if result.output is essentially the same as input (extraction failed silently)

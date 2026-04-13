@@ -201,6 +201,7 @@ export async function generateRowDirect(params: {
   freeformPrompt?: string;
   outputFormat?: string;
   temperature?: number;
+  maxTokens?: number;
   systemPrompt?: string;
 }): Promise<{ rows: Record<string, string>[]; rawCsv: string; count: number; raw?: string }> {
   const isFreetext = params.outputFormat === "freetext" || params.outputFormat === "markdown" || params.outputFormat === "gift";
@@ -235,18 +236,8 @@ export async function generateRowDirect(params: {
     userPrompt = `${params.freeformPrompt ?? "Generate a realistic dataset"}\nGenerate exactly ${params.rowCount} rows.`;
   }
 
-  const genOpts: Parameters<typeof generateText>[0] = {
-    model: aiModel,
-    system: systemPrompt,
-    prompt: userPrompt,
-  };
-  // Some models (reasoning models like o1/gpt-5-nano) don't support temperature
-  if (params.temperature !== undefined) {
-    try { genOpts.temperature = params.temperature; } catch { /* skip if unsupported */ }
-  }
-
   const { text } = await withRetry(
-    () => generateText(genOpts),
+    () => generateText(genOpts(aiModel, systemPrompt, userPrompt, params.temperature, params.maxTokens ?? undefined)),
     { maxAttempts: 3, baseDelayMs: 200 }
   );
 
@@ -274,13 +265,14 @@ export async function comparisonRowDirect(params: {
   systemPrompt: string;
   userContent: string;
   temperature?: number;
+  maxTokens?: number;
 }): Promise<{ results: Array<{ id: string; output: string; latency?: number; success: boolean }> }> {
   const promises = params.models.map(async (m) => {
     try {
       const aiModel = getModel(m.provider, m.model, m.apiKey, m.baseUrl);
       const start = Date.now();
       const { text } = await withRetry(
-        () => generateText(genOpts(aiModel, params.systemPrompt, params.userContent, params.temperature)),
+        () => generateText(genOpts(aiModel, params.systemPrompt, params.userContent, params.temperature, params.maxTokens)),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
       return { id: m.id, output: text, latency: (Date.now() - start) / 1000, success: true };
@@ -304,6 +296,8 @@ export async function consensusRowDirect(params: {
   enableQualityScoring?: boolean;
   enableDisagreementAnalysis?: boolean;
   includeReasoning?: boolean;
+  temperature?: number;
+  maxTokens?: number;
 }): Promise<ConsensusResult> {
   // Enforce direct-answer-only rules on every worker prompt
   const strictSuffix = `\n\nSTRICT OUTPUT RULES (always apply):
@@ -320,7 +314,7 @@ export async function consensusRowDirect(params: {
     const model = getModel(w.provider, w.model, w.apiKey || "local", w.baseUrl);
     const start = Date.now();
     const { text } = await withRetry(
-      () => generateText(genOpts(model, enforced, params.userContent)),
+      () => generateText(genOpts(model, enforced, params.userContent, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
     return { id: `worker_${i + 1}`, output: text, latency: (Date.now() - start) / 1000 };
@@ -380,7 +374,7 @@ export async function consensusRowDirect(params: {
     consensusType = "Unanimous";
     const judgeStart = Date.now();
     const { text } = await withRetry(
-      () => generateText(genOpts(judgeModel, params.judgePrompt + judgeDirectSuffix, combinedContent)),
+      () => generateText(genOpts(judgeModel, params.judgePrompt + judgeDirectSuffix, combinedContent, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
     judgeOutput = text;
@@ -396,7 +390,7 @@ Where <level> is one of:
 
     const judgeStart = Date.now();
     const { text: rawJudge } = await withRetry(
-      () => generateText(genOpts(judgeModel, params.judgePrompt + judgeSuffix, combinedContent)),
+      () => generateText(genOpts(judgeModel, params.judgePrompt + judgeSuffix, combinedContent, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
     judgeLatency = (Date.now() - judgeStart) / 1000;
@@ -433,7 +427,7 @@ RULES:
 - Deduct points for: factual errors, missing key information, off-topic content, unnecessary additions.
 - Be consistent: similar quality responses should get similar scores.
 
-Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other text.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nJudge's Chosen Answer:\n${judgeOutput}\n\nConsensus Level: ${consensusType}`)),
+Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other text.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nJudge's Chosen Answer:\n${judgeOutput}\n\nConsensus Level: ${consensusType}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       const clean = qsText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
@@ -447,7 +441,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other t
     try {
       const { text: jrText } = await withRetry(
         () =>
-          generateText(genOpts(judgeModel, `You are a judge explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${judgeOutput}`)),
+          generateText(genOpts(judgeModel, `You are a judge explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${judgeOutput}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       judgeReasoning = jrText.trim() || "Could not generate reasoning";
@@ -462,7 +456,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other t
     try {
       const { text: drText } = await withRetry(
         () =>
-          generateText(genOpts(judgeModel, `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`)),
+          generateText(genOpts(judgeModel, `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       disagreementReason = drText.trim() || "Could not analyze disagreement";
@@ -505,6 +499,8 @@ export async function automatorRowDirect(params: {
   model: string;
   apiKey: string;
   baseUrl?: string;
+  temperature?: number;
+  maxTokens?: number;
 }): Promise<{
   output: Record<string, unknown>;
   stepResults: Array<{ step: string; output?: unknown; raw?: string; success: boolean; error?: string }>;
@@ -543,7 +539,7 @@ RULES:
 
     const { text } = await withRetry(
       () =>
-        generateText(genOpts(aiModel, systemPrompt, `Input Data (keys are field identifiers — do NOT translate them):\n${JSON.stringify(inputData)}`)),
+        generateText(genOpts(aiModel, systemPrompt, `Input Data (keys are field identifiers — do NOT translate them):\n${JSON.stringify(inputData)}`, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
 
@@ -856,6 +852,8 @@ export async function agentsRowDirect(params: {
   }>;
   userContent: string;
   maxRounds: number;
+  temperature?: number;
+  maxTokens?: number;
 }): Promise<AgentsResult> {
   const nonReferees = params.agents.filter((a) => !a.isReferee);
   const referee = params.agents.find((a) => a.isReferee);
@@ -905,7 +903,7 @@ export async function agentsRowDirect(params: {
 
       const start = Date.now();
       const { text } = await withRetry(
-        () => generateText(genOpts(model, agent.role, agentContent)),
+        () => generateText(genOpts(model, agent.role, agentContent, params.temperature, params.maxTokens)),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
       const latency = (Date.now() - start) / 1000;
@@ -947,7 +945,7 @@ export async function agentsRowDirect(params: {
   const refereeModel = getModel(referee.provider, referee.model, referee.apiKey, referee.baseUrl);
   const refStart = Date.now();
   const { text: refereeText } = await withRetry(
-    () => generateText(genOpts(refereeModel, referee.role, refereePrompt)),
+    () => generateText(genOpts(refereeModel, referee.role, refereePrompt, params.temperature, params.maxTokens)),
     { maxAttempts: 3, baseDelayMs: 100 }
   );
   const refereeLatency = (Date.now() - refStart) / 1000;

@@ -362,6 +362,7 @@ export default function AbstractScreenerPage() {
         systemPrompt: aiInstructions,
         userContent,
         temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       const latency = Date.now() - start;
@@ -691,6 +692,7 @@ export default function AbstractScreenerPage() {
         apiKey: activeModel.apiKey || "", baseUrl: activeModel.baseUrl,
         systemPrompt: aiInstructions, userContent: parts.join("\n\n"),
         temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       const parsed = extractJson(output);
@@ -853,11 +855,9 @@ export default function AbstractScreenerPage() {
             AI-assisted systematic review screening — batch pre-screen then review
           </p>
         </div>
-        {data.length > 0 && (
-          <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("abscreen_"); setData([]); setDataName(""); setAiResults({}); setDecisions({}); setIncludeCriteria(""); setExcludeCriteria(""); setCurrentIndex(0); setColMap({ title: "", abstract: "", keywords: "", journal: "" }); setWordHighlighter({ include: "", exclude: "" }); setSessionName(""); setConcurrency(5); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("abscreen_"); setData([]); setDataName(""); setAiResults({}); setDecisions({}); setIncludeCriteria(""); setExcludeCriteria(""); setCurrentIndex(0); setColMap({ title: "", abstract: "", keywords: "", journal: "" }); setWordHighlighter({ include: "", exclude: "" }); setSessionName(""); setConcurrency(5); setAiInstructions(""); batch.clearResults(); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
-        )}
       </div>
 
       {/* ── Recovery banner ──────────────────────────────────────────────── */}
