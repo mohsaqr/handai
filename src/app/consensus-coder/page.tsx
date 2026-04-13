@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -14,14 +14,19 @@ import { useProcessingStore } from "@/lib/processing-store";
 import { HelpCircle, Plus, X, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { dispatchConsensusRow } from "@/lib/llm-dispatch";
-import { UploadPreview } from "@/components/tools/UploadPreview";
+import { SmartFileUpload, type FileStatus } from "@/components/tools/SmartFileUpload";
 import { ColumnSelector } from "@/components/tools/ColumnSelector";
 import { useColumnSelection } from "@/hooks/useColumnSelection";
-import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
+import type { FileState } from "@/types";
+import { extractTextBrowser } from "@/lib/document-browser";
+import { SAMPLE_DATASETS, sampleAsFile } from "@/lib/sample-data";
+import { parseStructuredFile } from "@/lib/parse-file";
+import { useFilesRef, fileKey } from "@/hooks/useFilesRef";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { useSessionState, clearSessionKeys } from "@/hooks/useSessionState";
 import { ExecutionPanel } from "@/components/tools/ExecutionPanel";
+import { SingleRunButton } from "@/components/tools/SingleRunButton";
 import { ResultsPanel } from "@/components/tools/ResultsPanel";
 
 type Row = Record<string, unknown>;
@@ -109,8 +114,18 @@ function WorkerCard({ label, cfg, setCfg, enabledProviders }: {
 }
 
 export default function ConsensusCoderPage() {
-  const [data, setData] = useSessionState<Row[]>("consensus_data", []);
-  const [dataName, setDataName] = useSessionState("consensus_dataName", "");
+  const [fileStates, setFileStates] = useSessionState<FileState[]>("consensus_fileStates", []);
+  const filesRef = useFilesRef();
+  const [previewRows, setPreviewRows] = useState<Row[] | null>(null);
+
+  // File objects can't survive a reload; drop any persisted entry whose File is gone.
+  useEffect(() => {
+    if (fileStates.length > 0 && !filesRef.current.has(fileKey(fileStates[0].file))) {
+      setFileStates([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [workerPrompt, setWorkerPrompt] = useSessionState("consensus_workerPrompt", "");
   const [judgePrompt, setJudgePrompt] = useSessionState("consensus_judgePrompt", "");
   const [kappaStats, setKappaStats] = useSessionState<KappaStats | null>("consensus_kappaStats", null);
@@ -148,8 +163,22 @@ export default function ConsensusCoderPage() {
   const removeWorker = (idx: number) => setExtraWorkers((prev) => prev.filter((_, i) => i !== idx));
   const updateExtraWorker = (idx: number, cfg: WorkerConfig) => setExtraWorkers((prev) => prev.map((w, i) => (i === idx ? cfg : w)));
 
-  const allColumns = data.length > 0 ? Object.keys(data[0]) : [];
-  const { selectedCols, setSelectedCols, toggleCol, toggleAll } = useColumnSelection("consensus_selectedCols", allColumns, false);
+  const hasFile = fileStates.length > 0;
+  const hasStructuredFile = hasFile && !!previewRows && previewRows.length > 0;
+  const hasUnstructuredFile = hasFile && !hasStructuredFile;
+  const isSingleRun = !hasFile;
+  const previewColumns = previewRows && previewRows.length > 0 ? Object.keys(previewRows[0]) : [];
+  const { selectedCols, toggleCol, toggleAll } = useColumnSelection("consensus_selectedCols", previewColumns);
+
+  type RunMode = "structured" | "unstructured" | "single";
+  const runMode: RunMode = hasStructuredFile ? "structured" : hasUnstructuredFile ? "unstructured" : "single";
+
+  const data: Row[] = useMemo(() => {
+    if (runMode === "structured" && previewRows) return previewRows;
+    return [{}];
+  }, [runMode, previewRows]);
+
+  const dataName = hasFile ? fileStates[0].file.name : "single-run";
 
   const buildAutoInstructions = useCallback(() => {
     const lines: string[] = [];
@@ -174,14 +203,19 @@ export default function ConsensusCoderPage() {
       lines.push("");
     }
 
-    if (selectedCols.length > 0) {
-      lines.push("COLUMNS: " + selectedCols.join(", "));
+    // Save Enhanced Judge Features state for restore
+    const features: string[] = [];
+    if (includeJudgeReasoning) features.push("judge_reasoning");
+    if (enableQualityScoring) features.push("quality_scoring");
+    if (enableDisagreementAnalysis) features.push("disagreement_analysis");
+    if (features.length > 0) {
+      lines.push("ENHANCED FEATURES: " + features.join(", "));
       lines.push("");
     }
 
     lines.push(AI_INSTRUCTIONS_MARKER);
     return lines.join("\n");
-  }, [workerPrompt, judgePrompt, selectedCols]);
+  }, [workerPrompt, judgePrompt, includeJudgeReasoning, enableQualityScoring, enableDisagreementAnalysis]);
 
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
@@ -201,8 +235,11 @@ export default function ConsensusCoderPage() {
     data,
     dataName,
     systemPrompt: aiInstructions,
+    selectData: (_data: Row[], mode) => (mode === "test" ? _data.slice(0, 10) : _data),
     validate: () => {
-      if (selectedCols.length === 0) return "Select at least one column";
+      if (isSingleRun && !workerPrompt.trim()) {
+        return "Upload files or write worker instructions";
+      }
       const p1 = providers[worker1.providerId];
       const p2 = providers[worker2.providerId];
       const pJ = providers[judge.providerId];
@@ -236,15 +273,31 @@ export default function ConsensusCoderPage() {
         }),
       ];
 
-      const subset: Row = {};
-      selectedCols.forEach((col) => (subset[col] = row[col]));
+      let userContent = "";
+      let documentName = "";
+
+      if (runMode === "single") {
+        userContent = "";
+      } else if (runMode === "unstructured") {
+        const file = fileStates[0]?.file;
+        if (!file) throw new Error("File not found");
+        documentName = file.name;
+        const { text } = await extractTextBrowser(file);
+        if (!text.trim()) throw new Error("No text extracted from file");
+        userContent = text;
+      } else {
+        const cols = selectedCols.length > 0 ? selectedCols : Object.keys(row);
+        const subset: Row = {};
+        for (const c of cols) subset[c] = row[c];
+        userContent = JSON.stringify(subset);
+      }
 
       const result = await dispatchConsensusRow({
         workers: workers.map((w) => ({ provider: w.provider, model: w.model, apiKey: w.apiKey || "", baseUrl: w.baseUrl })),
         judge: { provider: judge.providerId, model: judge.model, apiKey: pJ?.apiKey || "", baseUrl: pJ?.baseUrl },
         workerPrompt: workerPrompt.trim() || DEFAULT_WORKER_PROMPT,
         judgePrompt: judgePrompt.trim() || DEFAULT_JUDGE_PROMPT,
-        userContent: JSON.stringify(subset),
+        userContent,
         enableQualityScoring,
         enableDisagreementAnalysis,
         includeReasoning: includeJudgeReasoning,
@@ -263,8 +316,17 @@ export default function ConsensusCoderPage() {
         });
       }
 
+      let baseRow: Row;
+      if (runMode === "single") {
+        baseRow = { prompt: workerPrompt.trim() };
+      } else if (runMode === "unstructured") {
+        baseRow = { document_name: documentName };
+      } else {
+        baseRow = row;
+      }
+
       return {
-        ...row,
+        ...baseRow,
         ...workerCols,
         judge_output: result.judgeOutput,
         ...(includeJudgeReasoning ? { judge_reasoning: result.consensusType === "Unanimous" ? "Same workers' outputs" : (result.judgeReasoning ?? "") } : {}),
@@ -318,50 +380,98 @@ export default function ConsensusCoderPage() {
   React.useEffect(() => {
     if (!restored) return;
     queueMicrotask(() => {
-      setData(restored.data as Row[]);
-      setDataName(restored.dataName);
-
       const fullPrompt = restored.systemPrompt ?? "";
 
-      // Restore worker instructions
       const workerMatch = fullPrompt.match(/WORKER INSTRUCTIONS:\n([\s\S]*?)(?:\n\n|$)/);
       setWorkerPrompt(workerMatch ? workerMatch[1].trim() : "");
 
-      // Restore judge instructions
       const judgeMatch = fullPrompt.match(/JUDGE INSTRUCTIONS:\n([\s\S]*?)(?:\n\n|$)/);
       if (judgeMatch) setJudgePrompt(judgeMatch[1].trim());
 
-      // Restore selected columns
-      const colsMatch = fullPrompt.match(/COLUMNS: (.+)/);
-      if (colsMatch) {
-        const cols = colsMatch[1].split(",").map((c) => c.trim()).filter(Boolean);
-        if (cols.length > 0) setSelectedCols(cols);
+      const featuresMatch = fullPrompt.match(/ENHANCED FEATURES: (.+)/);
+      if (featuresMatch) {
+        const feats = featuresMatch[1].split(",").map((f) => f.trim());
+        setIncludeJudgeReasoning(feats.includes("judge_reasoning"));
+        setEnableQualityScoring(feats.includes("quality_scoring"));
+        setEnableDisagreementAnalysis(feats.includes("disagreement_analysis"));
+      } else {
+        setIncludeJudgeReasoning(true);
+        setEnableQualityScoring(false);
+        setEnableDisagreementAnalysis(false);
       }
 
-      // Populate results in global processing store
+      const latencies = restored.results
+        .map((r) => r.latency_ms as number | undefined)
+        .filter((l): l is number => l !== undefined && l > 0);
+      const avgLatency = latencies.length > 0
+        ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+        : 0;
+
       const errors = restored.results.filter((r) => r.status === "error").length;
       useProcessingStore.getState().completeJob(
         "/consensus-coder",
         restored.results as Row[],
-        { success: restored.results.length - errors, errors, avgLatency: 0 },
+        { success: restored.results.length - errors, errors, avgLatency },
         restored.runId,
       );
-      toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+      toast.success(`Restored session from "${restored.dataName}"`);
     });
   }, [restored]);
 
-  const handleDataLoaded = (newData: Row[], name: string) => {
-    setData(newData);
-    setDataName(name);
+  const adoptFile = useCallback((file: File, rows: Row[] | null) => {
+    filesRef.current.clear();
+    filesRef.current.set(fileKey(file), file);
+    setFileStates([{ file, status: "pending" }]);
+    setPreviewRows(rows && rows.length > 0 ? rows : null);
     batch.clearResults();
     setKappaStats(null);
-    toast.success(`Loaded ${newData.length} rows from ${name}`);
-  };
+  }, [batch, setFileStates, setKappaStats]);
 
-  const handleLoadSample = (key: string) => {
-    const ds = SAMPLE_DATASETS[key];
-    if (ds) handleDataLoaded(ds.data as Row[], ds.name);
-  };
+  const handleDrop = useCallback(async (accepted: File[]) => {
+    const file = accepted[0];
+    if (!file) return;
+    const rows = await parseStructuredFile(file);
+    adoptFile(file, rows as Row[] | null);
+  }, [adoptFile]);
+
+  const handleLoadSample = useCallback((key: string) => {
+    const made = sampleAsFile(key);
+    if (!made) return;
+    adoptFile(made.file, made.rows as Row[]);
+    toast.success(`Loaded sample: ${SAMPLE_DATASETS[key].name}`);
+  }, [adoptFile]);
+
+  const handleClearFile = useCallback(() => {
+    filesRef.current.clear();
+    setFileStates([]);
+    setPreviewRows(null);
+    batch.clearResults();
+    setKappaStats(null);
+  }, [batch, setFileStates, setKappaStats]);
+
+  const currentFile = fileStates[0]?.file ?? null;
+  const resultRow = batch.results[0];
+  let fileStatus: FileStatus = "pending";
+  if (batch.isProcessing) fileStatus = "processing";
+  else if (resultRow?.status === "error") fileStatus = "error";
+  else if (resultRow?.status === "success") fileStatus = "done";
+  const fileError = resultRow?.error_msg as string | undefined;
+
+  const handleStartOver = useCallback(() => {
+    clearSessionKeys("consensus_");
+    filesRef.current.clear();
+    setFileStates([]);
+    setPreviewRows(null);
+    setWorkerPrompt("");
+    setJudgePrompt("");
+    setKappaStats(null);
+    setExtraWorkers([]);
+    setIncludeJudgeReasoning(true);
+    setEnableQualityScoring(false);
+    setEnableDisagreementAnalysis(false);
+    setAiInstructions("");
+    batch.clearResults();
+  }, [batch, setFileStates, setWorkerPrompt, setJudgePrompt, setKappaStats, setExtraWorkers, setIncludeJudgeReasoning, setEnableQualityScoring, setEnableDisagreementAnalysis, setAiInstructions]);
 
   return (
     <div className="space-y-0 pb-16">
@@ -372,54 +482,42 @@ export default function ConsensusCoderPage() {
           <h1 className="text-4xl font-bold">Consensus Coder</h1>
           <p className="text-muted-foreground text-sm">Multi-model consensus coding with inter-rater reliability (Cohen&apos;s Kappa)</p>
         </div>
-        {data.length > 0 && (
-          <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("consensus_"); setData([]); setDataName(""); setWorkerPrompt(""); setJudgePrompt(""); setKappaStats(null); setExtraWorkers([]); setIncludeJudgeReasoning(true); setEnableQualityScoring(false); setEnableDisagreementAnalysis(false); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={handleStartOver}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
-        )}
       </div>
 
       <div className={batch.isProcessing ? "pointer-events-none opacity-60" : ""}>
       {/* ── 1. Upload Data ────────────────────────────────────────────────── */}
       <div className="space-y-4 pb-8">
         <h2 className="text-2xl font-bold">1. Upload Data</h2>
-        <UploadPreview
-          data={data}
-          dataName={dataName}
-          onDataLoaded={handleDataLoaded}
-          maxPreviewRows={5}
-          samplePickerPosition="above"
-          customSamplePicker={
-            <Select onValueChange={handleLoadSample}>
-              <SelectTrigger className="w-[200px] h-9 text-xs">
-                <SelectValue placeholder="-- Select a sample..." />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.keys(SAMPLE_DATASETS).map((key) => (
-                  <SelectItem key={key} value={key} className="text-xs">
-                    {SAMPLE_DATASETS[key].name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          }
+        <SmartFileUpload
+          file={currentFile}
+          status={fileStatus}
+          errorMessage={fileError}
+          previewRows={previewRows}
+          onDrop={handleDrop}
+          onClear={handleClearFile}
+          onLoadSample={handleLoadSample}
         />
       </div>
 
-      <div className="border-t" />
-
-      {/* ── 2. Select Columns ─────────────────────────────────────────────── */}
-      <div className="space-y-4 py-8">
-        <h2 className="text-2xl font-bold">2. Define Columns</h2>
-        <ColumnSelector
-          allColumns={allColumns}
-          selectedCols={selectedCols}
-          onToggleCol={toggleCol}
-          onToggleAll={toggleAll}
-          description="Choose which columns to send to each worker model for coding."
-          emptyMessage="Upload data first to see available columns."
-        />
-      </div>
+      {hasStructuredFile && (
+        <>
+          <div className="border-t" />
+          <div className="space-y-4 py-8">
+            <h2 className="text-2xl font-bold">2. Define Columns</h2>
+            <ColumnSelector
+              allColumns={previewColumns}
+              selectedCols={selectedCols}
+              onToggleCol={toggleCol}
+              onToggleAll={toggleAll}
+              description="Choose which columns of structured files are sent to the workers. Unstructured files (PDF/DOCX/TXT) are unaffected."
+              emptyMessage="Upload a CSV or Excel file to see available columns."
+            />
+          </div>
+        </>
+      )}
 
       <div className="border-t" />
 
@@ -531,21 +629,32 @@ export default function ConsensusCoderPage() {
       {/* ── 6. Execute ────────────────────────────────────────────────────── */}
       <div className="space-y-4 py-8">
         <h2 className="text-2xl font-bold">6. Execute</h2>
-        <ExecutionPanel
-          isProcessing={batch.isProcessing}
-          aborting={batch.aborting}
-          runMode={batch.runMode}
-          progress={batch.progress}
-          etaStr={batch.etaStr}
-          dataCount={data.length}
-          disabled={data.length === 0 || selectedCols.length === 0}
-          onRun={batch.run}
-          onAbort={batch.abort}
-          onResume={batch.resume}
-          onCancel={batch.clearResults}
-          failedCount={batch.failedCount}
-          skippedCount={batch.skippedCount}
-        />
+        {hasStructuredFile ? (
+          <ExecutionPanel
+            isProcessing={batch.isProcessing}
+            aborting={batch.aborting}
+            runMode={batch.runMode}
+            progress={batch.progress}
+            etaStr={batch.etaStr}
+            dataCount={data.length}
+            disabled={false}
+            onRun={batch.run}
+            onAbort={batch.abort}
+            onResume={batch.resume}
+            onCancel={batch.clearResults}
+            failedCount={batch.failedCount}
+            skippedCount={batch.skippedCount}
+          />
+        ) : (
+          <SingleRunButton
+            label={hasUnstructuredFile ? "Process file" : "Run"}
+            isProcessing={batch.isProcessing}
+            aborting={batch.aborting}
+            disabled={isSingleRun && !workerPrompt.trim()}
+            onRun={() => batch.run("full")}
+            onAbort={batch.abort}
+          />
+        )}
       </div>
 
       {/* ── Results ────────────────────────────────────────────────────────── */}

@@ -92,7 +92,7 @@ export async function createRun(params: RunCreateParams): Promise<{ id: string }
     tx.objectStore("sessions").put({
       id: sessionId,
       name: `Session ${new Date().toLocaleDateString()}`,
-      mode: params.runType ?? "full",
+      mode: params.runType ?? "unknown",
       settingsJson: "{}",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -105,7 +105,7 @@ export async function createRun(params: RunCreateParams): Promise<{ id: string }
   const run = {
     id: runId,
     sessionId,
-    runType: params.runType ?? "full",
+    runType: params.runType ?? "unknown",
     provider: params.provider ?? "openai",
     model: params.model ?? "unknown",
     temperature: params.temperature ?? 0.7,
@@ -148,6 +148,8 @@ export async function listRuns(
   limit: number;
   offset: number;
   stats: { totalSessions: number; totalRuns: number; totalSuccess: number; totalError: number };
+  toolCounts: Record<string, number>;
+  providers: string[];
 }> {
   const db = await openDb();
 
@@ -164,9 +166,13 @@ export async function listRuns(
   const sessionIds = new Set(allRuns.map((r) => r.sessionId));
   let totalSuccess = 0;
   let totalError = 0;
+  const toolCounts: Record<string, number> = {};
+  const providerSet = new Set<string>();
   for (const r of allRuns) {
     totalSuccess += r.successCount ?? 0;
     totalError += r.errorCount ?? 0;
+    if (r.runType) toolCounts[r.runType] = (toolCounts[r.runType] || 0) + 1;
+    if (r.provider) providerSet.add(r.provider);
   }
 
   return {
@@ -180,6 +186,8 @@ export async function listRuns(
       totalSuccess,
       totalError,
     },
+    toolCounts,
+    providers: [...providerSet].sort(),
   };
 }
 
@@ -208,6 +216,20 @@ export async function getRun(
   (allResults as { rowIndex: number }[]).sort((a, b) => a.rowIndex - b.rowIndex);
 
   return { run, results: allResults };
+}
+
+// ── Rename run ───────────────────────────────────────────────────────────────
+
+export async function renameRun(id: string, newName: string): Promise<{ ok: boolean }> {
+  const db = await openDb();
+  const tx = db.transaction("runs", "readwrite");
+  const store = tx.objectStore("runs");
+  const run: RunMeta | undefined = await idbReq(store.get(id));
+  if (!run) return { ok: false };
+  run.inputFile = newName;
+  store.put(run);
+  await idbTx(tx);
+  return { ok: true };
 }
 
 // ── Delete run ────────────────────────────────────────────────────────────────
