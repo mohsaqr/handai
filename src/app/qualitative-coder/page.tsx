@@ -7,7 +7,8 @@ import * as XLSX from "xlsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
-import { Plus, Trash2, Upload, RotateCcw } from "lucide-react";
+import { Plus, Trash2, Upload, RotateCcw, Download, ClipboardPaste, ArrowUp, ArrowDown, Pencil } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 import { usePersistedPrompt } from "@/hooks/usePersistedPrompt";
@@ -135,7 +136,7 @@ export default function QualitativeCoderPage() {
   const provider = useActiveModel();
   const systemSettings = useSystemSettings();
   const allColumns = data.length > 0 ? Object.keys(data[0]) : [];
-  const { selectedCols, setSelectedCols, toggleCol, toggleAll } = useColumnSelection("qualcoder_selectedCols", allColumns, false);
+  const { selectedCols, setSelectedCols, toggleCol, toggleAll } = useColumnSelection("qualcoder_selectedCols", allColumns);
 
   useEffect(() => {
     queueMicrotask(() => setIsMounted(true));
@@ -189,7 +190,6 @@ export default function QualitativeCoderPage() {
     dataName,
     systemPrompt: aiInstructions,
     validate: () => {
-      if (!systemPrompt.trim()) return "Enter AI instructions first";
       if (selectedCols.length === 0) return "Select at least one column";
       return null;
     },
@@ -205,6 +205,7 @@ export default function QualitativeCoderPage() {
         systemPrompt: aiInstructions,
         userContent: JSON.stringify(subset),
         temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       return { ...row, ai_code: result.output, status: "success", latency_ms: result.latency };
@@ -224,9 +225,6 @@ export default function QualitativeCoderPage() {
   useEffect(() => {
     if (!restored) return;
     queueMicrotask(() => {
-      setData(restored.data);
-      setDataName(restored.dataName);
-
       const fullPrompt = restored.systemPrompt ?? "";
 
       // Extract coding instructions from saved AI instructions
@@ -239,6 +237,18 @@ export default function QualitativeCoderPage() {
         const cols = colsMatch[1].split("\n").map((l) => l.replace(/^- /, "").trim()).filter(Boolean);
         if (cols.length > 0) setSelectedCols(cols);
       }
+
+      // Strip output columns added by processing (ai_code, status, latency_ms, error_msg)
+      const outputCols = new Set(["ai_code", "status", "latency_ms", "error_msg"]);
+      const cleanData = restored.data.map((row) => {
+        const clean: Row = {};
+        for (const [k, v] of Object.entries(row)) {
+          if (!outputCols.has(k)) clean[k] = v;
+        }
+        return clean;
+      });
+      setData(cleanData);
+      setDataName(restored.dataName);
 
       // Restore codebook from saved AI instructions
       const cbMatch = fullPrompt.match(/CODEBOOK:\n([\s\S]*?)(?:\n\nRULES:|$)/);
@@ -265,14 +275,25 @@ export default function QualitativeCoderPage() {
         if (currentCode) {
           entries.push({ id: crypto.randomUUID(), code: currentCode, description: currentDesc, example: currentExample });
         }
-        if (entries.length > 0) setCodebook(entries);
+        if (entries.length > 0) {
+          setCodebook(entries);
+          setPasteExtracted(true);
+        }
       }
+
+      // Compute avg latency from results
+      const latencies = restored.results
+        .map((r) => r.latency_ms as number | undefined)
+        .filter((l): l is number => l !== undefined && l > 0);
+      const avgLatency = latencies.length > 0
+        ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+        : 0;
 
       const errors = restored.results.filter((r) => r.status === "error").length;
       useProcessingStore.getState().completeJob(
         "/qualitative-coder",
         restored.results,
-        { success: restored.results.length - errors, errors, avgLatency: 0 },
+        { success: restored.results.length - errors, errors, avgLatency },
         restored.runId,
       );
       toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
@@ -280,7 +301,16 @@ export default function QualitativeCoderPage() {
   }, [restored, setSystemPrompt]);
 
   const handleDataLoaded = (newData: Row[], name: string) => {
-    setData(newData);
+    // Strip output columns from previous runs so re-imported CSVs are clean
+    const outputCols = new Set(["ai_code", "ai_output", "status", "latency_ms", "error_msg"]);
+    const cleanData = newData.map((row) => {
+      const clean: Row = {};
+      for (const [k, v] of Object.entries(row)) {
+        if (!outputCols.has(k)) clean[k] = v;
+      }
+      return clean;
+    });
+    setData(cleanData);
     setDataName(name);
     setCodebook([{ id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }]);
     batch.clearResults();
@@ -311,6 +341,59 @@ export default function QualitativeCoderPage() {
 
   const deleteCode = (id: string) =>
     setCodebook((prev) => prev.filter((e) => e.id !== id));
+
+  const moveCode = (idx: number, dir: -1 | 1) => {
+    setCodebook((prev) => {
+      const arr = [...prev];
+      const target = idx + dir;
+      if (target < 0 || target >= arr.length) return prev;
+      [arr[idx], arr[target]] = [arr[target], arr[idx]];
+      return arr;
+    });
+  };
+
+  const [codebookMode, setCodebookMode] = useState<"csv" | "file">("csv");
+  const [csvPasteText, setCsvPasteText] = useState("");
+  const [pasteExtracted, setPasteExtracted] = useState(true);
+  const [fileExtracted, setFileExtracted] = useState(false);
+
+  const extractFromPastedCsv = () => {
+    if (!csvPasteText.trim()) {
+      setCodebook([
+        { id: crypto.randomUUID(), code: "", description: "", example: "" },
+        { id: crypto.randomUUID(), code: "", description: "", example: "" },
+        { id: crypto.randomUUID(), code: "", description: "", example: "" },
+      ]);
+      setCsvPasteText("");
+      setPasteExtracted(true);
+      return;
+    }
+    const lines = csvPasteText.trim().split(/\r?\n/).filter(Boolean);
+    const entries: CodeEntry[] = [];
+    for (const line of lines) {
+      const parts = line.split(",").map((s) => s.trim());
+      if (!parts[0]) continue;
+      entries.push({
+        id: crypto.randomUUID(),
+        code: parts[0],
+        description: parts[1] ?? "",
+        example: parts[2] ?? "",
+      });
+    }
+    if (entries.length === 0) {
+      setCodebook([
+        { id: crypto.randomUUID(), code: "", description: "", example: "" },
+        { id: crypto.randomUUID(), code: "", description: "", example: "" },
+        { id: crypto.randomUUID(), code: "", description: "", example: "" },
+      ]);
+      setCsvPasteText("");
+      setPasteExtracted(true);
+      return;
+    }
+    setCodebook(entries);
+    setCsvPasteText("");
+    toast.success(`${entries.length} codes extracted`);
+  };
 
   const importCodebook = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -363,13 +446,16 @@ export default function QualitativeCoderPage() {
     e.target.value = "";
   };
 
-  const exportCodebookCSV = () => {
+  const exportCodebookExcel = () => {
     if (codebook.length === 0) { toast.error("Codebook is empty"); return; }
-    const rows = ["code,description,example", ...codebook.map((e) => [`"${e.code.replace(/"/g, '""')}"`, `"${e.description.replace(/"/g, '""')}"`, `"${e.example.replace(/"/g, '""')}"`].join(","))].join("\n");
-    const blob = new Blob(["\uFEFF" + rows], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "codebook.csv"; a.click();
-    URL.revokeObjectURL(url);
+    const named = codebook.filter((e) => e.code.trim());
+    const rows = named.length > 0
+      ? named.map((e) => ({ "code label": e.code, description: e.description, examples: e.example }))
+      : [{ "code label": "", description: "", examples: "" }];
+    const ws = XLSX.utils.json_to_sheet(rows, { header: ["code label", "description", "examples"] });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Codebook");
+    XLSX.writeFile(wb, "codebook.xlsx");
   };
 
   return (
@@ -379,11 +465,9 @@ export default function QualitativeCoderPage() {
           <h1 className="text-4xl font-bold">Qualitative Coder</h1>
           <p className="text-muted-foreground text-sm">AI-assisted qualitative coding — apply codes to each row of your dataset</p>
         </div>
-        {data.length > 0 && (
-          <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("qualcoder_"); setData([]); setDataName(""); setCodebook([{ id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }]); setSystemPrompt(""); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("qualcoder_"); setData([]); setDataName(""); setCodebook([{ id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }]); setSystemPrompt(DEFAULT_PROMPT); setAiInstructions(""); batch.clearResults(); setPasteExtracted(true); setCsvPasteText(""); setCodebookMode("csv"); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
-        )}
       </div>
 
       <div className={batch.isProcessing ? "pointer-events-none opacity-60" : ""}>
@@ -430,67 +514,171 @@ export default function QualitativeCoderPage() {
 
       {/* ── 3. Define Codebook ────────────────────────────────────────────── */}
       <div className="space-y-4 py-8">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h2 className="text-2xl font-bold">3. Define Codebook</h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              Define your codes below. The codebook is automatically included in the AI instructions.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <input ref={csvImportRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={importCodebook} />
-            <Button variant="outline" size="sm" onClick={() => csvImportRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" />Import CSV
-            </Button>
-            <Button variant="outline" size="sm" disabled={codebook.length === 0} onClick={exportCodebookCSV}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" />Export CSV
-            </Button>
-            <Select onValueChange={(key) => {
-              const cb = SAMPLE_CODEBOOKS[key];
-              if (cb) {
-                setCodebook(cb.map((e) => ({ ...e, id: crypto.randomUUID() })));
-                toast.success(`Loaded "${key}" sample codebook`);
-              }
-            }}>
-              <SelectTrigger className="h-8 text-xs w-[160px]"><SelectValue placeholder="Load an example..." /></SelectTrigger>
-              <SelectContent>
-                {Object.keys(SAMPLE_CODEBOOKS).map((k) => (
-                  <SelectItem key={k} value={k} className="text-xs">{k.replace(/_/g, " ")}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <h2 className="text-2xl font-bold">3. Define Codebook</h2>
+        <p className="text-sm text-muted-foreground -mt-2">
+          Define your codes below. The codebook is automatically included in the AI instructions.
+        </p>
+
+        <input ref={csvImportRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => { importCodebook(e); setFileExtracted(true); setCsvPasteText(""); }} />
+
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant={codebookMode === "csv" ? "default" : "outline"}
+            size="sm"
+            className="text-xs"
+            onClick={() => setCodebookMode("csv")}
+          >
+            <ClipboardPaste className="h-3.5 w-3.5 mr-1.5" />
+            Type CSV
+          </Button>
+          <Button
+            variant={codebookMode === "file" ? "default" : "outline"}
+            size="sm"
+            className="text-xs"
+            onClick={() => setCodebookMode("file")}
+          >
+            <Upload className="h-3.5 w-3.5 mr-1.5" />
+            Import CSV/Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            disabled={codebook.length === 0}
+            onClick={exportCodebookExcel}
+          >
+            <Download className="h-3.5 w-3.5 mr-1.5" />
+            Export Excel
+          </Button>
+          <Select onValueChange={(key) => {
+            const cb = SAMPLE_CODEBOOKS[key];
+            if (cb) {
+              setCodebook(cb.map((e) => ({ ...e, id: crypto.randomUUID() })));
+              setCodebookMode("csv");
+              setCsvPasteText("");
+              toast.success(`Loaded "${key}" sample codebook`);
+            }
+          }}>
+            <SelectTrigger className="h-8 text-xs w-[160px]"><SelectValue placeholder="Load sample..." /></SelectTrigger>
+            <SelectContent>
+              {Object.keys(SAMPLE_CODEBOOKS).map((k) => (
+                <SelectItem key={k} value={k} className="text-xs">{k.replace(/_/g, " ")}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
-        <div className="border rounded-lg overflow-hidden">
-          <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
-          <div className="p-3 space-y-2">
-            {codebook.length === 0 ? (
-              <p className="text-center py-8 text-xs text-muted-foreground italic">No codes yet — click &ldquo;Add Code&rdquo; below or import a CSV file.</p>
-            ) : (
-              codebook.map((entry) => (
-                <div key={entry.id} className="flex gap-2 items-center">
-                  <Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="flex-[2] h-8 text-xs" />
-                  <Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="Description" className="flex-[3] h-8 text-xs" />
-                  <Input value={entry.example} onChange={(e) => updateCode(entry.id, "example", e.target.value)} placeholder="Example quote" className="flex-[3] h-8 text-xs" />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={() => deleteCode(entry.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="px-3 pb-3">
-            <Button variant="outline" size="sm" className="w-full text-xs" onClick={addCode}>
-              <Plus className="h-3 w-3 mr-2" /> Add Code
+        {/* ── Type CSV mode ── */}
+        {codebookMode === "csv" && !pasteExtracted && !codebook.some((e) => e.code.trim()) && (
+          <div className="space-y-2">
+            <Textarea
+              placeholder={"One code per line: code label, description, example\n\nBurnout, Emotional exhaustion from workload, Burnout is real and it's everywhere\nResilience, Capacity to cope with stress, What keeps me going is the patients\nTeam Support, Positive collegial relationships, Team support makes all the difference"}
+              className="min-h-[100px] text-xs font-mono resize-y"
+              value={csvPasteText}
+              onChange={(e) => setCsvPasteText(e.target.value)}
+            />
+            <Button variant="outline" size="sm" className="text-xs" onClick={extractFromPastedCsv}>
+              Extract Codes
             </Button>
           </div>
-        </div>
+        )}
+        {codebookMode === "csv" && (pasteExtracted || codebook.some((e) => e.code.trim())) && (
+          <>
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => {
+              const text = codebook.filter((e) => e.code.trim()).map((e) => `${e.code}, ${e.description}, ${e.example}`).join("\n");
+              setCsvPasteText(text);
+              setPasteExtracted(false);
+            }}>
+              <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit as CSV
+            </Button>
+            <div className="border rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
+              <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
+                <div className="shrink-0 w-6" />
+                <div className="flex-[2]">code label</div>
+                <div className="flex-[3]">description</div>
+                <div className="flex-[3]">examples</div>
+                <div className="w-8 shrink-0" />
+              </div>
+              <div className="p-3 space-y-2">
+                {codebook.map((entry, idx) => (
+                  <div key={entry.id} className="flex gap-2 items-center">
+                    <div className="flex flex-col shrink-0">
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, -1)} disabled={idx === 0}>
+                        <ArrowUp className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, 1)} disabled={idx === codebook.length - 1}>
+                        <ArrowDown className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="flex-[2] h-8 text-xs" />
+                    <Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="Description" className="flex-[3] h-8 text-xs" />
+                    <Input value={entry.example} onChange={(e) => updateCode(entry.id, "example", e.target.value)} placeholder="Examples" className="flex-[3] h-8 text-xs" />
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => deleteCode(entry.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <div className="px-3 pb-3 flex gap-2">
+                <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addCode}>
+                  <Plus className="h-3 w-3 mr-2" /> Add Code
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setCodebook([{ id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }])}>
+                  <Trash2 className="h-3 w-3 mr-2" /> Clear All
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Import CSV/Excel mode ── */}
+        {codebookMode === "file" && (
+          <>
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => csvImportRef.current?.click()}>
+              <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Choose File"}
+            </Button>
+            <div className="border rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
+              <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
+                <div className="shrink-0 w-6" />
+                <div className="flex-[2]">code label</div>
+                <div className="flex-[3]">description</div>
+                <div className="flex-[3]">examples</div>
+                <div className="w-8 shrink-0" />
+              </div>
+              <div className="p-3 space-y-2">
+                {codebook.map((entry, idx) => (
+                  <div key={entry.id} className="flex gap-2 items-center">
+                    <div className="flex flex-col shrink-0">
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, -1)} disabled={idx === 0}>
+                        <ArrowUp className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, 1)} disabled={idx === codebook.length - 1}>
+                        <ArrowDown className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="flex-[2] h-8 text-xs" />
+                    <Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="Description" className="flex-[3] h-8 text-xs" />
+                    <Input value={entry.example} onChange={(e) => updateCode(entry.id, "example", e.target.value)} placeholder="Examples" className="flex-[3] h-8 text-xs" />
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => deleteCode(entry.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <div className="px-3 pb-3 flex gap-2">
+                <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addCode}>
+                  <Plus className="h-3 w-3 mr-2" /> Add Code
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setCodebook([{ id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }, { id: crypto.randomUUID(), code: "", description: "", example: "" }])}>
+                  <Trash2 className="h-3 w-3 mr-2" /> Clear All
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+
       </div>
 
       <div className="border-t" />
@@ -518,7 +706,7 @@ export default function QualitativeCoderPage() {
           progress={batch.progress}
           etaStr={batch.etaStr}
           dataCount={data.length}
-          disabled={data.length === 0 || !provider || !systemPrompt.trim() || selectedCols.length === 0}
+          disabled={data.length === 0 || !provider || selectedCols.length === 0}
           onRun={batch.run}
           onAbort={batch.abort}
           onResume={batch.resume}
@@ -526,8 +714,8 @@ export default function QualitativeCoderPage() {
           failedCount={batch.failedCount}
           skippedCount={batch.skippedCount}
           showSuccessErrors
-          successCount={batch.stats?.success ?? 0}
-          errorCount={batch.stats?.errors ?? 0}
+          successCount={batch.results.filter((r) => r.status === "success").length}
+          errorCount={batch.results.filter((r) => r.status === "error").length}
         />
       </div>
 

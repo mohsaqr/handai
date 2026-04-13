@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PromptEditor } from "@/components/tools/PromptEditor";
-import { useActiveModel } from "@/lib/hooks";
+import { useActiveModel, useSystemSettings } from "@/lib/hooks";
 import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { useProcessingStore, getAbortFlag, currentGeneration } from "@/lib/processing-store";
 import { Sparkles, Plus, Trash2, Download, Loader2, Minus, ExternalLink, Check, X, RotateCcw, ArrowUp, ArrowDown, Upload, ClipboardPaste, Pencil, Play } from "lucide-react";
@@ -160,6 +160,8 @@ interface GenerateParams {
   columns?: GenerateColumn[];
   rowCount: number;
   aiInstructions: string;
+  temperature?: number;
+  maxTokens?: number;
   resumeFrom?: number;
   existingData?: Record<string, unknown>[];
   existingRunId?: string | null;
@@ -194,6 +196,8 @@ async function executeGeneration(params: GenerateParams) {
         freeformPrompt: params.description || undefined,
         outputFormat: params.outputFormat === "markdown" ? "markdown" : params.outputFormat === "gift" ? "gift" : "freetext",
         systemPrompt: params.aiInstructions || undefined,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
       });
       if (currentGeneration(TOOL_ID) !== gen) return;
       const latency = Date.now() - t0;
@@ -252,6 +256,8 @@ async function executeGeneration(params: GenerateParams) {
         freeformPrompt: contextPrompt,
         outputFormat: params.outputFormat,
         systemPrompt: params.aiInstructions || undefined,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
       });
 
       latencies.push(Date.now() - t0);
@@ -323,6 +329,7 @@ const emptyResults: Record<string, unknown>[] = [];
 
 export default function GeneratePage() {
   const activeModel = useActiveModel();
+  const systemSettings = useSystemSettings();
   // Processing flag is now handled by processing-store automatically
 
   const [description, setDescription] = useSessionState("generate_description", "");
@@ -572,6 +579,8 @@ export default function GeneratePage() {
         baseUrl: activeModel.baseUrl,
         systemPrompt,
         userContent: description,
+        temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
       const parsed = parseJsonResponse(output);
       if (parsed.length === 0) {
@@ -679,6 +688,8 @@ export default function GeneratePage() {
       columns: columns.filter((c) => c.name.trim()),
       rowCount,
       aiInstructions,
+      temperature: systemSettings.temperature,
+      maxTokens: systemSettings.maxTokens ?? undefined,
       resumeFrom,
       existingData: resumeFrom ? generatedData : undefined,
       existingRunId: resumeFrom ? runId : undefined,

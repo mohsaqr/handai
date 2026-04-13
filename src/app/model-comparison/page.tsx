@@ -161,6 +161,8 @@ export default function ModelComparisonPage() {
         models: activeModels,
         systemPrompt: aiInstructions,
         userContent: JSON.stringify(subset),
+        temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       const outputUpdates: Row = {};
@@ -258,11 +260,9 @@ export default function ModelComparisonPage() {
           <h1 className="text-4xl font-bold">Model Comparison</h1>
           <p className="text-muted-foreground text-sm">Compare outputs from multiple LLMs side-by-side on your dataset</p>
         </div>
-        {data.length > 0 && (
-          <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("modelcomp_"); setData([]); setDataName(""); setSelectedProviders([]); setSystemPrompt("Analyze the following data and provide a concise, structured response."); setConcurrency(systemSettings.maxConcurrency); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("modelcomp_"); setData([]); setDataName(""); setSelectedProviders([]); setSystemPrompt("Analyze the following data and provide a concise, structured response."); setConcurrency(systemSettings.maxConcurrency); setAiInstructions(""); batch.clearResults(); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
-        )}
       </div>
 
       <div className={batch.isProcessing ? "pointer-events-none opacity-60" : ""}>

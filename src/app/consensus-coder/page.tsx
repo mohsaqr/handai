@@ -301,6 +301,8 @@ export default function ConsensusCoderPage() {
         enableQualityScoring,
         enableDisagreementAnalysis,
         includeReasoning: includeJudgeReasoning,
+        temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
         rowIdx: idx,
       });
 

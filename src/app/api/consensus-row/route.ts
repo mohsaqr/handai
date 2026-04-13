@@ -28,7 +28,13 @@ export async function POST(req: NextRequest) {
       enableQualityScoring,
       enableDisagreementAnalysis,
       includeReasoning,
+      temperature,
+      maxTokens,
     } = parsed.data;
+    const llmOpts = {
+      ...(temperature !== undefined && { temperature }),
+      ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
+    };
 
     // Enforce direct-answer-only rules on every worker prompt
     const strictSuffix = `\n\nSTRICT OUTPUT RULES (always apply):
@@ -50,6 +56,7 @@ export async function POST(req: NextRequest) {
             model,
             system: enforced,
             prompt: userContent,
+            ...llmOpts,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
@@ -124,6 +131,7 @@ export async function POST(req: NextRequest) {
             model: judgeModel,
             system: judgePrompt + judgeDirectSuffix,
             prompt: combinedContent,
+            ...llmOpts,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
@@ -145,6 +153,7 @@ Where <level> is one of:
             model: judgeModel,
             system: judgePrompt + consensusSuffix,
             prompt: combinedContent,
+            ...llmOpts,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
@@ -189,6 +198,7 @@ RULES:
 
 Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other text.`,
               prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nJudge's Chosen Answer:\n${judgeOutput}\n\nConsensus Level: ${consensusType}`,
+              ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
         );
@@ -211,6 +221,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other t
               model: judgeModel,
               system: `You are a judge explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`,
               prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${judgeOutput}`,
+              ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
         );
@@ -230,6 +241,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other t
               model: judgeModel,
               system: `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`,
               prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`,
+              ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
         );

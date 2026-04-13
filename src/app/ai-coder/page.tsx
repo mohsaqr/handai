@@ -627,6 +627,7 @@ export default function AICoderPage() {
         systemPrompt: aiInstructions,
         userContent: JSON.stringify(subset),
         temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       const output = result.output.trim();
@@ -673,6 +674,7 @@ export default function AICoderPage() {
         systemPrompt: aiInstructions,
         userContent: JSON.stringify(subset),
         temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       const output = result.output.trim();
@@ -903,11 +905,9 @@ export default function AICoderPage() {
           <h1 className="text-4xl font-bold">AI Coder</h1>
           <p className="text-muted-foreground text-sm">AI-assisted qualitative coding with review &amp; analytics</p>
         </div>
-        {data.length > 0 && (
-          <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("aicoder_"); setData([]); setDataName(""); setCodebook(emptyCodebook()); setCodingData({}); setAiData({}); setCurrentIndex(0); setSystemPrompt(""); setSessionName(""); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("aicoder_"); setData([]); setDataName(""); setCodebook(emptyCodebook()); setCodingData({}); setAiData({}); setCurrentIndex(0); setSystemPrompt(""); setSessionName(""); setAiInstructions(""); batch.clearResults(); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
-        )}
       </div>
 
       {/* ── Session resume ────────────────────────────────────────────────── */}

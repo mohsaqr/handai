@@ -4,9 +4,9 @@ import React, { useState, useMemo, useCallback, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Combine, SplitSquareHorizontal } from "lucide-react";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
-import { Plus, X, Upload, RotateCcw } from "lucide-react";
+import { Plus, X, Upload, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
@@ -266,6 +266,7 @@ export default function TransformPage() {
             systemPrompt: perColPrompt,
             userContent: `${col}: ${String(row[col] ?? "")}`,
             temperature: systemSettings.temperature,
+            maxTokens: systemSettings.maxTokens ?? undefined,
           });
           outputs[outputColMap[col]] = result.output.trim();
           totalLatency += result.latency;
@@ -285,6 +286,7 @@ export default function TransformPage() {
         systemPrompt: aiInstructions,
         userContent: Object.entries(subset).map(([k, v]) => `${k}: ${String(v ?? "")}`).join("\n"),
         temperature: systemSettings.temperature,
+        maxTokens: systemSettings.maxTokens ?? undefined,
       });
 
       return { ...base, [outputCol]: result.output.trim(), status: "success", latency_ms: result.latency };
@@ -454,11 +456,9 @@ export default function TransformPage() {
           <h1 className="text-4xl font-bold">Transform Data</h1>
           <p className="text-muted-foreground text-sm">Apply AI transformations to each row of your dataset</p>
         </div>
-        {data.length > 0 && (
-          <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("transform_"); setData([]); setDataName(""); setSelectedCols([]); setSelectedRows(new Set()); setSystemPrompt(""); setFilters([{ col: "", op: "contains", val: "" }]); setAiInstructions(""); setOutputMode("combined"); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("transform_"); setData([]); setDataName(""); setSelectedCols([]); setSelectedRows(new Set()); setSystemPrompt(""); setFilters([{ col: "", op: "contains", val: "" }]); setAiInstructions(""); setOutputMode("combined"); batch.clearResults(); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
-        )}
       </div>
 
       <div className={batch.isProcessing ? "pointer-events-none opacity-60" : ""}>
@@ -499,26 +499,82 @@ export default function TransformPage() {
           onToggleAll={toggleAll}
           description="Choose which columns to send to the AI for each row."
         />
-        {selectedCols.length >= 2 && (
-          <div className="pt-3">
-            <label className="text-sm font-medium text-muted-foreground mb-2 block">Output mode</label>
-            <Tabs value={outputMode} onValueChange={(v) => setOutputMode(v as OutputMode)}>
-              <TabsList className="!h-auto p-1 w-full max-w-md">
-                <TabsTrigger value="combined" className="flex-1 flex flex-col items-center gap-0 py-1.5 h-auto whitespace-normal">
-                  <span className="text-xs font-medium">Combined (by default)</span>
-                  <span className="text-[10px] text-muted-foreground font-normal">1 combined ai_output column</span>
-                </TabsTrigger>
-                <TabsTrigger value="separate" className="flex-1 flex flex-col items-center gap-0 py-1.5 h-auto whitespace-normal">
-                  <span className="text-xs font-medium">Separate</span>
-                  <span className="text-[10px] text-muted-foreground font-normal">{selectedCols.length} separate ai_output columns</span>
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-        )}
       </div>
 
-      {/* ── 2b. Filter Rows ───────────────────────────────────────────────── */}
+      {/* ── 2b. Output Mode ──────────────────────────────────────────────── */}
+      {selectedCols.length >= 2 && (
+        <>
+        <div className="border-t" />
+        <div className="space-y-4 py-8">
+          <h3 className="text-lg font-semibold">Output Mode</h3>
+          <p className="text-sm text-muted-foreground">How should AI results be organized when processing multiple columns?</p>
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              onClick={() => setOutputMode("combined")}
+              className={`text-left border-2 rounded-xl p-5 transition-all ${
+                outputMode === "combined"
+                  ? "border-primary bg-primary/5 shadow-sm"
+                  : "border-border hover:border-muted-foreground/30 hover:bg-muted/30"
+              }`}
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${
+                  outputMode === "combined" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                }`}>
+                  <Combine className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold">Combined (by default)</div>
+                  <div className="text-xs text-muted-foreground">1 ai output column</div>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground mb-3">
+                All {selectedCols.length} selected columns are sent together in one prompt. The AI returns a single result per row.
+              </p>
+              <div className="text-xs font-mono bg-muted/50 rounded px-2.5 py-1.5 inline-block">
+                &rarr; {outputCol}
+              </div>
+            </button>
+
+            <button
+              onClick={() => setOutputMode("separate")}
+              className={`text-left border-2 rounded-xl p-5 transition-all ${
+                outputMode === "separate"
+                  ? "border-primary bg-primary/5 shadow-sm"
+                  : "border-border hover:border-muted-foreground/30 hover:bg-muted/30"
+              }`}
+            >
+              <div className="flex items-center gap-3 mb-3">
+                <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${
+                  outputMode === "separate" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                }`}>
+                  <SplitSquareHorizontal className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold">Separate</div>
+                  <div className="text-xs text-muted-foreground">{selectedCols.length} ai output columns</div>
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground mb-3">
+                Each column is processed independently. The AI creates one output column per selected column.
+              </p>
+              <div className="space-y-1">
+                {selectedCols.slice(0, 3).map((col) => (
+                  <div key={col} className="text-xs font-mono bg-muted/50 rounded px-2.5 py-1 inline-block mr-1.5">
+                    &rarr; {outputColMap[col]}
+                  </div>
+                ))}
+                {selectedCols.length > 3 && (
+                  <span className="text-xs text-muted-foreground">+{selectedCols.length - 3} more</span>
+                )}
+              </div>
+            </button>
+          </div>
+        </div>
+        </>
+      )}
+
+      {/* ── 2c. Filter Rows ──────────────────────────────────────────────── */}
       {data.length > 0 && (
         <div className="space-y-4 py-8">
           <div className="border-t mb-4" />
@@ -549,19 +605,19 @@ export default function TransformPage() {
                 </Select>
                 <Input value={f.val} onChange={(e) => updateFilter(idx, { val: e.target.value })} placeholder="Value..." className="h-9 text-sm w-[200px]" />
                 <Button variant="ghost" size="sm" className="h-9 w-9 p-0" onClick={() => removeFilter(idx)}>
-                  <X className="h-3.5 w-3.5" />
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>
             ))}
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setFilters((prev) => [...prev, { col: "", op: "contains", val: "" }])}>
-              <Plus className="h-3 w-3 mr-1" /> Add Filter
+            <Button variant="outline" className="h-9 px-12 text-sm" onClick={() => setFilters((prev) => [...prev, { col: "", op: "contains", val: "" }])}>
+              <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Filter
             </Button>
-            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setSelectedRows(new Set(filteredIndices))}>
+            <Button variant="outline" className="h-9 px-12 text-sm" onClick={() => setSelectedRows(new Set(filteredIndices))}>
               Apply Filter
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => { setFilters([{ col: "", op: "contains", val: "" }]); setSelectedRows(new Set(data.map((_, i) => i))); }}>
+            <Button variant="ghost" className="h-9 px-12 text-sm text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => { setFilters([{ col: "", op: "contains", val: "" }]); setSelectedRows(new Set(data.map((_, i) => i))); }}>
               Clear All
             </Button>
           </div>

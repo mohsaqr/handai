@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { agents, userContent, maxRounds, rowIdx, runId } = parsed.data;
+    const { agents, userContent, maxRounds, rowIdx, runId, temperature, maxTokens } = parsed.data;
 
     const nonReferees = agents.filter((a) => !a.isReferee);
     const referee = agents.find((a) => a.isReferee);
@@ -64,7 +64,13 @@ export async function POST(req: NextRequest) {
 
         const start = Date.now();
         const { text } = await withRetry(
-          () => generateText({ model, system: agent.role, prompt: agentContent }),
+          () => generateText({
+            model,
+            system: agent.role,
+            prompt: agentContent,
+            ...(temperature !== undefined && { temperature }),
+            ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
+          }),
           { maxAttempts: 3, baseDelayMs: 100 }
         );
         return { name: agent.name, output: text.trim(), latency: (Date.now() - start) / 1000 };
@@ -107,7 +113,13 @@ export async function POST(req: NextRequest) {
     const refereeModel = getModel(referee.provider, referee.model, referee.apiKey || "local", referee.baseUrl);
     const refStart = Date.now();
     const { text: refereeText } = await withRetry(
-      () => generateText({ model: refereeModel, system: referee.role, prompt: refereePrompt }),
+      () => generateText({
+        model: refereeModel,
+        system: referee.role,
+        prompt: refereePrompt,
+        ...(temperature !== undefined && { temperature }),
+        ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
+      }),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
     const refereeLatency = (Date.now() - refStart) / 1000;

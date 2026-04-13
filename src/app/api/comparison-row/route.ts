@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { models, systemPrompt, userContent, temperature } = parsed.data;
+    const { models, systemPrompt, userContent, temperature, maxTokens } = parsed.data;
 
     const promises = models.map(async (m) => {
       try {
@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
               system: systemPrompt,
               prompt: userContent,
               ...(temperature !== undefined && { temperature }),
+              ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
             }),
           { maxAttempts: 3, baseDelayMs: 100 }
         );
