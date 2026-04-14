@@ -32,6 +32,7 @@ import {
 import { toast } from "sonner";
 import type { FileState } from "@/types";
 import { dispatchDocumentProcess } from "@/lib/llm-dispatch";
+import { LARGE_FILE_BYTES, isLikelyChunked } from "@/lib/chunk-text";
 import { downloadText, downloadMarkdown } from "@/lib/export";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -205,12 +206,19 @@ export default function ProcessDocumentsPage() {
       });
 
       const latency = Date.now() - t0;
+      if (result.chunks > 1) {
+        const msg = result.failedChunks > 0
+          ? `Processed ${file.name} in ${result.chunks} sections (${result.failedChunks} failed)`
+          : `Processed ${file.name} in ${result.chunks} sections`;
+        toast.info(msg);
+      }
 
       return {
         document_name: file.name,
         output: result.text,
         ...(outputFormat === "csv" ? { _all_records: result.text } : {}),
         _format: outputFormat,
+        _chunk_count: result.chunks,
         status: "success",
         latency_ms: latency,
       };
@@ -364,7 +372,10 @@ export default function ProcessDocumentsPage() {
     });
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  const totalChunks = batch.results.reduce((sum, r) => sum + (Number(r._chunk_count) || 1), 0);
+  const chunkNote = totalChunks > allResults.length ? ` (${totalChunks} sections)` : "";
+  const processSubtitle = `${tableResults.length} rows from ${allResults.length} document${allResults.length !== 1 ? "s" : ""}${chunkNote}`;
+
   return (
     <div className="space-y-0 pb-16">
 
@@ -431,7 +442,12 @@ export default function ProcessDocumentsPage() {
                       </span>
                     )}
 
-                    {status === "pending" && (
+                    {status === "pending" && isLikelyChunked(entry.file.size) && (
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0" title="This file will be split into sections for complete processing">
+                        Multi-section
+                      </span>
+                    )}
+                    {status === "pending" && !isLikelyChunked(entry.file.size) && (
                       <span className="text-[10px] text-muted-foreground shrink-0">Pending</span>
                     )}
                     {(status === "extracting" || status === "analyzing") && (
@@ -558,6 +574,17 @@ export default function ProcessDocumentsPage() {
       {/* ── 5. Execute ──────────────────────────────────────────────────── */}
       <div className="space-y-4 py-8">
         <h2 className="text-2xl font-bold">5. Execute</h2>
+
+        {fileStates.some((fs) => isLikelyChunked(fs.file.size)) && (
+          <div className="flex items-start gap-3 px-4 py-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 text-sm text-amber-700 dark:text-amber-300">
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>
+              Some files are large and will be automatically split into sections for complete processing.
+              This uses additional API calls but ensures no content is missed.
+            </span>
+          </div>
+        )}
+
         <ExecutionPanel
           isProcessing={batch.isProcessing}
           aborting={batch.aborting}
@@ -584,7 +611,7 @@ export default function ProcessDocumentsPage() {
           results={tableResults}
           runId={batch.runId}
           title="Results"
-          subtitle={`${tableResults.length} rows from ${allResults.length} document${allResults.length !== 1 ? "s" : ""}`}
+          subtitle={processSubtitle}
         />
       ) : allResults.length > 0 && (
         <div className="space-y-4 border-t pt-6 pb-8">

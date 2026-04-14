@@ -355,6 +355,8 @@ export async function dispatchDocumentExtract(params: {
   charCount: number;
   truncated: boolean;
   count: number;
+  chunks: number;
+  failedChunks: number;
 }> {
   if (useBrowserDirect) {
     return await documentExtractDirect(params);
@@ -444,6 +446,8 @@ export async function dispatchDocumentProcess(params: {
   fileName: string;
   charCount: number;
   truncated: boolean;
+  chunks: number;
+  failedChunks: number;
 }> {
   if (useBrowserDirect) {
     return await documentProcessDirect(params);
