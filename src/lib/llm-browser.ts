@@ -11,7 +11,7 @@
 import { generateText } from "ai";
 import { getModel } from "./ai/providers";
 import { withRetry } from "./retry";
-import { multiWorkerKappa, pairwiseAgreement } from "./analytics";
+import { pairwiseJaccard, pairwiseAgreement, interpretKappa } from "./analytics";
 import { getPrompt, formatExtractionSchema, formatExtractionSchemaJson } from "./prompts";
 import type { FieldDef } from "@/types";
 import { chunkText, chunkPromptPrefix, CHUNK_CONCURRENCY } from "./chunk-text";
@@ -339,7 +339,7 @@ export async function consensusRowDirect(params: {
   // Step 2: Inter-rater analytics (all workers, set-based)
   const outputs = workerResults.map((r) => r.output.trim());
   const allSame = outputs.every((o) => o === outputs[0]);
-  const kappa = multiWorkerKappa(outputs);
+  const kappa = pairwiseJaccard(outputs);
 
   const allTokenized = outputs.map((o) =>
     o.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean)
@@ -473,13 +473,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is 1-10. No other t
     judgeLatency,
     consensusType,
     kappa: isNaN(kappa) ? null : kappa,
-    kappaLabel: isNaN(kappa)
-      ? "N/A"
-      : kappa < 0.2 ? "Very Low"
-      : kappa < 0.4 ? "Low"
-      : kappa < 0.6 ? "Moderate"
-      : kappa < 0.8 ? "High"
-      : "Very High",
+    kappaLabel: interpretKappa(kappa),
     agreementMatrix,
     ...(judgeReasoning !== undefined ? { judgeReasoning } : {}),
     ...(qualityScores !== undefined ? { qualityScores } : {}),
