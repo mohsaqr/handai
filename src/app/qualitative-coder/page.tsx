@@ -403,10 +403,13 @@ export default function QualitativeCoderPage() {
       const entries: CodeEntry[] = rows.map((row) => {
         const lowerRow: Record<string, string> = {};
         Object.entries(row).forEach(([k, v]) => { lowerRow[k.trim().toLowerCase()] = String(v ?? "").trim(); });
-        if (!lowerRow.code) return null;
-        return { id: crypto.randomUUID(), code: lowerRow.code, description: lowerRow.description ?? "", example: lowerRow.example ?? "" };
+        const code = lowerRow["code label"] ?? lowerRow.code ?? "";
+        if (!code) return null;
+        const description = lowerRow.description ?? "";
+        const example = lowerRow.examples ?? lowerRow.example ?? "";
+        return { id: crypto.randomUUID(), code, description, example };
       }).filter((x): x is CodeEntry => x !== null && x.code.length > 0);
-      if (entries.length === 0) { toast.error("No valid codes found (need a 'code' column)"); return; }
+      if (entries.length === 0) { toast.error("No valid codes found (need a 'Code label' column)"); return; }
       setCodebook(entries);
       toast.success(`Imported ${entries.length} codes`);
     };
@@ -427,16 +430,16 @@ export default function QualitativeCoderPage() {
         const lines = text.split(/\r?\n/).filter(Boolean);
         if (lines.length < 2) { toast.error("File must have a header row and at least one data row"); return; }
         const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
-        const codeIdx = headers.indexOf("code");
+        const codeIdx = headers.indexOf("code label") !== -1 ? headers.indexOf("code label") : headers.indexOf("code");
         const descIdx = headers.indexOf("description");
-        const exIdx = headers.indexOf("example");
-        if (codeIdx === -1) { toast.error("File must have a 'code' column"); return; }
+        const exIdx = headers.indexOf("examples") !== -1 ? headers.indexOf("examples") : headers.indexOf("example");
+        if (codeIdx === -1) { toast.error("File must have a 'Code label' column"); return; }
         const rows = lines.slice(1).map((line) => {
           const cols = parseCSVLine(line);
           const row: Record<string, string> = {};
-          if (codeIdx !== -1) row.code = cols[codeIdx] ?? "";
+          row["code label"] = cols[codeIdx] ?? "";
           if (descIdx !== -1) row.description = cols[descIdx] ?? "";
-          if (exIdx !== -1) row.example = cols[exIdx] ?? "";
+          if (exIdx !== -1) row.examples = cols[exIdx] ?? "";
           return row;
         });
         buildEntries(rows);

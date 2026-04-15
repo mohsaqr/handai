@@ -64,7 +64,13 @@ export default function AutomatorPage() {
   const [data, setData] = useSessionState<Row[]>("automator_data", []);
   const [dataName, setDataName] = useSessionState("automator_dataName", "");
   const [availableCols, setAvailableCols] = useSessionState<string[]>("automator_availableCols", []);
-  const [steps, setSteps] = useState<Step[]>([makeStep(1), makeStep(2)]);
+  const [steps, setSteps] = useState<Step[]>(() => {
+    const s1 = makeStep(1);
+    const s2 = makeStep(2);
+    // Prefill step 2's inputs with step 1's output fields.
+    s2.input_fields = s1.output_fields.map((f) => f.name);
+    return [s1, s2];
+  });
   const [isMounted, setIsMounted] = useState(false);
 
   const uploadRef = useRef<HTMLDivElement>(null);
@@ -103,11 +109,17 @@ export default function AutomatorPage() {
     const used = new Set(existing.flatMap((s) => s.output_fields.map((f) => f.name)));
     let idx = existing.length + 1;
     while (used.has(`ai_output_${idx}`)) idx++;
+    // Default new step's inputs to the previous step's output fields so the
+    // pipeline feeds forward automatically.
+    const prev = existing[existing.length - 1];
+    const defaultInputs = prev
+      ? prev.output_fields.map((f) => f.name).filter((n) => n.trim().length > 0)
+      : [];
     return {
       id: Math.random().toString(36).substr(2, 9),
       name: `Step ${existing.length + 1}`,
       task: "",
-      input_fields: [],
+      input_fields: defaultInputs,
       output_fields: [{ name: `ai_output_${idx}`, type: "text", constraints: "" }],
     };
   };

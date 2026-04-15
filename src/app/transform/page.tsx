@@ -207,6 +207,7 @@ export default function TransformPage() {
     lines.push("RULES:");
     lines.push("- Return ONLY the transformed result as plain text — no JSON, no markdown, no formatting");
     lines.push("- Do not include any explanation, labels, or commentary");
+    lines.push("- Do NOT prefix the output with the column name (e.g. do not write \"Destinations: USA, France\" — just write \"USA, France\")");
     lines.push("");
     lines.push(AI_INSTRUCTIONS_MARKER);
 
@@ -264,11 +265,17 @@ export default function TransformPage() {
             apiKey: activeModel!.apiKey || "",
             baseUrl: activeModel!.baseUrl,
             systemPrompt: perColPrompt,
-            userContent: `${col}: ${String(row[col] ?? "")}`,
+            userContent: String(row[col] ?? ""),
             temperature: systemSettings.temperature,
             maxTokens: systemSettings.maxTokens ?? undefined,
           });
-          outputs[outputColMap[col]] = result.output.trim();
+          // Defensive: strip "ColumnName:" / "ai_output_ColumnName:" prefix the
+          // model sometimes echoes even when told not to.
+          const cleaned = result.output.trim().replace(
+            new RegExp(`^(?:ai_output_)?${col.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:\\s*`, "i"),
+            ""
+          );
+          outputs[outputColMap[col]] = cleaned;
           totalLatency += result.latency;
         }
         return { ...base, ...outputs, status: "success", latency_ms: totalLatency };
