@@ -403,10 +403,13 @@ export default function QualitativeCoderPage() {
       const entries: CodeEntry[] = rows.map((row) => {
         const lowerRow: Record<string, string> = {};
         Object.entries(row).forEach(([k, v]) => { lowerRow[k.trim().toLowerCase()] = String(v ?? "").trim(); });
-        if (!lowerRow.code) return null;
-        return { id: crypto.randomUUID(), code: lowerRow.code, description: lowerRow.description ?? "", example: lowerRow.example ?? "" };
+        const code = lowerRow["code label"] ?? lowerRow.code ?? "";
+        if (!code) return null;
+        const description = lowerRow.description ?? "";
+        const example = lowerRow.examples ?? lowerRow.example ?? "";
+        return { id: crypto.randomUUID(), code, description, example };
       }).filter((x): x is CodeEntry => x !== null && x.code.length > 0);
-      if (entries.length === 0) { toast.error("No valid codes found (need a 'code' column)"); return; }
+      if (entries.length === 0) { toast.error("No valid codes found (need a 'Code label' column)"); return; }
       setCodebook(entries);
       toast.success(`Imported ${entries.length} codes`);
     };
@@ -427,16 +430,16 @@ export default function QualitativeCoderPage() {
         const lines = text.split(/\r?\n/).filter(Boolean);
         if (lines.length < 2) { toast.error("File must have a header row and at least one data row"); return; }
         const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
-        const codeIdx = headers.indexOf("code");
+        const codeIdx = headers.indexOf("code label") !== -1 ? headers.indexOf("code label") : headers.indexOf("code");
         const descIdx = headers.indexOf("description");
-        const exIdx = headers.indexOf("example");
-        if (codeIdx === -1) { toast.error("File must have a 'code' column"); return; }
+        const exIdx = headers.indexOf("examples") !== -1 ? headers.indexOf("examples") : headers.indexOf("example");
+        if (codeIdx === -1) { toast.error("File must have a 'Code label' column"); return; }
         const rows = lines.slice(1).map((line) => {
           const cols = parseCSVLine(line);
           const row: Record<string, string> = {};
-          if (codeIdx !== -1) row.code = cols[codeIdx] ?? "";
+          row["code label"] = cols[codeIdx] ?? "";
           if (descIdx !== -1) row.description = cols[descIdx] ?? "";
-          if (exIdx !== -1) row.example = cols[exIdx] ?? "";
+          if (exIdx !== -1) row.examples = cols[exIdx] ?? "";
           return row;
         });
         buildEntries(rows);
@@ -450,9 +453,9 @@ export default function QualitativeCoderPage() {
     if (codebook.length === 0) { toast.error("Codebook is empty"); return; }
     const named = codebook.filter((e) => e.code.trim());
     const rows = named.length > 0
-      ? named.map((e) => ({ "code label": e.code, description: e.description, examples: e.example }))
-      : [{ "code label": "", description: "", examples: "" }];
-    const ws = XLSX.utils.json_to_sheet(rows, { header: ["code label", "description", "examples"] });
+      ? named.map((e) => ({ "Code label": e.code, Description: e.description, Examples: e.example }))
+      : [{ "Code label": "", Description: "", Examples: "" }];
+    const ws = XLSX.utils.json_to_sheet(rows, { header: ["Code label", "Description", "Examples"] });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Codebook");
     XLSX.writeFile(wb, "codebook.xlsx");
@@ -595,9 +598,9 @@ export default function QualitativeCoderPage() {
               <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
               <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
                 <div className="shrink-0 w-6" />
-                <div className="flex-[2]">code label</div>
-                <div className="flex-[3]">description</div>
-                <div className="flex-[3]">examples</div>
+                <div className="flex-[2]">Code label</div>
+                <div className="flex-[3]">Description</div>
+                <div className="flex-[3]">Examples</div>
                 <div className="w-8 shrink-0" />
               </div>
               <div className="p-3 space-y-2">
@@ -642,9 +645,9 @@ export default function QualitativeCoderPage() {
               <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
               <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
                 <div className="shrink-0 w-6" />
-                <div className="flex-[2]">code label</div>
-                <div className="flex-[3]">description</div>
-                <div className="flex-[3]">examples</div>
+                <div className="flex-[2]">Code label</div>
+                <div className="flex-[3]">Description</div>
+                <div className="flex-[3]">Examples</div>
                 <div className="w-8 shrink-0" />
               </div>
               <div className="p-3 space-y-2">
