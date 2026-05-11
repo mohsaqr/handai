@@ -19,9 +19,9 @@ export async function POST(req: NextRequest) {
 
     const {
       workers,
-      judge,
+      reconciler,
       workerPrompt,
-      judgePrompt,
+      reconcilerPrompt,
       userContent,
       rowIdx,
       runId,
@@ -36,25 +36,27 @@ export async function POST(req: NextRequest) {
       ...(maxTokens ? { maxOutputTokens: maxTokens } : {}),
     };
 
-    // Enforce direct-answer-only rules on every worker prompt
-    const strictSuffix = `\n\nSTRICT OUTPUT RULES (always apply):
+    // Default direct-answer-only rules — overridden when the instruction above explicitly asks for reasoning
+    const strictSuffix = `\n\nDEFAULT OUTPUT RULES (apply only when the instruction above does NOT explicitly request explanations, reasoning, arguments, justification, or rationale; if it does, follow the instruction and ignore these rules):
 - Output ONLY the answer to the instruction. No notes, no explanations, no reasoning, no commentary, no caveats.
 - Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks.
 - Do NOT add headers, labels, introductions, or sign-offs.
 - Do NOT prefix with "Answer:", "Result:", "Note:", or any label.
 - Do NOT add extra sentences, context, or qualifications.
 - If the instruction asks for a single value, return that value and NOTHING else.`;
-    const enforced = workerPrompt + strictSuffix;
 
     // Step 1: Run workers in parallel
+    const enforcedWorkerPrompt = workerPrompt + strictSuffix;
     const workerPromises = workers.map(async (w, i) => {
       const model = getModel(w.provider, w.model, w.apiKey || "local", w.baseUrl);
+      // Per-worker persona prepended to system prompt
+      const workerSystem = w.persona ? `${w.persona}\n\n${enforcedWorkerPrompt}` : enforcedWorkerPrompt;
       const start = Date.now();
       const { text } = await withRetry(
         () =>
           generateText({
             model,
-            system: enforced,
+            system: workerSystem,
             prompt: userContent,
             ...llmOpts,
           }),
@@ -72,7 +74,7 @@ export async function POST(req: NextRequest) {
       .filter((r): r is PromiseFulfilledResult<{ id: string; output: string; latency: number }> => r.status === "fulfilled")
       .map((r) => r.value);
 
-    if (workerResults.length < 2) {
+    if (workerResults.length < 1) {
       const errors = workerSettled
         .filter((r): r is PromiseRejectedResult => r.status === "rejected")
         .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
@@ -100,45 +102,63 @@ export async function POST(req: NextRequest) {
     );
     const agreementMatrix = pairwiseAgreement(padded);
 
-    // Step 3: Run judge — also classify consensus level
-    const judgeModel = getModel(
-      judge.provider,
-      judge.model,
-      judge.apiKey || "local",
-      judge.baseUrl
+    // Step 3: Run reconciler — also classify consensus level
+    const reconcilerModel = getModel(
+      reconciler.provider,
+      reconciler.model,
+      reconciler.apiKey || "local",
+      reconciler.baseUrl
     );
     const workersFormatted = workerResults
       .map((r) => `${r.id} response:\n${r.output}`)
       .join("\n\n---\n\n");
-    const combinedContent = `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`;
+    const combinedContent = `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`;
+    const reconcilerPersonaPrefix = reconciler.persona ? `${reconciler.persona}\n\n` : "";
 
-    let judgeOutput: string;
-    let judgeLatency: number;
+    const taskContext = `\n\nTHE WORKERS WERE GIVEN THIS INSTRUCTION:
+${workerPrompt}
+
+GROUNDING RULE (highest priority — read carefully):
+- Your output MUST be derived ONLY from the content of the Worker Responses.
+- The "Original Data" is provided ONLY as context so you can understand what the workers were given. You MUST NOT use it as a source for your own output.
+- Do NOT translate, summarize, classify, rewrite, or otherwise transform the Original Data yourself. That was the workers' job, not yours.
+- Do NOT add facts, claims, or content that no worker provided. If a detail is not present in any worker's output, it must NOT appear in yours.
+- Your output's language and format MUST match what the worker outputs use. If workers output English text, you output English text. If workers output keywords or codes, you output keywords or codes. Do NOT translate, paraphrase, or transform worker outputs into a different language or form — even if the worker instruction asked for that language/form.
+- Your job is to judge or combine the workers' outputs — never to redo the workers' task. You are not allowed to "fix" or "complete" a worker's failure to comply.
+
+TASK COMPLIANCE GUIDANCE:
+- Use the worker instruction above to recognize whether each worker actually performed the task. A worker that returned the Original Data verbatim, returned content in the wrong language/format, or refused has NOT complied.
+- "Accuracy" means accuracy with respect to the worker instruction applied to the data, NOT similarity to the Original Data itself.
+- Prefer outputs from workers that complied with the instruction. If only one worker complied, base your answer on that worker.
+- If NO worker complied, you must STILL stay grounded in the worker outputs as they are. Pick or merge from what the workers actually produced — do NOT silently perform the task yourself on the Original Data, and do NOT translate or transform worker outputs to compensate for their failure.`;
+
+    let reconcilerOutput: string;
+    let reconcilerLatency: number;
     let consensusType: string;
-    let judgeReasoning: string | undefined;
+    let reconcilerReasoning: string | undefined;
 
-    const judgeDirectSuffix = `\n\nSTRICT OUTPUT RULES (always apply):
+    const reconcilerDirectSuffix = `\n\nDEFAULT OUTPUT RULES (apply only when the worker instruction above does NOT explicitly request explanations, reasoning, arguments, justification, or rationale; if it does, mirror that level of detail in your final answer and ignore these rules):
 - Output ONLY the final answer. No explanations, no reasoning, no commentary, no justifications.
 - Plain text only. No markdown, no headings, no bullet points, no code fences.
 - Do NOT explain why you chose this answer — just give the answer directly.`;
 
     if (allSame) {
       consensusType = "Unanimous";
-      const judgeStart = Date.now();
+      const reconcilerStart = Date.now();
       const { text } = await withRetry(
         () =>
           generateText({
-            model: judgeModel,
-            system: judgePrompt + judgeDirectSuffix,
+            model: reconcilerModel,
+            system: reconcilerPersonaPrefix + reconcilerPrompt + taskContext + reconcilerDirectSuffix,
             prompt: combinedContent,
             ...llmOpts,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
-      judgeOutput = text;
-      judgeLatency = (Date.now() - judgeStart) / 1000;
+      reconcilerOutput = text;
+      reconcilerLatency = (Date.now() - reconcilerStart) / 1000;
     } else {
-      const consensusSuffix = judgeDirectSuffix + `\n\nADDITIONAL TASK — After producing your direct answer, you MUST end your response with a consensus classification on its own line, in this exact format:
+      const consensusSuffix = reconcilerDirectSuffix + `\n\nADDITIONAL TASK — After producing your direct answer, you MUST end your response with a consensus classification on its own line, in this exact format:
 [CONSENSUS: <level>]
 Where <level> is one of:
 - "Unanimous" — all workers conveyed the same meaning (even if worded differently)
@@ -146,108 +166,129 @@ Where <level> is one of:
 - "Partial Agreement" — workers agree on some points but differ on others
 - "Divergent" — workers gave substantially different or contradictory responses`;
 
-      const judgeStart = Date.now();
-      const { text: rawJudge } = await withRetry(
+      const reconcilerStart = Date.now();
+      const { text: rawReconciler } = await withRetry(
         () =>
           generateText({
-            model: judgeModel,
-            system: judgePrompt + consensusSuffix,
+            model: reconcilerModel,
+            system: reconcilerPersonaPrefix + reconcilerPrompt + taskContext + consensusSuffix,
             prompt: combinedContent,
             ...llmOpts,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
-      judgeLatency = (Date.now() - judgeStart) / 1000;
+      reconcilerLatency = (Date.now() - reconcilerStart) / 1000;
 
       // Parse [CONSENSUS: ...] — tolerant of missing ], quotes, trailing whitespace
-      const consensusMatch = rawJudge.match(/\[CONSENSUS:\s*"?([^"\]\n]+)"?\]?\s*$/im);
+      const consensusMatch = rawReconciler.match(/\[CONSENSUS:\s*"?([^"\]\n]+)"?\]?\s*$/im);
       if (consensusMatch) {
         const level = consensusMatch[1].trim();
         const valid = ["Unanimous", "Strong Agreement", "Partial Agreement", "Divergent"];
         consensusType = valid.includes(level) ? level : "Partial Agreement";
-        judgeOutput = rawJudge.slice(0, consensusMatch.index).trim();
+        reconcilerOutput = rawReconciler.slice(0, consensusMatch.index).trim();
       } else {
         consensusType = "Partial Agreement";
-        judgeOutput = rawJudge.trim();
+        reconcilerOutput = rawReconciler.trim();
       }
     }
 
-    const totalLatency = judgeLatency + Math.max(...workerResults.map((r) => r.latency));
+    const totalLatency = reconcilerLatency + Math.max(...workerResults.map((r) => r.latency));
 
     // Step 4 (optional): Quality scoring
-    let qualityScores: number[] | undefined;
+    let qualityScores: (number | null)[] | undefined;
     if (enableQualityScoring) {
       try {
         const { text: qsText } = await withRetry(
           () =>
             generateText({
-              model: judgeModel,
+              model: reconcilerModel,
               system: `You are a quality assessor evaluating worker responses. Rate each worker on a scale of 1-10.
 
 SCORING CRITERIA:
-- Accuracy (does the response correctly address the original data?)
-- Completeness (does it cover all relevant aspects?)
+- Task compliance (did the worker actually perform the Worker Instruction on the Original Data? A response that returns the Original Data verbatim, refuses, or is in the wrong language fails the instruction and must score very low — typically 1-3.)
+- Accuracy (is the response correct with respect to the Worker Instruction applied to the Original Data — NOT similarity to the Original Data itself?)
+- Completeness (does it cover all relevant aspects required by the instruction?)
 - Relevance (does it stay focused on the task?)
-- Alignment with best answer (how close is it to the chosen judge output?)
+- Alignment with best answer (how close is it to the chosen reconciler output?)
 
 RULES:
 - If all workers gave the same answer, they should all receive the same score.
-- A response that matches the judge's chosen answer closely should score higher.
+- A response that matches the reconciler's chosen answer closely should score higher.
+- A response that did not perform the requested task is invalid — score it 1-3 regardless of fluency.
 - Deduct points for: factual errors, missing key information, off-topic content, unnecessary additions.
 - Be consistent: similar quality responses should get similar scores.
 
 Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number between 1.0 and 10.0 (one decimal place, e.g. 6.5, 7.3, 9.0). No other text.`,
-              prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nJudge's Chosen Answer:\n${judgeOutput}\n\nConsensus Level: ${consensusType}`,
+              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nReconciler's Chosen Answer:\n${reconcilerOutput}\n\nConsensus Level: ${consensusType}`,
               ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
         );
-        const clean = qsText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-        const parsed = JSON.parse(clean) as { quality_scores: number[] };
-        if (Array.isArray(parsed.quality_scores)) {
+        const cleaned = qsText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        const tryParse = (s: string): { quality_scores: unknown } | null => {
+          try { return JSON.parse(s) as { quality_scores: unknown }; } catch { return null; }
+        };
+        let parsed = tryParse(cleaned);
+        if (!parsed) {
+          const objMatch = cleaned.match(/\{[\s\S]*\}/);
+          if (objMatch) parsed = tryParse(objMatch[0]);
+        }
+        if (!parsed) {
+          const arrMatch = cleaned.match(/\[[\s\S]*?\]/);
+          if (arrMatch) parsed = tryParse(`{"quality_scores":${arrMatch[0]}}`);
+        }
+
+        if (parsed && Array.isArray(parsed.quality_scores)) {
+          const raw = parsed.quality_scores as unknown[];
+          const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
           // Normalize: workers with identical outputs must receive identical scores.
-          // Group by normalized output text, average the judge's scores within each
-          // group, and assign the group average to every member. This removes the
-          // small judge-side variance that can drift otherwise-identical responses
-          // by a point or two.
+          // Group by normalized output text, average the reconciler's scores within each
+          // group, and assign the group average to every member.
           const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
           const groups = new Map<string, number[]>();
           outputs.forEach((out, i) => {
+            const v = raw[i];
+            if (!isFiniteNum(v)) return;
             const key = normalize(out);
-            const score = parsed.quality_scores[i];
-            if (typeof score !== "number") return;
             const bucket = groups.get(key);
-            if (bucket) bucket.push(score);
-            else groups.set(key, [score]);
+            if (bucket) bucket.push(v);
+            else groups.set(key, [v]);
           });
           qualityScores = outputs.map((out, i) => {
             const bucket = groups.get(normalize(out));
-            if (!bucket || bucket.length === 0) return parsed.quality_scores[i];
-            const avg = bucket.reduce((a, b) => a + b, 0) / bucket.length;
-            return Math.round(avg * 10) / 10;
+            if (bucket && bucket.length > 0) {
+              const avg = bucket.reduce((a, b) => a + b, 0) / bucket.length;
+              return Math.round(avg * 10) / 10;
+            }
+            const v = raw[i];
+            return isFiniteNum(v) ? v : null;
           });
+        } else {
+          console.warn("[consensus-row] quality_scores parse failed:", qsText.slice(0, 300));
+          qualityScores = outputs.map(() => null);
         }
-      } catch {
-        // non-fatal — skip quality scores on parse failure
+      } catch (err) {
+        console.warn("[consensus-row] quality scoring error:", err instanceof Error ? err.message : String(err));
+        qualityScores = outputs.map(() => null);
       }
     }
 
-    // Step 5 (optional): Judge reasoning — separate call for reliability
+    // Step 5 (optional): Reconciler reasoning — separate call for reliability
     if (includeReasoning && !allSame) {
       try {
         const { text: jrText } = await withRetry(
           () =>
             generateText({
-              model: judgeModel,
-              system: `You are a judge explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`,
-              prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${judgeOutput}`,
+              model: reconcilerModel,
+              system: `You are a reconciler explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`,
+              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${reconcilerOutput}`,
               ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
         );
-        judgeReasoning = jrText.trim() || "Could not generate reasoning";
+        reconcilerReasoning = jrText.trim() || "Could not generate reasoning";
       } catch {
-        judgeReasoning = "Could not generate reasoning";
+        reconcilerReasoning = "Could not generate reasoning";
       }
     }
 
@@ -258,9 +299,9 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
         const { text: drText } = await withRetry(
           () =>
             generateText({
-              model: judgeModel,
+              model: reconcilerModel,
               system: `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`,
-              prompt: `Original Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`,
+              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`,
               ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
@@ -277,7 +318,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
           runId,
           rowIndex: rowIdx ?? 0,
           inputJson: JSON.stringify({ content: userContent }),
-          output: JSON.stringify({ workers: workerResults, judge: judgeOutput, consensus: consensusType, kappa }),
+          output: JSON.stringify({ workers: workerResults, reconciler: reconcilerOutput, consensus: consensusType, kappa }),
           status: "SUCCESS",
           latency: totalLatency,
         },
@@ -286,13 +327,13 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
 
     return NextResponse.json({
       workerResults,
-      judgeOutput,
-      judgeLatency,
+      reconcilerOutput,
+      reconcilerLatency,
       consensusType,
       kappa: isNaN(kappa) ? null : kappa,
       kappaLabel: isNaN(kappa) ? "N/A" : kappa < 0.2 ? "Very Low" : kappa < 0.4 ? "Low" : kappa < 0.6 ? "Moderate" : kappa < 0.8 ? "High" : "Very High",
       agreementMatrix,
-      ...(judgeReasoning !== undefined ? { judgeReasoning } : {}),
+      ...(reconcilerReasoning !== undefined ? { reconcilerReasoning } : {}),
       ...(qualityScores !== undefined ? { qualityScores } : {}),
       ...(disagreementReason !== undefined ? { disagreementReason } : {}),
     });

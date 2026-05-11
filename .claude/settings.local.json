@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git update-index:*)",
+      "Bash(git stash:*)",
+      "Bash(git checkout:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx next:*)",
+      "Bash(npx eslint:*)",
+      "Bash(npm run:*)",
+      "Bash(npx vitest *)",
+      "Bash(npm test *)",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(require\\('./package.json'\\).scripts, null, 2\\)\\)\")",
+      "Bash(cp \"C:/Users/bilal/Documents/handai test MAS/src/app/consensus-coder/page.tsx\" \"C:/Users/bilal/Documents/handai/src/app/consensus-coder/page.tsx\")",
+      "Bash(cp \"C:/Users/bilal/Documents/handai test MAS/src/app/api/consensus-row/route.ts\" \"C:/Users/bilal/Documents/handai/src/app/api/consensus-row/route.ts\")",
+      "Bash(cp \"C:/Users/bilal/Documents/handai test MAS/src/lib/llm-dispatch.ts\" \"C:/Users/bilal/Documents/handai/src/lib/llm-dispatch.ts\")",
+      "Bash(cp \"C:/Users/bilal/Documents/handai test MAS/src/lib/llm-browser.ts\" \"C:/Users/bilal/Documents/handai/src/lib/llm-browser.ts\")",
+      "Bash(cp \"C:/Users/bilal/Documents/handai test MAS/src/lib/validation.ts\" \"C:/Users/bilal/Documents/handai/src/lib/validation.ts\")",
+      "Bash(cp \"C:/Users/bilal/Documents/handai test MAS/src/lib/prompts.ts\" \"C:/Users/bilal/Documents/handai/src/lib/prompts.ts\")",
+      "Bash(cp \"C:/Users/bilal/Documents/handai test MAS/src/types/index.ts\" \"C:/Users/bilal/Documents/handai/src/types/index.ts\")",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(echo \"tsc EXIT=$?\")",
+      "Bash(npx prisma *)",
+      "Bash(DATABASE_URL=\"file:./dev.db\" npx prisma db execute --stdin --schema=prisma/schema.prisma <<< \"SELECT runType, COUNT\\(*\\) as count FROM Run GROUP BY runType ORDER BY count DESC;\")",
+      "Bash(sqlite3 \"C:/Users/bilal/Documents/handai/prisma/dev.db\" \"SELECT runType, COUNT\\(*\\) FROM Run GROUP BY runType ORDER BY COUNT\\(*\\) DESC;\")",
+      "Bash(node -e 'const{PrismaClient}=require\\('\\\\''@prisma/client'\\\\''\\);const p=new PrismaClient\\(\\);p.run.groupBy\\({by:['\\\\''runType'\\\\''],_count:true}\\).then\\(r=>{console.log\\(JSON.stringify\\(r,null,2\\)\\);return p.$disconnect\\(\\);}\\).catch\\(e=>{console.error\\(e.message\\);process.exit\\(1\\);}\\);')",
+      "Bash(Get-ChildItem *)",
+      "Bash(awk 'NR==273,NR==380' src/lib/llm-browser.ts)",
+      "Bash(awk 'NR==962,NR==1100' src/lib/llm-browser.ts)",
+      "Bash(awk '/^export async function agentsRowDirect/,/^}$/' src/lib/llm-browser.ts)",
+      "Bash(awk '/^export async function comparisonRowDirect/,/^}$/' src/lib/llm-browser.ts)",
+      "Bash(awk '/^export \\(interface|type\\) Agent\\\\b/,/^}/' src/lib/agent-library.ts)",
+      "Bash(wait %1)",
+      "Bash(grep -E \"^\\\\S.*\\\\.tsx?$\")",
+      "Bash(grep -E \"\\(\\\\.ts|\\\\.tsx\\)$|error\")",
+      "Bash(git mv *)",
+      "Bash(git diff *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

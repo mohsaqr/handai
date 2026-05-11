@@ -34,14 +34,19 @@ export async function PATCH(
     try {
         const { id } = await params;
         const body = await req.json();
-        const { inputFile } = body;
-        if (typeof inputFile !== "string" || !inputFile.trim()) {
-            return NextResponse.json({ error: "inputFile is required" }, { status: 400 });
+        const data: Record<string, unknown> = {};
+        if (typeof body.inputFile === "string" && body.inputFile.trim()) {
+            data.inputFile = body.inputFile.trim();
         }
-        const run = await prisma.run.update({
-            where: { id },
-            data: { inputFile: inputFile.trim() },
-        });
+        if (typeof body.avgLatency === "number") data.avgLatency = body.avgLatency;
+        if (typeof body.totalDuration === "number") data.totalDuration = body.totalDuration;
+        if (typeof body.status === "string") data.status = body.status;
+        if (typeof body.completedAt === "string") data.completedAt = new Date(body.completedAt);
+        if (typeof body.systemPrompt === "string") data.systemPrompt = body.systemPrompt;
+        if (Object.keys(data).length === 0) {
+            return NextResponse.json({ error: "no valid fields to update" }, { status: 400 });
+        }
+        const run = await prisma.run.update({ where: { id }, data });
         return NextResponse.json({ run });
     } catch (error: unknown) {
         return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });

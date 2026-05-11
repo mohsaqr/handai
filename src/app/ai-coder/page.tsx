@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
@@ -10,7 +11,7 @@ import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
 import { useBatchProcessor } from "@/hooks/useBatchProcessor";
 import { useRestoreSession } from "@/hooks/useRestoreSession";
-import { Plus, Trash2, Upload, Save, FolderOpen, BarChart2, Download, Check, Loader2, X, ChevronDown, ChevronRight, ChevronLeft, RotateCcw, Play } from "lucide-react";
+import { Plus, Trash2, Upload, Save, FolderOpen, BarChart2, Download, Check, Loader2, X, ChevronDown, ChevronRight, ChevronLeft, RotateCcw, Play, Sparkles, ArrowUp, ArrowDown, Pencil, ClipboardPaste } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -362,22 +363,34 @@ function buildExportRows(
       const oneHot: Record<string, unknown> = { ...row };
       codes.forEach((c) => {
         oneHot[`Human_${c}`] = humanCodes.includes(c) ? 1 : 0;
+      });
+      codes.forEach((c) => {
         oneHot[`ai_${c}`] = ai?.confidence?.[c] ? +(ai.confidence[c] / 100).toFixed(4) : 0;
       });
       return oneHot;
     }
-    // withAI — compare human codes against only the top AI code
-    const aiCodes = ai?.codes ?? [];
-    const topAiCode = aiCodes.length > 0 ? aiCodes[0] : "";
-    const agree = humanCodes.length > 0 && topAiCode
-      ? humanCodes.includes(topAiCode)
-      : false;
+    // withAI — compare human's N codes against AI's top N codes by probability
+    const N = humanCodes.length;
+    const aiByConfidence = ai?.confidence
+      ? Object.entries(ai.confidence).sort(([, a], [, b]) => b - a).map(([k]) => k)
+      : (ai?.codes ?? []);
+    const topNAiCodes = aiByConfidence.slice(0, N);
+    const humanSet = new Set(humanCodes);
+    const agree =
+      N > 0 &&
+      topNAiCodes.length === N &&
+      topNAiCodes.every((c) => humanSet.has(c));
     return {
       ...row,
       human_codes: humanCodes.join("; "),
-      ai_codes: topAiCode,
+      ai_codes: topNAiCodes.join("; "),
       ai_probabilities: ai?.confidence
-        ? "{" + Object.entries(ai.confidence).sort(([,a],[,b]) => b - a).map(([k,v]) => `${k}(${Math.round(v)}%)`).join(",") + "}"
+        ? JSON.stringify(Object.fromEntries(
+            Object.entries(ai.confidence)
+              .filter(([, v]) => Math.round(v) > 0)
+              .sort(([, a], [, b]) => b - a)
+              .map(([k, v]) => [k, `${Math.round(v)}%`])
+          ))
         : "",
       agreement: String(agree),
     };
@@ -434,8 +447,13 @@ export default function AICoderPage() {
   const [showTable, setShowTable] = useState(false);
   const [showAIReasoning, setShowAIReasoning] = useState(false);
   const [tablePage, setTablePage] = useState(0);
+  // Table filter: empty Set = show all; otherwise rows match if any of their
+  // codes is in the set, or "uncoded" is in the set and the row has no codes.
+  const [tableFilter, setTableFilter] = useState<Set<string>>(new Set());
   const [sessionName, setSessionName] = useState("");
+  const [loadedSessionName, setLoadedSessionName] = useState<string | null>(null);
   const [pendingLoad, setPendingLoad] = useState<{ data: Row[]; name: string } | null>(null);
+  const [resumeSessionOpen, setResumeSessionOpen] = useState(false);
 
   // Analytics
   const [showAnalytics, setShowAnalytics] = useState(false);
@@ -554,7 +572,17 @@ export default function AICoderPage() {
   const restored = useRestoreSession("ai-coder");
   useEffect(() => {
     if (!restored) return;
-    setData(restored.data);
+    // Strip output columns added by processing so the restored input data
+    // matches what the user originally uploaded (mirrors qualitative-coder).
+    const outputCols = new Set(["ai_codes", "ai_output", "status", "latency_ms", "error_msg"]);
+    const cleanData = restored.data.map((row) => {
+      const clean: Row = {};
+      for (const [k, v] of Object.entries(row)) {
+        if (!outputCols.has(k)) clean[k] = v;
+      }
+      return clean;
+    });
+    setData(cleanData);
     setDataName(restored.dataName);
     setSystemPrompt(restored.systemPrompt);
     toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
@@ -779,6 +807,61 @@ export default function AICoderPage() {
   const deleteCode = (id: string) =>
     setCodebook((prev) => prev.filter((e) => e.id !== id));
 
+  const moveCode = (idx: number, dir: -1 | 1) => {
+    setCodebook((prev) => {
+      const arr = [...prev];
+      const target = idx + dir;
+      if (target < 0 || target >= arr.length) return prev;
+      [arr[idx], arr[target]] = [arr[target], arr[idx]];
+      return arr;
+    });
+  };
+
+  // ── Codebook input modes (mirrors Qualitative Coder) ────────────────────
+  const [codebookMode, setCodebookMode] = useState<"csv" | "file">("csv");
+  const [csvPasteText, setCsvPasteText] = useState("");
+  const [pasteExtracted, setPasteExtracted] = useState(true);
+  const [fileExtracted, setFileExtracted] = useState(false);
+
+  const extractFromPastedCsv = () => {
+    if (!csvPasteText.trim()) {
+      setCodebook(emptyCodebook());
+      setCsvPasteText("");
+      setPasteExtracted(true);
+      return;
+    }
+    const lines = csvPasteText.trim().split(/\r?\n/).filter(Boolean);
+    const entries: CodeEntry[] = [];
+    for (const line of lines) {
+      // Split on the first two commas only — highlights are themselves comma-separated.
+      const firstComma = line.indexOf(",");
+      const secondComma = firstComma === -1 ? -1 : line.indexOf(",", firstComma + 1);
+      let code = "", description = "", highlights = "";
+      if (firstComma === -1) {
+        code = line.trim();
+      } else if (secondComma === -1) {
+        code = line.slice(0, firstComma).trim();
+        description = line.slice(firstComma + 1).trim();
+      } else {
+        code = line.slice(0, firstComma).trim();
+        description = line.slice(firstComma + 1, secondComma).trim();
+        highlights = line.slice(secondComma + 1).trim();
+      }
+      if (!code) continue;
+      entries.push({ id: crypto.randomUUID(), code, description, highlights });
+    }
+    if (entries.length === 0) {
+      setCodebook(emptyCodebook());
+      setCsvPasteText("");
+      setPasteExtracted(true);
+      return;
+    }
+    setCodebook(entries);
+    setCsvPasteText("");
+    setPasteExtracted(true);
+    toast.success(`${entries.length} codes extracted`);
+  };
+
   const importCodebook = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -787,15 +870,16 @@ export default function AICoderPage() {
       const entries: CodeEntry[] = rows.map((row) => {
         const lowerRow: Record<string, string> = {};
         Object.entries(row).forEach(([k, v]) => { lowerRow[k.trim().toLowerCase()] = String(v ?? "").trim(); });
-        if (!lowerRow.code) return null;
+        const code = lowerRow["code label"] ?? lowerRow.code ?? "";
+        if (!code) return null;
         return {
           id: crypto.randomUUID(),
-          code: lowerRow.code,
+          code,
           description: lowerRow.description ?? "",
           highlights: lowerRow.highlights ?? "",
         };
       }).filter((x): x is CodeEntry => x !== null && x.code.length > 0);
-      if (entries.length === 0) { toast.error("No valid codes found (need a 'code' column)"); return; }
+      if (entries.length === 0) { toast.error("No valid codes found (need a 'Code label' column)"); return; }
       setCodebook(entries);
       toast.success(`Imported ${entries.length} codes`);
     };
@@ -816,14 +900,14 @@ export default function AICoderPage() {
         const lines = text.split(/\r?\n/).filter(Boolean);
         if (lines.length < 2) { toast.error("File must have a header row and at least one data row"); return; }
         const headers = parseCSVLine(lines[0]).map((h) => h.trim().toLowerCase());
-        const codeIdx = headers.indexOf("code");
+        const codeIdx = headers.indexOf("code label") !== -1 ? headers.indexOf("code label") : headers.indexOf("code");
         const descIdx = headers.indexOf("description");
         const hlIdx = headers.indexOf("highlights");
-        if (codeIdx === -1) { toast.error("File must have a 'code' column"); return; }
+        if (codeIdx === -1) { toast.error("File must have a 'Code label' column"); return; }
         const rows = lines.slice(1).map((line) => {
           const cols = parseCSVLine(line);
           const row: Record<string, string> = {};
-          if (codeIdx !== -1) row.code = cols[codeIdx] ?? "";
+          row["code label"] = cols[codeIdx] ?? "";
           if (descIdx !== -1) row.description = cols[descIdx] ?? "";
           if (hlIdx !== -1) row.highlights = cols[hlIdx] ?? "";
           return row;
@@ -835,18 +919,16 @@ export default function AICoderPage() {
     e.target.value = "";
   };
 
-  const exportCodebookCSV = () => {
+  const exportCodebookExcel = () => {
     if (codebook.length === 0) { toast.error("Codebook is empty"); return; }
-    const rows = [
-      "code,description,highlights",
-      ...codebook.map((e) =>
-        [`"${e.code.replace(/"/g, '""')}"`, `"${e.description.replace(/"/g, '""')}"`, `"${e.highlights.replace(/"/g, '""')}"`].join(",")
-      ),
-    ].join("\n");
-    const blob = new Blob(["\uFEFF" + rows], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "codebook.csv"; a.click();
-    URL.revokeObjectURL(url);
+    const named = codebook.filter((e) => e.code.trim());
+    const rows = named.length > 0
+      ? named.map((e) => ({ "Code label": e.code, Description: e.description, Highlights: e.highlights }))
+      : [{ "Code label": "", Description: "", Highlights: "" }];
+    const ws = XLSX.utils.json_to_sheet(rows, { header: ["Code label", "Description", "Highlights"] });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Codebook");
+    XLSX.writeFile(wb, "codebook.xlsx");
   };
 
   // ── Sessions ────────────────────────────────────────────────────────────
@@ -869,8 +951,17 @@ export default function AICoderPage() {
     upsertSession(s);
     setSessions(listSessions());
     setSessionName(n);
+    setLoadedSessionName(n);
     setShowSaveDialog(false);
     toast.success(`Saved "${n}"`);
+  };
+
+  const saveCurrent = () => {
+    if (loadedSessionName) {
+      saveSession(loadedSessionName);
+    } else {
+      setShowSaveDialog(true);
+    }
   };
 
   const loadSession = (s: AICSession) => {
@@ -880,10 +971,12 @@ export default function AICoderPage() {
     if (s.systemPrompt) setSystemPrompt(s.systemPrompt);
     setDataName(s.dataName ?? "");
     setSessionName(s.name);
+    setLoadedSessionName(s.name);
     setCodingData(s.codingData ?? s.overrides ?? {});
     setAiData(s.aiData ?? {});
     setCurrentIndex(s.currentIndex ?? 0);
     setShowSessions(false);
+    setResumeSessionOpen(false);
     toast.success(`Loaded "${s.name}"`);
   };
 
@@ -912,34 +1005,58 @@ export default function AICoderPage() {
 
       {/* ── Session resume ────────────────────────────────────────────────── */}
       {sessions.length > 0 && (
-        <Collapsible className="border rounded-xl overflow-hidden mb-4">
+        <Collapsible open={resumeSessionOpen} onOpenChange={setResumeSessionOpen} className="border rounded-xl mb-4">
           <CollapsibleTrigger className="flex items-center gap-2 w-full px-4 py-3 text-sm font-medium hover:bg-muted/30 transition-colors">
             <ChevronRight className="h-3.5 w-3.5 transition-transform [[data-state=open]_&]:rotate-90" />
             Resume a Session
             <span className="text-xs text-muted-foreground font-normal ml-auto">{sessions.length} saved</span>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="p-3 pt-0 space-y-2">
-              {sessions.slice(0, 5).map((s) => {
-                const coded = Object.values(s.codingData || {}).filter((c) => c.length > 0).length;
-                return (
-                  <div key={s.name} className="flex items-center justify-between p-2.5 rounded border hover:bg-muted/30">
-                    <div>
-                      <div className="text-sm font-medium">{s.name}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {s.data.length} rows · {coded} coded · {new Date(s.savedAt).toLocaleDateString()}
+            <div className="p-3 pt-0">
+              <div
+                className="grid gap-2"
+                style={{ gridTemplateColumns: "repeat(8, minmax(0, 1fr))" }}
+              >
+                {sessions.map((s) => {
+                  const coded = Object.values(s.codingData || {}).filter((c) => c.length > 0).length;
+                  return (
+                    <div
+                      key={s.name}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => loadSession(s)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          loadSession(s);
+                        }
+                      }}
+                      className="flex flex-col gap-0.5 p-2 rounded-md border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors min-w-0"
+                    >
+                      <div className="flex items-center justify-between gap-1 min-w-0">
+                        <div className="text-xs font-medium truncate min-w-0" title={s.name}>{s.name}</div>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDeleteSession(s.name);
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                      <div
+                        className="text-[10px] text-muted-foreground leading-tight truncate"
+                        title={`${s.data.length} rows · ${coded} coded · ${new Date(s.savedAt).toLocaleDateString()}`}
+                      >
+                        {s.data.length} rows · {coded} · {new Date(s.savedAt).toLocaleDateString()}
                       </div>
                     </div>
-                    <div className="flex gap-1.5">
-                      <Button size="sm" variant="outline" onClick={() => loadSession(s)}>Load</Button>
-                      <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        onClick={() => setPendingDeleteSession(s.name)}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </CollapsibleContent>
         </Collapsible>
@@ -987,69 +1104,174 @@ export default function AICoderPage() {
 
       <div className="border-t" />
 
-      {/* ── 3. Define Codes with Highlights ───────────────────────────────── */}
+      {/* ── 3. Define Codes ────────────────────────────────────────────────── */}
       <div className="space-y-4 py-8">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h2 className="text-2xl font-bold">3. Define Codes</h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              Define your codes below. Highlight keywords are optional — used for visual emphasis during review.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <input ref={csvImportRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={importCodebook} />
-            <Button variant="outline" size="sm" onClick={() => csvImportRef.current?.click()}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" />Import CSV
-            </Button>
-            <Button variant="outline" size="sm" disabled={codebook.length === 0} onClick={exportCodebookCSV}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" />Export CSV
-            </Button>
-            <Select onValueChange={(key) => {
-              const cb = SAMPLE_CODEBOOKS[key];
-              if (cb) {
-                setCodebook(cb.map((e) => ({ ...e, id: crypto.randomUUID() })));
-                toast.success(`Loaded "${key}" sample codebook`);
-              }
-            }}>
-              <SelectTrigger className="h-8 text-xs w-[160px]"><SelectValue placeholder="Load an example..." /></SelectTrigger>
-              <SelectContent>
-                {Object.keys(SAMPLE_CODEBOOKS).map((k) => (
-                  <SelectItem key={k} value={k} className="text-xs">{k.replace(/_/g, " ")}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+        <h2 className="text-2xl font-bold">3. Define Codes</h2>
+        <p className="text-sm text-muted-foreground -mt-2">
+          Define your codes below. Highlight keywords are optional — used for visual emphasis during review.
+        </p>
+
+        <input ref={csvImportRef} type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => { importCodebook(e); setFileExtracted(true); setCsvPasteText(""); }} />
+
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant={codebookMode === "csv" ? "default" : "outline"}
+            size="sm"
+            className="text-xs"
+            onClick={() => setCodebookMode("csv")}
+          >
+            <ClipboardPaste className="h-3.5 w-3.5 mr-1.5" />
+            Type CSV
+          </Button>
+          <Button
+            variant={codebookMode === "file" ? "default" : "outline"}
+            size="sm"
+            className="text-xs"
+            onClick={() => setCodebookMode("file")}
+          >
+            <Upload className="h-3.5 w-3.5 mr-1.5" />
+            Import CSV/Excel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs"
+            disabled={codebook.length === 0}
+            onClick={exportCodebookExcel}
+          >
+            <Download className="h-3.5 w-3.5 mr-1.5" />
+            Export Excel
+          </Button>
+          <Select onValueChange={(key) => {
+            const cb = SAMPLE_CODEBOOKS[key];
+            if (cb) {
+              setCodebook(cb.map((e) => ({ ...e, id: crypto.randomUUID() })));
+              setCodebookMode("csv");
+              setCsvPasteText("");
+              setPasteExtracted(true);
+              toast.success(`Loaded "${key}" sample codebook`);
+            }
+          }}>
+            <SelectTrigger className="h-8 text-xs w-[160px]"><SelectValue placeholder="Load sample..." /></SelectTrigger>
+            <SelectContent>
+              {Object.keys(SAMPLE_CODEBOOKS).map((k) => (
+                <SelectItem key={k} value={k} className="text-xs">{k.replace(/_/g, " ")}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
-        <div className="border rounded-lg overflow-hidden">
-          <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
-          <div className="p-3 space-y-2">
-            {codebook.length === 0 ? (
-              <p className="text-center py-8 text-xs text-muted-foreground italic">No codes yet — click &ldquo;Add Code&rdquo; below or import a CSV file.</p>
-            ) : (
-              codebook.map((entry) => (
-                <div key={entry.id} className="flex gap-2 items-center">
-                  <Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="flex-[2] h-8 text-xs" />
-                  <Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="Description" className="flex-[3] h-8 text-xs" />
-                  <Input value={entry.highlights} onChange={(e) => updateCode(entry.id, "highlights", e.target.value)} placeholder="word1, word2, phrase…" className="flex-[3] h-8 text-xs" />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0"
-                    onClick={() => deleteCode(entry.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))
-            )}
-          </div>
-          <div className="px-3 pb-3">
-            <Button variant="outline" size="sm" className="w-full text-xs" onClick={addCode}>
-              <Plus className="h-3 w-3 mr-2" /> Add Code
+        {/* ── Type CSV mode ── */}
+        {codebookMode === "csv" && !pasteExtracted && !codebook.some((e) => e.code.trim()) && (
+          <div className="space-y-2">
+            <Textarea
+              placeholder={"One code per line: code label, description, highlights (comma-separated)\n\nBurnout, Emotional exhaustion from workload, exhausted,burned,tired,overwhelmed\nResilience, Capacity to cope with stress, resilient,cope,strength,adapt\nTeam Support, Positive collegial relationships, team,colleagues,support,together"}
+              className="min-h-[100px] text-xs font-mono resize-y"
+              value={csvPasteText}
+              onChange={(e) => setCsvPasteText(e.target.value)}
+            />
+            <Button variant="outline" size="sm" className="text-xs" onClick={extractFromPastedCsv}>
+              Extract Codes
             </Button>
           </div>
-        </div>
+        )}
+        {codebookMode === "csv" && (pasteExtracted || codebook.some((e) => e.code.trim())) && (
+          <>
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => {
+              const text = codebook.filter((e) => e.code.trim()).map((e) => `${e.code}, ${e.description}, ${e.highlights}`).join("\n");
+              setCsvPasteText(text);
+              setPasteExtracted(false);
+              setCodebook(emptyCodebook());
+            }}>
+              <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit as CSV
+            </Button>
+            <div className="border rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
+              <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
+                <div className="shrink-0 w-6" />
+                <div className="flex-[2]">Code label</div>
+                <div className="flex-[3]">Description</div>
+                <div className="flex-[3]">Highlights</div>
+                <div className="w-8 shrink-0" />
+              </div>
+              <div className="p-3 space-y-2">
+                {codebook.map((entry, idx) => (
+                  <div key={entry.id} className="flex gap-2 items-center">
+                    <div className="flex flex-col shrink-0">
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, -1)} disabled={idx === 0}>
+                        <ArrowUp className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, 1)} disabled={idx === codebook.length - 1}>
+                        <ArrowDown className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="flex-[2] h-8 text-xs" />
+                    <Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="Description" className="flex-[3] h-8 text-xs" />
+                    <Input value={entry.highlights} onChange={(e) => updateCode(entry.id, "highlights", e.target.value)} placeholder="word1, word2, phrase…" className="flex-[3] h-8 text-xs" />
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => deleteCode(entry.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <div className="px-3 pb-3 flex gap-2">
+                <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addCode}>
+                  <Plus className="h-3 w-3 mr-2" /> Add Code
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setCodebook(emptyCodebook())}>
+                  <Trash2 className="h-3 w-3 mr-2" /> Clear All
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Import CSV/Excel mode ── */}
+        {codebookMode === "file" && (
+          <>
+            <Button variant="outline" size="sm" className="text-xs" onClick={() => csvImportRef.current?.click()}>
+              <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Choose File"}
+            </Button>
+            <div className="border rounded-lg overflow-hidden">
+              <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Codebook</div>
+              <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
+                <div className="shrink-0 w-6" />
+                <div className="flex-[2]">Code label</div>
+                <div className="flex-[3]">Description</div>
+                <div className="flex-[3]">Highlights</div>
+                <div className="w-8 shrink-0" />
+              </div>
+              <div className="p-3 space-y-2">
+                {codebook.map((entry, idx) => (
+                  <div key={entry.id} className="flex gap-2 items-center">
+                    <div className="flex flex-col shrink-0">
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, -1)} disabled={idx === 0}>
+                        <ArrowUp className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveCode(idx, 1)} disabled={idx === codebook.length - 1}>
+                        <ArrowDown className="h-3 w-3" />
+                      </Button>
+                    </div>
+                    <Input value={entry.code} onChange={(e) => updateCode(entry.id, "code", e.target.value)} placeholder="Code label" className="flex-[2] h-8 text-xs" />
+                    <Input value={entry.description} onChange={(e) => updateCode(entry.id, "description", e.target.value)} placeholder="Description" className="flex-[3] h-8 text-xs" />
+                    <Input value={entry.highlights} onChange={(e) => updateCode(entry.id, "highlights", e.target.value)} placeholder="word1, word2, phrase…" className="flex-[3] h-8 text-xs" />
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => deleteCode(entry.id)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <div className="px-3 pb-3 flex gap-2">
+                <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addCode}>
+                  <Plus className="h-3 w-3 mr-2" /> Add Code
+                </Button>
+                <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setCodebook(emptyCodebook())}>
+                  <Trash2 className="h-3 w-3 mr-2" /> Clear All
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="border-t" />
@@ -1108,6 +1330,7 @@ export default function AICoderPage() {
                       size="sm"
                       className="bg-red-500 hover:bg-red-600 text-white"
                     >
+                      {batch.isProcessing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
                       Full Batch ({data.length} rows)
                     </Button>
                   </div>
@@ -1311,20 +1534,15 @@ export default function AICoderPage() {
               )}
             </div>
 
-            {/* ── Big Next button ──────────────────────────────────────────── */}
-            <Button className="w-full h-10 text-base" disabled={currentIndex >= totalRows - 1} onClick={() => navigate(1)}>
-              Next ▶
-            </Button>
-
             {/* ── Navigation bar (5 elements) ────────────────────────────────── */}
             <div className="grid grid-cols-5 gap-1.5 items-center">
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => setCurrentIndex(0)} disabled={currentIndex === 0}>◀◀</Button>
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => navigate(-1)} disabled={currentIndex === 0}>◀</Button>
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => setCurrentIndex(0)} disabled={currentIndex === 0}>◀◀</Button>
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => navigate(-1)} disabled={currentIndex === 0}>◀</Button>
               <div className="text-center text-sm font-medium border rounded px-3 py-1.5">
                 {currentIndex + 1} / {totalRows}
               </div>
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => navigate(1)} disabled={currentIndex >= totalRows - 1}>▶</Button>
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => setCurrentIndex(totalRows - 1)} disabled={currentIndex >= totalRows - 1}>▶▶</Button>
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => navigate(1)} disabled={currentIndex >= totalRows - 1}>▶</Button>
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => setCurrentIndex(totalRows - 1)} disabled={currentIndex >= totalRows - 1}>▶▶</Button>
             </div>
             <div className="text-[10px] text-muted-foreground text-center">
               ← → or h/l navigate &nbsp;·&nbsp; 1–9 toggle codes
@@ -1343,13 +1561,13 @@ export default function AICoderPage() {
                 </span>
               </div>
               <div className="flex gap-2 ml-auto flex-wrap">
-                <Button size="sm" variant="outline" onClick={() => setShowSaveDialog((v) => !v)}>
+                <Button size="sm" variant="outline" className="px-5" onClick={saveCurrent} title={loadedSessionName ? `Overwrite "${loadedSessionName}"` : "No session loaded — opens Save As"}>
                   <Save className="h-3.5 w-3.5 mr-1" /> Save
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setShowSessions((v) => !v)}>
-                  <FolderOpen className="h-3.5 w-3.5 mr-1" /> Load
+                <Button size="sm" variant="outline" className="px-5" onClick={() => setShowSaveDialog((v) => !v)}>
+                  <Save className="h-3.5 w-3.5 mr-1" /> Save As
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setShowTable((v) => !v)}>
+                <Button size="sm" variant="outline" className="px-6" onClick={() => setShowTable((v) => !v)}>
                   Table
                 </Button>
               </div>
@@ -1373,48 +1591,98 @@ export default function AICoderPage() {
 
             {/* Session browser */}
             {showSessions && (
-              <div className="border border-dashed rounded-xl overflow-hidden">
-                <div className="px-4 py-2 border-b text-sm font-medium">Saved Sessions</div>
-                <div className="p-3 space-y-1.5 max-h-64 overflow-y-auto">
-                  {sessions.length > 0 ? sessions.map((s) => {
-                    const coded = Object.values(s.codingData || {}).filter((c) => c.length > 0).length;
-                    return (
-                      <div key={s.name} className="flex items-center justify-between p-2 rounded hover:bg-muted/30 border">
-                        <div>
-                          <span className="text-sm font-medium">{s.name}</span>
-                          <span className="text-[10px] text-muted-foreground ml-2">
-                            {s.data.length} rows · {coded} coded · {new Date(s.savedAt).toLocaleDateString()}
-                          </span>
-                        </div>
-                        <div className="flex gap-1.5">
-                          <Button size="sm" variant="outline" className="h-7" onClick={() => loadSession(s)}>Load</Button>
-                          <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                            onClick={() => setPendingDeleteSession(s.name)}>
-                            <Trash2 className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  }) : <p className="text-sm text-muted-foreground p-2">No saved sessions</p>}
+              <div className="border rounded-lg overflow-hidden">
+                <div className="w-full px-4 py-3 text-left text-sm font-medium flex items-center justify-between bg-muted/20">
+                  <span className="flex items-center gap-2">
+                    <FolderOpen className="h-4 w-4" /> Saved Sessions
+                    <span className="text-xs text-muted-foreground">({sessions.length})</span>
+                  </span>
                 </div>
+                {sessions.length > 0 ? (
+                  <div className="border-t p-3 flex flex-wrap gap-2 max-h-64 overflow-y-auto">
+                    {sessions.map((s) => {
+                      const coded = Object.values(s.codingData || {}).filter((c) => c.length > 0).length;
+                      return (
+                        <div
+                          key={s.name}
+                          className="inline-flex items-center gap-1 border rounded-md pl-3 pr-1 py-1 bg-background hover:border-primary/40 transition-colors"
+                        >
+                          <button
+                            className="text-sm font-medium truncate max-w-[180px] hover:underline"
+                            onClick={() => loadSession(s)}
+                            title={`${s.name} — ${s.data.length} rows · ${coded} coded · ${new Date(s.savedAt).toLocaleDateString()}`}
+                          >
+                            {s.name}
+                          </button>
+                          <button
+                            className="text-muted-foreground hover:text-destructive p-1 shrink-0"
+                            onClick={() => setPendingDeleteSession(s.name)}
+                            title="Delete session"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground p-3 border-t">No saved sessions</p>
+                )}
               </div>
             )}
 
             {/* Table panel */}
             {showTable && (() => {
               const pageSize = 10;
-              const totalTablePages = Math.ceil(data.length / pageSize);
-              const pageData = data.slice(tablePage * pageSize, (tablePage + 1) * pageSize);
-              const startIdx = tablePage * pageSize;
+              // Filter rows by the active filter ("all", "uncoded", or a specific
+              // code label). Build {row, i} pairs so the original row index is
+              // preserved through the filter for navigation.
+              const filteredRows = data
+                .map((row, i) => ({ row, i }))
+                .filter(({ i }) => {
+                  if (tableFilter.size === 0) return true;
+                  const rowCodes = codingData[i] ?? [];
+                  if (rowCodes.length === 0) return tableFilter.has("uncoded");
+                  return rowCodes.some((c) => tableFilter.has(c));
+                });
+              const totalTablePages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+              const safePage = Math.min(tablePage, totalTablePages - 1);
+              const pageRows = filteredRows.slice(safePage * pageSize, (safePage + 1) * pageSize);
               return (
                 <div className="border rounded-xl overflow-hidden">
-                  <div className="px-4 py-3 border-b font-medium text-sm flex items-center justify-between">
+                  <div className="px-4 py-3 border-b font-medium text-sm flex items-center gap-2 flex-wrap">
                     <span>Records</span>
-                    <span className="text-xs text-muted-foreground font-normal">{totalRows} rows</span>
+                    <div className="flex gap-1 flex-wrap">
+                      <button onClick={() => { setTableFilter(new Set()); setTablePage(0); }}
+                        className={cn("px-2 py-0.5 rounded text-xs border",
+                          tableFilter.size === 0
+                            ? "bg-foreground text-background border-foreground"
+                            : "border-muted-foreground/30 text-muted-foreground hover:border-foreground/50"
+                        )}>
+                        All
+                      </button>
+                      {[...codes, "uncoded"].map((f) => (
+                        <button key={f} onClick={() => {
+                          setTableFilter((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(f)) next.delete(f); else next.add(f);
+                            return next;
+                          });
+                          setTablePage(0);
+                        }}
+                          className={cn("px-2 py-0.5 rounded text-xs border",
+                            tableFilter.has(f)
+                              ? "bg-foreground text-background border-foreground"
+                              : "border-muted-foreground/30 text-muted-foreground hover:border-foreground/50"
+                          )}>
+                          {f === "uncoded" ? "Uncoded" : f}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="ml-auto text-xs text-muted-foreground font-normal">{filteredRows.length} rows</span>
                   </div>
                   <div className="divide-y">
-                    {pageData.map((row, pi) => {
-                      const i = startIdx + pi;
+                    {pageRows.map(({ row, i }) => {
                       const rowCodes = codingData[i] ?? [];
                       const firstCol = Object.values(row).map(String).join(" · ").slice(0, 80);
                       return (
@@ -1444,20 +1712,25 @@ export default function AICoderPage() {
                         </button>
                       );
                     })}
+                    {filteredRows.length === 0 && (
+                      <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                        No rows match this filter.
+                      </div>
+                    )}
                   </div>
                   {totalTablePages > 1 && (
                     <div className="px-3 py-2 flex items-center justify-between text-xs text-muted-foreground border-t bg-muted/20">
-                      <span>{data.length} rows</span>
+                      <span>{filteredRows.length} rows</span>
                       <div className="flex items-center gap-2">
                         <span>
-                          {tablePage * pageSize + 1}&ndash;{Math.min((tablePage + 1) * pageSize, data.length)} of {data.length}
+                          {safePage * pageSize + 1}&ndash;{Math.min((safePage + 1) * pageSize, filteredRows.length)} of {filteredRows.length}
                         </span>
                         <Button variant="outline" size="sm" className="h-6 px-2"
-                          onClick={() => setTablePage((p) => Math.max(0, p - 1))} disabled={tablePage === 0}>
+                          onClick={() => setTablePage((p) => Math.max(0, p - 1))} disabled={safePage === 0}>
                           <ChevronLeft className="h-3 w-3" />
                         </Button>
                         <Button variant="outline" size="sm" className="h-6 px-2"
-                          onClick={() => setTablePage((p) => Math.min(totalTablePages - 1, p + 1))} disabled={tablePage >= totalTablePages - 1}>
+                          onClick={() => setTablePage((p) => Math.min(totalTablePages - 1, p + 1))} disabled={safePage >= totalTablePages - 1}>
                           <ChevronRight className="h-3 w-3" />
                         </Button>
                       </div>
@@ -1514,7 +1787,7 @@ export default function AICoderPage() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm">
-                  <Download className="h-3.5 w-3.5 mr-1.5" /> Export with AI <ChevronDown className="h-3 w-3 ml-1.5" />
+                  <Download className="h-3.5 w-3.5 mr-1.5" /> Export with AI Codes <ChevronDown className="h-3 w-3 ml-1.5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
@@ -1650,7 +1923,7 @@ function CodeButtonsPanel({
               {idx < 9 && <span className="text-[9px] opacity-40 absolute top-0.5 right-1">{idx + 1}</span>}
               <span>
                 {code}
-                {confValue > 0 && <span className="text-[10px] opacity-60 ml-1">({Math.round(confValue)}%)</span>}
+                {confValue > 0 && <span className="text-sm opacity-60 ml-1">({Math.round(confValue)}%)</span>}
               </span>
             </button>
           );
@@ -1684,7 +1957,7 @@ function CodeButtonsPanel({
             {idx < 9 && <span className="text-[9px] opacity-40 absolute top-0.5 right-1">{idx + 1}</span>}
             <span>
               {code}
-              {confValue > 0 && <span className="text-[10px] opacity-60 ml-1">({Math.round(confValue)}%)</span>}
+              {confValue > 0 && <span className="text-sm opacity-60 ml-1">({Math.round(confValue)}%)</span>}
             </span>
             <div className="flex items-center gap-2">
               {isApplied && <Check className="h-3.5 w-3.5 opacity-70" />}

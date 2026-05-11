@@ -100,11 +100,12 @@ describe("chunkPromptPrefix", () => {
 describe("isLikelyChunked", () => {
   it("returns false for small files", () => {
     expect(isLikelyChunked(5_000)).toBe(false);
-    expect(isLikelyChunked(10_000)).toBe(false);
+    expect(isLikelyChunked(50_000)).toBe(false);
+    expect(isLikelyChunked(100_000)).toBe(false);
   });
 
   it("returns true for large files", () => {
-    expect(isLikelyChunked(100_000)).toBe(true);
+    expect(isLikelyChunked(150_000)).toBe(true);
     expect(isLikelyChunked(500_000)).toBe(true);
   });
 });
@@ -122,7 +123,7 @@ describe("constants", () => {
     expect(CHUNK_CONCURRENCY).toBe(3);
   });
 
-  it("LARGE_FILE_BYTES is 15000", () => {
-    expect(LARGE_FILE_BYTES).toBe(15_000);
+  it("LARGE_FILE_BYTES is 100000", () => {
+    expect(LARGE_FILE_BYTES).toBe(100_000);
   });
 });

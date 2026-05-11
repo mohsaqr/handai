@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Handai is a qualitative/quantitative data analysis suite powered by LLMs. Built with Next.js 16, React 19, TypeScript (strict), Tailwind CSS v4, and Vercel AI SDK. Ships as a web app, a static export for GitHub Pages, and a Tauri v2 desktop app. Users upload CSV/XLSX files, pick an analysis tool and LLM provider, and run batch processing. Results are stored in SQLite (web), IndexedDB (static/browser-storage), or SQLite via Tauri plugin (desktop) and exportable as CSV.
+Handai is a qualitative/quantitative data analysis suite powered by LLMs. Built with Next.js 16, React 19, TypeScript (strict), Tailwind CSS v4, and Vercel AI SDK. Ships as a web app and a static export for GitHub Pages. Users upload CSV/XLSX files, pick an analysis tool and LLM provider, and run batch processing. Results are stored in SQLite (web) or IndexedDB (static/browser-storage) and exportable as CSV.
+
+(A Tauri v2 desktop wrapper is described in `desktop/README.md` but no `desktop/tauri/` directory, `db-tauri.ts`, or `build:tauri` script currently exists in the working tree — treat that doc as aspirational.)
 
 ## Prerequisites
 
@@ -16,7 +18,7 @@ Node.js 20+ and npm 10+.
 npm run dev          # Dev server at http://localhost:3000 (uses Webpack, not Turbopack)
 npm run build        # Production build (standalone output, 0 TS errors required)
 npm start            # Serve production build on port 3000
-npm test             # Vitest — run all tests across 4 suites
+npm test             # Vitest — run all tests across 5 suites
 npm run test:watch   # Vitest in watch mode
 npm run lint         # ESLint (flat config, next/core-web-vitals + next/typescript)
 npx tsc --noEmit     # TypeScript type-check (strict mode)
@@ -26,7 +28,7 @@ Run a single test file: `npx vitest run src/lib/__tests__/retry.test.ts`
 
 Run a single test by name: `npx vitest run -t "test name pattern"`
 
-Test files live in `src/lib/__tests__/` (analytics, prompts, retry, validation). Vitest runs in Node.js environment (not jsdom) — see `vitest.config.ts`.
+Test files live in `src/lib/__tests__/` (analytics, chunk-text, prompts, retry, validation). Vitest runs in Node.js environment (not jsdom) — see `vitest.config.ts`.
 
 ### First-Time Setup
 
@@ -45,7 +47,7 @@ For exhaustive detail, see `ARCHITECTURE.md`. Below is what you need to get prod
 The same React components work across two runtime contexts, but LLM calls and persistence take different paths:
 
 - **Web (server)**: Browser → `/api/process-row` (Next.js API route) → `src/lib/ai/providers.ts` (`getModel()`) → Provider API. Results logged via Prisma to SQLite.
-- **Browser-direct** (static builds, `NEXT_PUBLIC_BROWSER_STORAGE=1`, or Tauri desktop): Browser/WebView → `src/lib/llm-browser.ts` (`getModel()`) → Provider API direct. Results logged via `src/lib/db-indexeddb.ts` (IndexedDB) or `src/lib/db-tauri.ts` (Tauri SQLite). API keys stay in browser; local models work from user's machine.
+- **Browser-direct** (static builds or `NEXT_PUBLIC_BROWSER_STORAGE=1`): Browser → `src/lib/llm-browser.ts` (`getModel()`) → Provider API direct. Results logged via `src/lib/db-indexeddb.ts` (IndexedDB). API keys stay in browser; local models work from user's machine.
 
 `src/lib/llm-dispatch.ts` is the unified dispatch layer — tool pages call its functions (e.g., `dispatchProcessRow`, `dispatchCreateRun`, `dispatchSaveResults`) which internally branch on `useBrowserStorage` (`NEXT_PUBLIC_STATIC=1` OR `NEXT_PUBLIC_BROWSER_STORAGE=1`). Use dispatch functions instead of checking runtime context in page code.
 
@@ -54,11 +56,8 @@ The same React components work across two runtime contexts, but LLM calls and pe
 Controlled by env vars in `next.config.ts`:
 - `output: "standalone"` (default) — web deployment/Docker
 - `output: "export"` (when `STATIC_BUILD=1`) — static HTML for GitHub Pages (adds `basePath` + `assetPrefix` via `PAGES_BASE_PATH`)
-- `output: "export"` (when `TAURI_BUILD=1`) — static HTML bundled into Tauri v2 desktop app (`desktop/tauri/`)
 
-The `build:static` script (`bash scripts/build-static.sh`) temporarily moves `src/app/api/` and `src/app/history/[id]/page.tsx` out of the source tree (bash `trap` ensures restore on exit) because `output: "export"` cannot include API routes or dynamic routes.
-
-Tauri desktop uses `@tauri-apps/plugin-sql` for SQLite persistence and a Rust `save_file` command for native OS save dialogs. Runtime detection: `"__TAURI_INTERNALS__" in window`.
+The `build:static` script (`bash scripts/build-static.sh`) temporarily moves `src/app/api/` and `src/app/history/[id]/page.tsx` out of a `.tmp_backup/` dir (bash `trap` ensures restore on exit) because `output: "export"` cannot include API routes or dynamic routes. The script also passes `--webpack` to `next build` to match dev mode and avoid Turbopack ESM issues with `pdf-parse` / `pdfjs-dist`.
 
 ### Key Libraries
 
@@ -70,10 +69,10 @@ Tauri desktop uses `@tauri-apps/plugin-sql` for SQLite persistence and a Rust `s
 | Validation | Zod schemas for all API route request bodies | `src/lib/validation.ts` |
 | Retry | `withRetry()` — exponential backoff, fast-fail on auth/400 errors | `src/lib/retry.ts` |
 | Prompts | Prompt registry with per-tool localStorage overrides | `src/lib/prompts.ts` |
+| Agent library | Persisted `Agent[]` definitions (provider/model + persona + knowledge) shared across MAS Panel and other multi-agent flows; `buildAgentSystemPrefix()` composes the agent's base system prompt and MAS Panel's `composeStepSystemPrompt()` layers per-step persona/knowledge/task on top | `src/lib/agent-library.ts` |
 | Analytics | Cohen's kappa, pairwise agreement calculations | `src/lib/analytics.ts` |
 | DB (web) | Prisma 6 + SQLite (`prisma/dev.db`) | `src/lib/prisma.ts` |
 | DB (browser) | IndexedDB for static + browser-storage mode | `src/lib/db-indexeddb.ts` |
-| DB (desktop) | Tauri SQLite via `@tauri-apps/plugin-sql` | `src/lib/db-tauri.ts` |
 | Processing state | Zustand store for cross-navigation batch processing persistence | `src/lib/processing-store.ts` |
 | Session restore | Transfers run history payload back to tool pages | `src/lib/restore-store.ts` |
 | CSV export | `downloadCSV()` — blob download | `src/lib/export.ts` |
@@ -84,11 +83,10 @@ Tauri desktop uses `@tauri-apps/plugin-sql` for SQLite persistence and a Rust `s
 All in `src/app/api/`. Each route validates input with Zod schemas from `src/lib/validation.ts`:
 
 - `process-row` — Core single-row LLM dispatch (used by Transform, Qualitative Coder, AI Coder, Codebook Generator, Abstract Screener)
-- `consensus-row` — Multi-worker + judge for Consensus Coder
-- `comparison-row` — Parallel multi-model dispatch for Model Comparison
+- `consensus-row` — Multi-worker + judge for Model Comparison (page is `/model-comparison`; the route slug is still `consensus-row` to avoid breaking saved configs)
 - `automator-row` — Multi-step pipeline execution
 - `generate-row` — Synthetic data generation
-- `ai-agents-row` — Multi-agent negotiation with role-based personas, multi-round refinement, and referee synthesis
+- `agent-network-row` — Multi-agent deliberation: each agent in `agents[]` runs in parallel per round, sees the other agents' previous outputs, and refines via one of four communication styles (collaborative / adversarial / deliberative / socratic). Supports fixed or adaptive convergence (`convergenceMode`); adaptive caps at 5 rounds. Used by both MAS Panel (sequential / deliberation modes) and Model Comparison.
 - `document-extract` / `document-analyze` / `document-process` — PDF/DOCX processing (web uses Node.js `pdf-parse` + `mammoth`; static uses `pdfjs-dist` WASM + mammoth browser build via `src/lib/document-browser.ts`)
 - `local-models` — Probes Ollama (port 11434) + LM Studio (port 1234)
 - `runs` / `runs/[id]` / `results` — CRUD for run history
@@ -105,20 +103,24 @@ Schema at `prisma/schema.prisma`. Key models:
 
 Each tool is a page at `src/app/<tool-name>/page.tsx`. Pages are `"use client"` components that use the Zustand store for provider config and `p-limit` for concurrency control (governed by `systemSettings.maxConcurrency`).
 
-12 tool pages: `abstract-screener`, `ai-agents`, `ai-coder`, `automator`, `codebook-generator`, `consensus-coder`, `extract-data`, `generate`, `model-comparison`, `process-documents`, `qualitative-coder`, `transform` — plus `settings` and `history` (with `history/[id]` dynamic route).
+11 tool pages: `abstract-screener`, `mas-panel`, `ai-coder`, `automator`, `codebook-generator`, `model-comparison`, `extract-data`, `generate`, `process-documents`, `qualitative-coder`, `transform` — plus `settings` and `history` (with `history/[id]` dynamic route). The sidebar groups Model Comparison + MAS Panel under "Multi Agent System". Note: `model-comparison/` was renamed from `consensus-coder/` — the file path and route changed but the API route (`/api/consensus-row`) and runType in old history rows (`"consensus-coder"`) are preserved for backward compat. Similarly, `mas-panel/` was renamed from `agent-panel/` — the URL is now `/mas-panel` but `runType: "agent-panel"` and `useRestoreSession("agent-panel")` are preserved so old history rows still render and restore. The older standalone `ai-agents` page was removed and its multi-agent flow is now covered by MAS Panel via `/api/agent-network-row`.
 
 ### Shared Hooks (`src/hooks/`)
 
 | Hook | Purpose |
 |---|---|
-| `useBatchProcessor` | Reusable parallel batch LLM processing with progress, abort, resume, stats, and run history logging. Used by most tool pages (7 of 10 tools). |
+| `useBatchProcessor` | Reusable parallel batch LLM processing with progress, abort, resume, stats, and run history logging. Used by 9 of 11 tool pages. |
 | `useAIInstructions` | Manages AI instruction text with localStorage persistence. |
 | `useColumnSelection` | Manages which CSV columns are selected for processing. |
 | `usePersistedPrompt` | Persists a prompt textarea to localStorage with a given key. |
 | `useProcessingFlag` | Registers processing status in global store for sidebar indicators. |
 | `useRestoreSession` | Consumes session restore payload from history page. |
+| `useSessionState` | `useState` replacement that persists to sessionStorage; survives cross-tool navigation. Gates writes behind a hydrated flag to avoid clobbering stored data. |
+| `useFileStatesState` | Like `useSessionState` but for `FileState[]` — serializes `File` objects as metadata and rehydrates real `File`s from a module-level Map (see `useFilesRef`). |
+| `useFilesRef` | Module-level `Map<string, File>` store + `useFileStatuses` helper that derives per-file status from batch results. Companion to `useFileStatesState`. |
+| `use-mobile` | Viewport media-query hook used by the sidebar. |
 
-**Note:** `codebook-generator`, `generate`, and `process-documents` do not yet use `useBatchProcessor` — they have custom processing loops.
+**Note:** `codebook-generator` and `generate` are the only tool pages that don't use `useBatchProcessor` — they have custom processing loops.
 
 ### Processing Persistence
 
@@ -142,14 +144,16 @@ Batch processing survives page navigation via a module-level architecture:
 | `FileUploader` | Drag-and-drop file upload zone |
 | `AIInstructionsSection` | AI instructions textarea with persistence |
 | `SampleDatasetPicker` | Dropdown to load built-in sample datasets for testing |
+| `SmartFileUpload` | Single-file dropzone + sample dataset picker + inline preview/error (used by document-centric tools like `process-documents`) |
+| `SingleRunButton` | Single-row test-run button with inline output panel |
 
 UI primitives from shadcn/ui in `src/components/ui/`.
 
 ### AI Coder Architecture
 
-AI Coder (`src/app/ai-coder/`) is the most complex tool page. Unlike other tools that use batch-only processing, AI Coder has an **interactive row-by-row coding interface** with optional batch processing:
+AI Coder (`src/app/ai-coder/`) is the most complex tool page. Unlike other tools that use batch-only processing, AI Coder has an **interactive row-by-row coding interface** layered on top of batch processing:
 
-- **page.tsx** — Main page with 6 sections: Upload, Columns, Codebook, AI Instructions, Code Data (interactive), Export Results. Does NOT use `useBatchProcessor` — implements its own inline batch loop.
+- **page.tsx** — Main page with 6 sections: Upload, Columns, Codebook, AI Instructions, Code Data (interactive), Export Results. Uses `useBatchProcessor` for the AI suggestion pass while `codingData` (human codes) is edited inline in the review UI.
 - **AnalyticsDialog.tsx** — Near-full-screen dialog showing code frequency, AI vs human agreement (precision/recall), and disagreement list. Uses `codingData` (human codes) and `aiData` (AI suggestions) for metrics.
 - **ReviewPanel.tsx** — Row-by-row review panel for correcting AI batch results. Exports `CodeEntry` type used across all AI Coder components.
 
@@ -162,6 +166,16 @@ Key state in page.tsx:
 localStorage keys: `aic_autosave` (session recovery), `aic_settings` (UI settings), `aic_named_sessions` (saved sessions), `handai_codebook_aicoder` (codebook persistence).
 
 Abstract Screener also uses autosave (`as_autosave` key) with the same recovery banner pattern on page load.
+
+### MAS Panel Architecture
+
+MAS Panel (`src/app/mas-panel/`, route `/mas-panel`) is a multi-agent workflow builder that dispatches through `/api/agent-network-row`. Three workflow modes (`WorkflowMode` in `workflow-types.ts`):
+
+- **reconcilier** (formerly `"wizard"`) — Single-shot consensus dispatch; `taskDescription` is forwarded as the dispatcher's `instruction`/`reconcilerPrompt` (so `composeStepSystemPrompt` is called with `includeTask: false` to avoid duplicating it in the system prompt). A back-compat migration in `mas-panel/page.tsx` silently converts persisted `"wizard"` mode values to `"reconcilier"` on read.
+- **sequential** — Steps run one after another; each step's output feeds the next.
+- **deliberation** — Steps run in parallel rounds with cross-agent visibility, governed by `DeliberationSettings` (max rounds + fixed/adaptive convergence; adaptive caps at 5 rounds in the API route).
+
+Each `WorkflowStep` references an `Agent` from the shared library by `agentId` and layers per-step `persona` / `additionalKnowledge` / `taskDescription` on top — these are *additive*, never replacing the agent's own definition. Composition is centralized in `composeStepSystemPrompt()` (`workflow-types.ts`) so all three modes produce consistent system prompts.
 
 6 sample datasets are available in `src/lib/sample-data.ts` (product reviews, healthcare interviews, support tickets, learning experiences, exit interviews, stakeholder feedback) — all tools can use these for testing without requiring file uploads.
 

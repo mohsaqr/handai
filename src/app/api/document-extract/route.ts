@@ -3,8 +3,10 @@ import { generateText } from "ai";
 import { getModel } from "@/lib/ai/providers";
 import { withRetry } from "@/lib/retry";
 import { DocumentExtractSchema } from "@/lib/validation";
-import { getPrompt, formatExtractionSchemaJson } from "@/lib/prompts";
+import { formatExtractionSchemaJson } from "@/lib/prompts";
 import { chunkText, chunkPromptPrefix, CHUNK_CONCURRENCY } from "@/lib/chunk-text";
+import { buildStructuredSystemPrompt, buildStructuredUserPrompt, chunkRows, collectColumns } from "@/lib/structured-extract";
+import type { FieldDef } from "@/types";
 import pLimit from "p-limit";
 
 // ── Default prompt when no field schema is provided ───────────────────────────
@@ -216,8 +218,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt, fields, maxTokens } =
+    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt, fields, maxTokens, structuredRows } =
       parsed.data;
+
+    // ── Structured-file fast path ──────────────────────────────────────────
+    // Caller already parsed CSV/XLSX/JSON/RIS into rows. Skip text extraction
+    // and send the LLM a JSON payload (file title + columns + rows).
+    if (structuredRows && structuredRows.length > 0) {
+      return await handleStructured({
+        rows: structuredRows, fields, fileName: fileName ?? "untitled",
+        provider, model, apiKey, baseUrl, maxTokens,
+      });
+    }
 
     const { text: rawText, truncated, charCount } = await extractText(fileContent, fileType);
 
@@ -350,11 +362,17 @@ ABSOLUTE RULES:
       }, { status: 422 });
     }
 
-    // Merge single-key objects into one record (LLM sometimes returns one field per object)
+    // Merge single-key objects into one record only when they're true FRAGMENTS
+    // of a single record (each contributes a distinct field). Must NOT collapse
+    // legitimate single-column multi-record output (e.g. [{name:"Alice"},{name:"Bob"}])
+    // where every record has the same key — that's the answer the user asked for.
     if (records.length > 1 && records.every((r) => Object.keys(r).length === 1)) {
-      const merged: Record<string, unknown> = {};
-      for (const r of records) Object.assign(merged, r);
-      records = [merged];
+      const allKeys = new Set(records.flatMap((r) => Object.keys(r)));
+      if (allKeys.size === records.length) {
+        const merged: Record<string, unknown> = {};
+        for (const r of records) Object.assign(merged, r);
+        records = [merged];
+      }
     }
 
     // Map LLM-returned keys to defined field names and fill missing with ""
@@ -407,4 +425,123 @@ ABSOLUTE RULES:
     console.error("document-extract error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+// ── Structured-rows handler ────────────────────────────────────────────────────
+
+async function handleStructured(params: {
+  rows: Record<string, unknown>[];
+  fields?: FieldDef[];
+  fileName: string;
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  maxTokens?: number;
+}): Promise<NextResponse> {
+  const { rows, fields, fileName } = params;
+  const columns = collectColumns(rows);
+
+  // No fields defined → return rows directly. The input columns are the answer.
+  if (!fields || fields.length === 0) {
+    return NextResponse.json({
+      records: rows, fileName, charCount: 0, truncated: false,
+      count: rows.length, chunks: 1, failedChunks: 0,
+    });
+  }
+
+  const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
+  const outputOpts: Record<string, unknown> = {};
+  if (params.maxTokens) outputOpts.maxOutputTokens = params.maxTokens;
+  const systemPrompt = buildStructuredSystemPrompt(fields);
+  const rowChunks = chunkRows(rows);
+
+  const runChunk = async (chunkRowsArr: Record<string, unknown>[], rowOffset: number): Promise<Record<string, unknown>[]> => {
+    const userPrompt = buildStructuredUserPrompt({
+      fileName, columns, rows: chunkRowsArr, rowOffset, totalRows: rows.length,
+    });
+    const { text } = await withRetry(
+      () => generateText({ model: aiModel, system: systemPrompt, prompt: userPrompt, ...outputOpts }),
+      { maxAttempts: 3, baseDelayMs: 200 }
+    );
+    let recs = tryParseJson(text.replace(/^```(?:json|csv)?\s*/im, "").replace(/\s*```\s*$/m, "").trim());
+    if (recs.length === 0) {
+      const fieldList = fields.map((f) => `- "${f.name}" (${f.type})${f.description ? ": " + f.description : ""}`).join("\n");
+      const reformatPrompt = `You are a JSON reformatter. Return ONLY a JSON array of records with these fields:\n${fieldList}\n\nFirst char "[", last char "]". No prose. Use null for missing values.`;
+      const { text: reformatted } = await withRetry(
+        () => generateText({ model: aiModel, system: reformatPrompt, prompt: text, ...outputOpts }),
+        { maxAttempts: 2, baseDelayMs: 200 }
+      );
+      recs = tryParseJson(reformatted.replace(/^```(?:json|csv)?\s*/im, "").replace(/\s*```\s*$/m, "").trim());
+    }
+    return recs;
+  };
+
+  let records: Record<string, unknown>[] = [];
+  let failedChunks = 0;
+  const warnings: string[] = [];
+
+  if (rowChunks.length === 1) {
+    records = await runChunk(rowChunks[0], 0);
+  } else {
+    const limit = pLimit(CHUNK_CONCURRENCY);
+    const offsets: number[] = [];
+    let acc = 0;
+    for (const c of rowChunks) { offsets.push(acc); acc += c.length; }
+    const results = await Promise.allSettled(
+      rowChunks.map((c, i) => limit(() => runChunk(c, offsets[i])))
+    );
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === "fulfilled") records.push(...r.value);
+      else {
+        failedChunks++;
+        const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        console.error(`document-extract (structured): chunk ${i + 1}/${rowChunks.length} failed for "${fileName}": ${reason}`);
+      }
+    }
+    if (failedChunks > 0) {
+      warnings.push(`${failedChunks} of ${rowChunks.length} row batches failed — results may be incomplete`);
+    }
+  }
+
+  if (records.length === 0) {
+    return NextResponse.json({ error: failedChunks > 0
+      ? `All ${rowChunks.length} row batches failed during extraction.`
+      : "Model returned unparseable output. Try a stronger model.",
+    }, { status: 422 });
+  }
+
+  // Field normalization (same logic as the text-based path)
+  const fieldNames = fields.map((f) => f.name);
+  const fieldNamesLower = fieldNames.map((n) => n.toLowerCase().replace(/[\s_-]+/g, ""));
+  records = records.map((r) => {
+    const out: Record<string, unknown> = {};
+    for (const f of fieldNames) if (f in r) out[f] = r[f];
+    for (const [key, value] of Object.entries(r)) {
+      if (fieldNames.includes(key)) continue;
+      const keyNorm = key.toLowerCase().replace(/[\s_-]+/g, "");
+      for (let i = 0; i < fieldNamesLower.length; i++) {
+        if (out[fieldNames[i]] !== undefined) continue;
+        if (keyNorm === fieldNamesLower[i] || keyNorm.endsWith(fieldNamesLower[i]) || keyNorm.includes(fieldNamesLower[i])) {
+          out[fieldNames[i]] = value;
+          break;
+        }
+      }
+    }
+    for (const f of fieldNames) if (out[f] === undefined) out[f] = "";
+    return out;
+  });
+
+  const allEmpty = records.every((r) => fieldNames.every((f) => r[f] === "" || r[f] === null || r[f] === undefined));
+  if (allEmpty) {
+    const preview = JSON.stringify(rows[0] ?? {}).slice(0, 200);
+    return NextResponse.json({ error: `Model returned no usable field values. The document may lack extractable text (scanned PDF?) or the field definitions don't match its content. Preview: "${preview}"` }, { status: 422 });
+  }
+
+  return NextResponse.json({
+    records, fileName, charCount: 0, truncated: false,
+    count: records.length, chunks: rowChunks.length, failedChunks,
+    ...(warnings.length > 0 ? { warnings } : {}),
+  });
 }

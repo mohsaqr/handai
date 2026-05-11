@@ -60,17 +60,18 @@ function makeStep(idx: number): Step {
   };
 }
 
+function makeDefaultSteps(): Step[] {
+  const s1 = makeStep(1);
+  const s2 = makeStep(2);
+  s2.input_fields = s1.output_fields.map((f) => f.name);
+  return [s1, s2];
+}
+
 export default function AutomatorPage() {
   const [data, setData] = useSessionState<Row[]>("automator_data", []);
   const [dataName, setDataName] = useSessionState("automator_dataName", "");
   const [availableCols, setAvailableCols] = useSessionState<string[]>("automator_availableCols", []);
-  const [steps, setSteps] = useState<Step[]>(() => {
-    const s1 = makeStep(1);
-    const s2 = makeStep(2);
-    // Prefill step 2's inputs with step 1's output fields.
-    s2.input_fields = s1.output_fields.map((f) => f.name);
-    return [s1, s2];
-  });
+  const [steps, setSteps] = useState<Step[]>(makeDefaultSteps);
   const [isMounted, setIsMounted] = useState(false);
 
   const uploadRef = useRef<HTMLDivElement>(null);
@@ -80,7 +81,17 @@ export default function AutomatorPage() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STEPS_KEY);
-      if (saved) setSteps(JSON.parse(saved) as Step[]);
+      if (saved) {
+        const loaded = JSON.parse(saved) as Step[];
+        for (let i = 1; i < loaded.length; i++) {
+          if (!loaded[i].input_fields || loaded[i].input_fields.length === 0) {
+            loaded[i].input_fields = loaded[i - 1].output_fields
+              .map((f) => f.name)
+              .filter((n) => n.trim().length > 0);
+          }
+        }
+        setSteps(loaded);
+      }
     } catch {}
     setIsMounted(true);
   }, []);
@@ -141,22 +152,45 @@ export default function AutomatorPage() {
     );
 
   const updateFieldInStep = (stepId: string, fieldIdx: number, updates: Partial<OutputField>) =>
-    setSteps((prev) =>
-      prev.map((s) =>
-        s.id === stepId
-          ? { ...s, output_fields: s.output_fields.map((f, i) => (i === fieldIdx ? { ...f, ...updates } : f)) }
-          : s
-      )
-    );
+    setSteps((prev) => {
+      const stepIdx = prev.findIndex((s) => s.id === stepId);
+      if (stepIdx === -1) return prev;
+      const oldName = prev[stepIdx].output_fields[fieldIdx]?.name ?? "";
+      const newName = updates.name ?? oldName;
+      const nameChanged = updates.name !== undefined && oldName !== newName;
+
+      return prev.map((s, i) => {
+        if (i === stepIdx) {
+          return { ...s, output_fields: s.output_fields.map((f, j) => (j === fieldIdx ? { ...f, ...updates } : f)) };
+        }
+        if (!nameChanged || i <= stepIdx) return s;
+        // Rename: propagate old→new in any later step that referenced the old name
+        if (oldName && s.input_fields.includes(oldName)) {
+          return { ...s, input_fields: s.input_fields.map((f) => (f === oldName ? newName : f)) };
+        }
+        // New name on previously-empty field: auto-select in the immediate next step
+        if (!oldName && newName.trim() && i === stepIdx + 1 && !s.input_fields.includes(newName)) {
+          return { ...s, input_fields: [...s.input_fields, newName] };
+        }
+        return s;
+      });
+    });
 
   const removeFieldFromStep = (stepId: string, fieldIdx: number) =>
-    setSteps((prev) =>
-      prev.map((s) =>
-        s.id === stepId
-          ? { ...s, output_fields: s.output_fields.filter((_, i) => i !== fieldIdx) }
-          : s
-      )
-    );
+    setSteps((prev) => {
+      const stepIdx = prev.findIndex((s) => s.id === stepId);
+      if (stepIdx === -1) return prev;
+      const removedName = prev[stepIdx].output_fields[fieldIdx]?.name ?? "";
+      return prev.map((s, i) => {
+        if (i === stepIdx) {
+          return { ...s, output_fields: s.output_fields.filter((_, j) => j !== fieldIdx) };
+        }
+        if (i > stepIdx && removedName && s.input_fields.includes(removedName)) {
+          return { ...s, input_fields: s.input_fields.filter((f) => f !== removedName) };
+        }
+        return s;
+      });
+    });
 
   const getFieldsForStep = (stepIdx: number): string[] => {
     const fields = [...availableCols];
@@ -371,7 +405,7 @@ export default function AutomatorPage() {
           <h1 className="text-4xl font-bold">General Automator</h1>
           <p className="text-muted-foreground text-sm">Create and run multi-step AI data pipelines</p>
         </div>
-        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("automator_"); setData([]); setDataName(""); setAvailableCols([]); setSteps([makeStep(1), makeStep(2)]); localStorage.removeItem(STEPS_KEY); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("automator_"); setData([]); setDataName(""); setAvailableCols([]); setSteps(makeDefaultSteps()); localStorage.removeItem(STEPS_KEY); setAiInstructions(""); batch.clearResults(); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
       </div>

@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { parseStructuredFile, getFileExt } from "@/lib/parse-file";
 import { useFilesRef, useFileStatuses, fileKey } from "@/hooks/useFilesRef";
 import { useDropzone } from "react-dropzone";
 // DataTable and ExportDropdown are used internally by ResultsPanel
@@ -19,6 +20,7 @@ import { NoModelWarning } from "@/components/tools/NoModelWarning";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { useSessionState, clearSessionKeys } from "@/hooks/useSessionState";
+import { useFileStatesState } from "@/hooks/useFileStatesState";
 import { useBatchProcessor } from "@/hooks/useBatchProcessor";
 import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { useProcessingStore } from "@/lib/processing-store";
@@ -45,9 +47,8 @@ import { toast } from "sonner";
 import type { FieldDef, FileState } from "@/types";
 import { dispatchDocumentExtract, dispatchDocumentAnalyze } from "@/lib/llm-dispatch";
 import { getPrompt, formatExtractionSchema } from "@/lib/prompts";
-import { FileUploader } from "@/components/tools/FileUploader";
 import { Textarea } from "@/components/ui/textarea";
-import { LARGE_FILE_BYTES, isLikelyChunked } from "@/lib/chunk-text";
+import { LARGE_FILE_BYTES, isLikelyChunked, distributeBudget } from "@/lib/chunk-text";
 import * as XLSX from "xlsx";
 import pLimit from "p-limit";
 
@@ -84,18 +85,8 @@ export default function ExtractDataPage() {
   const systemSettings = useSystemSettings();
 
   // ── Section 1: Documents
-  const [fileStates, setFileStates] = useSessionState<FileState[]>("extractdata_fileStates", []);
-  const filesRef = useFilesRef();
-
-  // File objects can't survive a reload; drop persisted entries whose files are gone.
-  useEffect(() => {
-    setFileStates((prev) => {
-      if (prev.length === 0) return prev;
-      const valid = prev.filter((fs) => filesRef.current.has(fileKey(fs.file)));
-      return valid.length === prev.length ? prev : valid;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const filesRef = useFilesRef("extract-data");
+  const [fileStates, setFileStates] = useFileStatesState("extractdata_fileStates", filesRef.current);
 
   // ── Section 2: Describe Data
   const [customPrompt, setCustomPrompt] = useSessionState("extractdata_customPrompt", "");
@@ -137,6 +128,10 @@ export default function ExtractDataPage() {
   }, [setFields]);
 
   // ── Import from CSV/Excel ───────────────────────────────────────────────────
+  const templateFileInputRef = useRef<HTMLInputElement>(null);
+  const openTemplateFilePicker = useCallback(() => {
+    templateFileInputRef.current?.click();
+  }, []);
   const handleTemplateFile = useCallback((rows: Record<string, unknown>[]) => {
     if (rows.length === 0) return toast.error("File appears empty");
     const keys = Object.keys(rows[0]);
@@ -155,6 +150,23 @@ export default function ExtractDataPage() {
     setFileExtracted(true);
     toast.success(`${imported.length} columns imported`);
   }, [setFields]);
+
+  const handleTemplateFileSelected = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const rows = await parseStructuredFile(file);
+      if (!rows) {
+        toast.error(`Failed to parse .${getFileExt(file.name)} file`);
+        return;
+      }
+      setColumnMode("file");
+      handleTemplateFile(rows);
+    } catch (err: unknown) {
+      toast.error(`Failed to process file: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [handleTemplateFile]);
 
   // ── Extract from pasted CSV ───────────────────────────────────────────────
   const extractFromPastedCsv = useCallback(() => {
@@ -260,43 +272,73 @@ export default function ExtractDataPage() {
 
     setAnalyzing(true);
     try {
+      // Extract text from every file in parallel, then share a fixed total
+      // character budget across them: each file gets `TOTAL_BUDGET / N`, and
+      // any leftover from short files is redistributed to longer ones.
+      const { extractTextBrowser } = await import("@/lib/document-browser");
+      const TOTAL_BUDGET = 3000;
       const limit = pLimit(systemSettings.maxConcurrency || 5);
-      const settled = await Promise.allSettled(
-        fileStates.map((fs) => limit(() =>
-          dispatchDocumentAnalyze({
-            file: fs.file,
-            provider: activeModel.providerId,
-            model: activeModel.defaultModel,
-            apiKey: activeModel.apiKey || "",
-            baseUrl: activeModel.baseUrl,
-            hint: customPrompt.trim() || undefined,
-          })
-        ))
+      const settledTexts = await Promise.allSettled(
+        fileStates.map((fs) => limit(async () => {
+          if (fs.file.size === 0) return { name: fs.file.name, text: "" };
+          const { text } = await extractTextBrowser(fs.file);
+          return { name: fs.file.name, text };
+        }))
       );
 
-      // Merge fields across files, dedupe by lowercased name, keep first type/description
+      let failed = 0;
+      const fullSections: Array<{ name: string; text: string }> = [];
+      for (const r of settledTexts) {
+        if (r.status !== "fulfilled" || !r.value.text.trim()) { failed++; continue; }
+        fullSections.push(r.value);
+      }
+      if (fullSections.length === 0) {
+        toast.error("Could not read any of the uploaded files.");
+        return;
+      }
+
+      // Allocate the shared budget proportionally across the surviving files.
+      const allocations = distributeBudget(fullSections.map((s) => s.text.length), TOTAL_BUDGET);
+      const readSections = fullSections.map((s, i) => ({ name: s.name, text: s.text.slice(0, allocations[i]) }));
+
+      // Alphabetize so upload order doesn't bias the suggestions.
+      readSections.sort((a, b) => a.name.localeCompare(b.name));
+      const sectionBlocks = readSections.map((s) => `=== ${s.name} ===\n\n${s.text}`);
+      const preamble =
+        `The text below contains ${readSections.length} separate document${readSections.length !== 1 ? "s" : ""}, ` +
+        `each introduced by a "=== filename ===" header and separated by "---". ` +
+        `Treat every section as equally important — do NOT prefer fields from earlier sections over later ones. ` +
+        `Derive a single unified schema that covers all documents.`;
+      const combinedText = `${preamble}\n\n${sectionBlocks.join("\n\n---\n\n")}`;
+      const combinedFile = new File([combinedText], "combined_documents.txt", { type: "text/plain" });
+
+      const { fields: suggested } = await dispatchDocumentAnalyze({
+        file: combinedFile,
+        provider: activeModel.providerId,
+        model: activeModel.defaultModel,
+        apiKey: activeModel.apiKey || "",
+        baseUrl: activeModel.baseUrl,
+        hint: customPrompt.trim() || undefined,
+      });
+
+      // Dedupe by lowercased name (LLM may still repeat similar names across sections).
       const validTypes = new Set(FIELD_TYPES);
       const merged = new Map<string, FieldDef>();
-      let failed = 0;
-      for (const r of settled) {
-        if (r.status !== "fulfilled") { failed++; continue; }
-        const fields = (r.value.fields as FieldDef[] | undefined) ?? [];
-        for (const f of fields) {
-          const key = (f.name || "").trim().toLowerCase();
-          if (!key || merged.has(key)) continue;
-          merged.set(key, {
-            name: f.name,
-            type: validTypes.has(f.type) ? f.type : "text",
-            description: f.description || "",
-          });
-        }
+      for (const f of (suggested ?? [])) {
+        const key = (f.name || "").trim().toLowerCase();
+        if (!key || merged.has(key)) continue;
+        merged.set(key, {
+          name: f.name,
+          type: validTypes.has(f.type) ? f.type : "text",
+          description: f.description || "",
+        });
       }
 
       if (merged.size > 0) {
         setFields(Array.from(merged.values()));
         setHasSuggestedOnce(true);
         const analyzed = fileStates.length - failed;
-        toast.success(`${merged.size} fields suggested from ${analyzed} file${analyzed !== 1 ? "s" : ""}${failed > 0 ? ` (${failed} failed)` : ""}`);
+        toast.success(`${merged.size} fields suggested from ${analyzed} file${analyzed !== 1 ? "s" : ""}${failed > 0 ? ` (${failed} skipped)` : ""}`);
       } else {
         toast.info("No suggestions returned. Try with more structured documents.");
       }
@@ -338,6 +380,33 @@ export default function ExtractDataPage() {
       const file = filesRef.current.get(fKey);
       if (!file) throw new Error(`File not found: ${row.document_name}`);
 
+      // Snapshot content for restorable file types so a future "Restore Session"
+      // can rebuild a real, runnable File. Binary types (PDF/DOCX) skip this and
+      // stay as placeholders on restore.
+      const RESTORE_SIZE_CAP = 5_000_000; // 5 MB — beyond this, fall back to placeholder
+      const ext = getFileExt(file.name);
+      let restoreContent: string | undefined;
+      let restoreMime: string | undefined;
+      let restoreName: string | undefined;
+      try {
+        if (file.size <= RESTORE_SIZE_CAP) {
+          if (["csv", "json", "txt", "md", "html", "htm"].includes(ext)) {
+            restoreContent = await file.text();
+            restoreMime = file.type || "text/plain";
+            restoreName = file.name;
+          } else if (ext === "xlsx" || ext === "xls") {
+            const buf = await file.arrayBuffer();
+            const wb = XLSX.read(buf, { type: "array" });
+            const firstSheet = wb.Sheets[wb.SheetNames[0]];
+            restoreContent = XLSX.utils.sheet_to_csv(firstSheet);
+            restoreMime = "text/csv";
+            restoreName = file.name.replace(/\.(xlsx|xls)$/i, ".csv");
+          }
+        }
+      } catch {
+        // Snapshot is best-effort — failure just means restore falls back to placeholder.
+      }
+
       const systemPrompt = buildSystemPrompt();
       const namedFields = fields.filter((f) => f.name.trim());
 
@@ -367,11 +436,23 @@ export default function ExtractDataPage() {
         _chunk_count: result.chunks,
         status: "success",
         latency_ms: latency,
+        ...(restoreContent !== undefined && {
+          _file_content: restoreContent,
+          _file_mime: restoreMime,
+          _file_restore_name: restoreName,
+        }),
       };
     },
     buildResultEntry: (r: Row, i: number) => ({
       rowIndex: i,
-      input: { document_name: r.document_name } as Record<string, unknown>,
+      input: {
+        document_name: r.document_name,
+        ...(typeof r._file_content === "string" && {
+          _file_content: r._file_content,
+          _file_mime: r._file_mime,
+          _file_restore_name: r._file_restore_name,
+        }),
+      } as Record<string, unknown>,
       output: (r._all_records as string) ?? JSON.stringify(r),
       status: (r.status as string) ?? "success",
       latency: r.latency_ms as number | undefined,
@@ -389,12 +470,18 @@ export default function ExtractDataPage() {
       if (r.status !== "success" || !r._all_records) continue;
       try {
         let records = JSON.parse(r._all_records as string) as Row[];
-        // Detect pattern where LLM returns one field per object instead of one record
-        // e.g. [{full_name: "..."}, {birth_year: "..."}] → merge into [{full_name: "...", birth_year: "..."}]
+        // Detect the "fragment" pattern where the LLM splits ONE record across
+        // multiple single-field objects (e.g. [{full_name: "..."}, {birth_year: "..."}])
+        // and merge them back into one record. We must NOT collapse legitimate
+        // single-column multi-record output (e.g. [{name: "Alice"}, {name: "Bob"}]) —
+        // that's only true fragmentation when the keys across records are DISTINCT.
         if (records.length > 1 && records.every((rec) => Object.keys(rec).length === 1)) {
-          const merged: Row = {};
-          for (const rec of records) Object.assign(merged, rec);
-          records = [merged];
+          const allKeys = new Set(records.flatMap((rec) => Object.keys(rec)));
+          if (allKeys.size === records.length) {
+            const merged: Row = {};
+            for (const rec of records) Object.assign(merged, rec);
+            records = [merged];
+          }
         }
         for (const rec of records) {
           // Clean record: remove keys that are clearly not field data
@@ -404,6 +491,8 @@ export default function ExtractDataPage() {
               clean[k] = v;
             }
           }
+          clean.status = r.status ?? "success";
+          clean.latency_ms = typeof r.latency_ms === "number" ? r.latency_ms : 0;
           rows.push(clean);
         }
       } catch {
@@ -443,14 +532,25 @@ export default function ExtractDataPage() {
         if (parsed.length > 0) setFields(parsed);
       }
 
-      // Restore file list as placeholder entries (actual File objects can't be serialized)
-      const placeholderFiles: FileState[] = restored.data.map((row) => {
+      // Restore file list. For text-based / spreadsheet inputs (CSV/JSON/TXT/MD/
+      // HTML/XLSX→CSV), processRow snapshotted the content into inputJson, so we
+      // can rebuild a real, runnable File. Binary types (PDF/DOCX) fall through
+      // to a zero-byte placeholder — user must re-upload to re-run.
+      const restoredFiles: FileState[] = restored.data.map((row) => {
         const name = (row.document_name as string) || "document";
+        const content = row._file_content;
+        if (typeof content === "string") {
+          const restoreName = (row._file_restore_name as string) || name;
+          const mime = (row._file_mime as string) || "text/plain";
+          const real = new File([content], restoreName, { type: mime });
+          filesRef.current.set(fileKey(real), real);
+          return { file: real, status: "done" as const };
+        }
         const placeholder = new File([], name);
         filesRef.current.set(fileKey(placeholder), placeholder);
         return { file: placeholder, status: "done" as const };
       });
-      setFileStates(placeholderFiles);
+      setFileStates(restoredFiles);
 
       // Populate results in global processing store
       const errors = restored.results.filter((r) => r.status === "error").length;
@@ -460,7 +560,24 @@ export default function ExtractDataPage() {
         { success: restored.results.length - errors, errors, avgLatency: 0 },
         restored.runId,
       );
-      toast.success(`Restored session from "${restored.dataName}" (${restored.data.length} rows)`);
+      // restored.data has one entry per processed file (extract-data saves
+      // `{document_name}` as inputJson). The actual extracted-record count
+      // lives inside each row's `_all_records` JSON array — count those for
+      // the toast so it matches what the result table shows.
+      const fileCount = restored.results.length;
+      const recordCount = restored.results.reduce((sum, r) => {
+        const allRecords = r._all_records;
+        if (typeof allRecords !== "string") return sum;
+        try {
+          const parsed = JSON.parse(allRecords);
+          return sum + (Array.isArray(parsed) ? parsed.length : 1);
+        } catch {
+          return sum;
+        }
+      }, 0);
+      toast.success(
+        `Restored session from "${restored.dataName}" (${recordCount} record${recordCount === 1 ? "" : "s"} from ${fileCount} file${fileCount === 1 ? "" : "s"})`
+      );
     });
   }, [restored]);
 
@@ -468,6 +585,52 @@ export default function ExtractDataPage() {
   const totalChunks = batch.results.reduce((sum, r) => sum + (Number(r._chunk_count) || 1), 0);
   const chunkNote = totalChunks > successFiles ? ` (${totalChunks} sections)` : "";
   const extractSubtitle = `${allResults.length} records from ${successFiles} file(s)${chunkNote}`;
+
+  const renderSchemaTable = () => (
+    <div className="border rounded-lg overflow-hidden">
+      <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Column Schema</div>
+      <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
+        <div className="shrink-0 w-6" />
+        <div className="flex-1">column_name</div>
+        <div className="w-28">type</div>
+        <div className="flex-1">description</div>
+        <div className="w-8 shrink-0" />
+      </div>
+      <div className="p-3 space-y-2">
+        {fields.map((field, idx) => (
+          <div key={idx} className="flex gap-2 items-center">
+            <div className="flex flex-col shrink-0">
+              <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, -1)} disabled={idx === 0}>
+                <ArrowUp className="h-3 w-3" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, 1)} disabled={idx === fields.length - 1}>
+                <ArrowDown className="h-3 w-3" />
+              </Button>
+            </div>
+            <Input placeholder="column_name" value={field.name} onChange={(e) => updateField(idx, { name: e.target.value })} className="flex-1 h-8 text-xs" />
+            <Select value={field.type} onValueChange={(v) => updateField(idx, { type: v as FieldDef["type"] })}>
+              <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {FIELD_TYPES.map((t) => (<SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>))}
+              </SelectContent>
+            </Select>
+            <Input placeholder="Description (optional)" value={field.description || ""} onChange={(e) => updateField(idx, { description: e.target.value })} className="flex-1 h-8 text-xs" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => removeField(idx)}>
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ))}
+      </div>
+      <div className="px-3 pb-3 flex gap-2">
+        <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addField}>
+          <Plus className="h-3 w-3 mr-2" /> Add Column
+        </Button>
+        <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }])}>
+          <Trash2 className="h-3 w-3 mr-2" /> Clear All
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-0 pb-16">
@@ -624,127 +787,31 @@ export default function ExtractDataPage() {
           </Button>
         </div>
 
+        {/* Hidden file input for Import mode */}
+        <input
+          ref={templateFileInputRef}
+          type="file"
+          accept=".csv,.xlsx,.xls"
+          className="hidden"
+          onChange={handleTemplateFileSelected}
+        />
+
         {/* ── Suggest with AI mode ── */}
         {columnMode === "suggest" && (
-          <>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" className="text-xs" onClick={suggestFields} disabled={analyzing}>
-                {analyzing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
-                {hasSuggestedOnce ? "Retry AI" : "Ask AI"}
-              </Button>
-              {analyzing && <span className="text-xs text-muted-foreground">Analyzing document for field suggestions...</span>}
-            </div>
-            <div className="border rounded-lg overflow-hidden">
-              <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Column Schema</div>
-              <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
-                <div className="shrink-0 w-6" />
-                <div className="flex-1">column_name</div>
-                <div className="w-28">type</div>
-                <div className="flex-1">description</div>
-                <div className="w-8 shrink-0" />
-              </div>
-              <div className="p-3 space-y-2">
-                {fields.map((field, idx) => (
-                  <div key={idx} className="flex gap-2 items-center">
-                    <div className="flex flex-col shrink-0">
-                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, -1)} disabled={idx === 0}>
-                        <ArrowUp className="h-3 w-3" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, 1)} disabled={idx === fields.length - 1}>
-                        <ArrowDown className="h-3 w-3" />
-                      </Button>
-                    </div>
-                    <Input placeholder="column_name" value={field.name} onChange={(e) => updateField(idx, { name: e.target.value })} className="flex-1 h-8 text-xs" />
-                    <Select value={field.type} onValueChange={(v) => updateField(idx, { type: v as FieldDef["type"] })}>
-                      <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {FIELD_TYPES.map((t) => (<SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>))}
-                      </SelectContent>
-                    </Select>
-                    <Input placeholder="Description (optional)" value={field.description || ""} onChange={(e) => updateField(idx, { description: e.target.value })} className="flex-1 h-8 text-xs" />
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => removeField(idx)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-              <div className="px-3 pb-3 flex gap-2">
-                <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addField}>
-                  <Plus className="h-3 w-3 mr-2" /> Add Column
-                </Button>
-                <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }])}>
-                  <Trash2 className="h-3 w-3 mr-2" /> Clear All
-                </Button>
-              </div>
-            </div>
-          </>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" className="text-xs" onClick={suggestFields} disabled={analyzing}>
+              {analyzing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+              {hasSuggestedOnce ? "Retry AI" : "Ask AI"}
+            </Button>
+            {analyzing && <span className="text-xs text-muted-foreground">Analyzing document for field suggestions...</span>}
+          </div>
         )}
 
         {/* ── Import CSV/Excel mode ── */}
-        {columnMode === "file" && !fileExtracted && !fields.some((f) => f.name.trim()) && (
-          <div className="max-w-md">
-            <FileUploader
-              onDataLoaded={handleTemplateFile}
-              accept={{
-                "text/csv": [".csv"],
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-                "application/vnd.ms-excel": [".xls"],
-              }}
-            />
-          </div>
-        )}
-        {columnMode === "file" && (fileExtracted || fields.some((f) => f.name.trim())) && (
-          <>
-          <Button variant="outline" size="sm" className="text-xs" onClick={() => {
-            setFileExtracted(false);
-            setFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }]);
-          }}>
-            <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Import"}
+        {columnMode === "file" && (
+          <Button variant="outline" size="sm" className="text-xs" onClick={openTemplateFilePicker}>
+            <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Choose File"}
           </Button>
-          <div className="border rounded-lg overflow-hidden">
-            <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Column Schema</div>
-            <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
-              <div className="shrink-0 w-6" />
-              <div className="flex-1">column_name</div>
-              <div className="w-28">type</div>
-              <div className="flex-1">description</div>
-              <div className="w-8 shrink-0" />
-            </div>
-            <div className="p-3 space-y-2">
-              {fields.map((field, idx) => (
-                <div key={idx} className="flex gap-2 items-center">
-                  <div className="flex flex-col shrink-0">
-                    <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, -1)} disabled={idx === 0}>
-                      <ArrowUp className="h-3 w-3" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, 1)} disabled={idx === fields.length - 1}>
-                      <ArrowDown className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  <Input placeholder="column_name" value={field.name} onChange={(e) => updateField(idx, { name: e.target.value })} className="flex-1 h-8 text-xs" />
-                  <Select value={field.type} onValueChange={(v) => updateField(idx, { type: v as FieldDef["type"] })}>
-                    <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {FIELD_TYPES.map((t) => (<SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>))}
-                    </SelectContent>
-                  </Select>
-                  <Input placeholder="Description (optional)" value={field.description || ""} onChange={(e) => updateField(idx, { description: e.target.value })} className="flex-1 h-8 text-xs" />
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => removeField(idx)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-            <div className="px-3 pb-3 flex gap-2">
-              <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addField}>
-                <Plus className="h-3 w-3 mr-2" /> Add Column
-              </Button>
-              <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }])}>
-                <Trash2 className="h-3 w-3 mr-2" /> Clear All
-              </Button>
-            </div>
-          </div>
-          </>
         )}
 
         {/* ── Type CSV mode ── */}
@@ -762,60 +829,18 @@ export default function ExtractDataPage() {
           </div>
         )}
         {columnMode === "paste" && (pasteExtracted || fields.some((f) => f.name.trim())) && (
-          <>
           <Button variant="outline" size="sm" className="text-xs" onClick={() => {
             const text = fields.filter((f) => f.name.trim()).map((f) => `${f.name}, ${f.type}, ${f.description || ""}`).join("\n");
             setCsvPasteText(text);
             setPasteExtracted(false);
             setFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }]);
           }}>
-            <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit
+            <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit as CSV
           </Button>
-          <div className="border rounded-lg overflow-hidden">
-            <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Column Schema</div>
-            <div className="px-3 pt-2 flex gap-2 items-center text-xs font-medium text-muted-foreground">
-              <div className="shrink-0 w-6" />
-              <div className="flex-1">column_name</div>
-              <div className="w-28">type</div>
-              <div className="flex-1">description</div>
-              <div className="w-8 shrink-0" />
-            </div>
-            <div className="p-3 space-y-2">
-              {fields.map((field, idx) => (
-                <div key={idx} className="flex gap-2 items-center">
-                  <div className="flex flex-col shrink-0">
-                    <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, -1)} disabled={idx === 0}>
-                      <ArrowUp className="h-3 w-3" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-4 w-6 text-muted-foreground hover:text-foreground" onClick={() => moveField(idx, 1)} disabled={idx === fields.length - 1}>
-                      <ArrowDown className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  <Input placeholder="column_name" value={field.name} onChange={(e) => updateField(idx, { name: e.target.value })} className="flex-1 h-8 text-xs" />
-                  <Select value={field.type} onValueChange={(v) => updateField(idx, { type: v as FieldDef["type"] })}>
-                    <SelectTrigger className="w-28 h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {FIELD_TYPES.map((t) => (<SelectItem key={t} value={t} className="text-xs">{t}</SelectItem>))}
-                    </SelectContent>
-                  </Select>
-                  <Input placeholder="Description (optional)" value={field.description || ""} onChange={(e) => updateField(idx, { description: e.target.value })} className="flex-1 h-8 text-xs" />
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive shrink-0" onClick={() => removeField(idx)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-            <div className="px-3 pb-3 flex gap-2">
-              <Button variant="outline" size="sm" className="flex-1 text-xs" onClick={addField}>
-                <Plus className="h-3 w-3 mr-2" /> Add Column
-              </Button>
-              <Button variant="outline" size="sm" className="text-xs text-destructive hover:bg-destructive/10" onClick={() => setFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }])}>
-                <Trash2 className="h-3 w-3 mr-2" /> Clear All
-              </Button>
-            </div>
-          </div>
-          </>
         )}
+
+        {/* ── Column Schema (hidden while editing as CSV in paste mode) ── */}
+        {!(columnMode === "paste" && !pasteExtracted && !fields.some((f) => f.name.trim())) && renderSchemaTable()}
       </div>
 
       <div className="border-t" />

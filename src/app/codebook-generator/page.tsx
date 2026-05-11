@@ -18,10 +18,10 @@ import { useSessionState, clearSessionKeys } from "@/hooks/useSessionState";
 import { getPrompt } from "@/lib/prompts";
 import { SAMPLE_DATASETS } from "@/lib/sample-data";
 import { ResultsPanel } from "@/components/tools/ResultsPanel";
-import { Loader2, CheckCircle2, X, RotateCcw, Plus } from "lucide-react";
+import { Loader2, CheckCircle2, X, RotateCcw, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import type { Row } from "@/types";
-import { dispatchProcessRow, dispatchCreateRun, dispatchSaveResults } from "@/lib/llm-dispatch";
+import { dispatchProcessRow, dispatchCreateRun, dispatchSaveResults, dispatchUpdateRun } from "@/lib/llm-dispatch";
 
 type Stage = "idle" | "discovery" | "consolidation" | "definition" | "done";
 
@@ -87,32 +87,16 @@ export default function CodebookGeneratorPage() {
   const [consolidatedThemes, setConsolidatedThemes] = useSessionState<ConsolidatedTheme[]>("codebookgen_consolidatedThemes", []);
   const [lastRunId, setLastRunId] = useSessionState<string | null>("codebookgen_runId", null);
 
+  // Cumulative latency across the 3 LLM stages. Reset per run.
+  const stageLatencyRef = React.useRef(0);
+
   const providerConfig = useActiveModel();
   const systemSettings = useSystemSettings();
 
   const allColumns = data.length > 0 ? Object.keys(data[0]) : [];
-  const { selectedCols, toggleCol, toggleAll } = useColumnSelection("codebookgen_selectedCols", allColumns, false);
+  const { selectedCols, setSelectedCols, toggleCol, toggleAll } = useColumnSelection("codebookgen_selectedCols", allColumns, false);
 
-  // ── Session restore from history ───────────────────────────────────────────
   const restored = useRestoreSession("codebook-generator");
-  React.useEffect(() => {
-    if (!restored) return;
-    setData(restored.data as Row[]);
-    setDataName(restored.dataName);
-    // Try to restore codebook from results
-    const codebook: CodeEntry[] = restored.results
-      .filter((r) => r.Code || r.code)
-      .map((r) => ({
-        code: String(r.Code ?? r.code ?? ""),
-        description: String(r.Description ?? r.description ?? ""),
-        example: String(r.Example ?? r.example ?? ""),
-      }));
-    if (codebook.length > 0) {
-      setCodebookStructured(codebook);
-      setStage("done");
-    }
-    toast.success(`Restored session from "${restored.dataName}"`);
-  }, [restored]);
 
   // ── Auto-generate AI Instructions ──
   const buildAutoInstructions = useCallback(() => {
@@ -148,6 +132,65 @@ export default function CodebookGeneratorPage() {
   // AI Instructions
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
+  // ── Session restore from history ───────────────────────────────────────────
+  // Placed below the state hooks it touches so setters are already declared
+  // (react-hooks/set-state-in-effect + no-use-before-define).
+  React.useEffect(() => {
+    if (!restored) return;
+    queueMicrotask(() => {
+      const sp = restored.systemPrompt ?? "";
+
+      // Restore input data
+      setData(restored.data as Row[]);
+      setDataName(restored.dataName);
+
+      // Parse encoded blocks from systemPrompt (mirrors transform's approach)
+      const descMatch = sp.match(/CODEBOOK DESCRIPTION:\n([\s\S]*?)(?:\n\n|$)/);
+      if (descMatch) setCodebookDescription(descMatch[1].trim());
+
+      const colsMatch = sp.match(/SELECTED COLUMNS:\n([\s\S]*?)(?:\n\n|$)/);
+      if (colsMatch) {
+        const cols = colsMatch[1].split("\n").map((l) => l.replace(/^- /, "").trim()).filter(Boolean);
+        setSelectedCols(cols);
+      }
+
+      const instrMatch = sp.match(/AI INSTRUCTIONS:\n([\s\S]*?)(?:\nGENERATED CODEBOOK:|$)/);
+      if (instrMatch) setAiInstructions(instrMatch[1].trim());
+
+      const cbMatch = sp.match(/GENERATED CODEBOOK:\n([\s\S]*?)$/);
+      if (cbMatch) {
+        try {
+          const parsed = JSON.parse(cbMatch[1].trim()) as Record<string, unknown>[];
+          const codebook: CodeEntry[] = parsed.map((e) => ({
+            code: String(e.code ?? ""),
+            description: String(e.description ?? ""),
+            example: String(e.example ?? ""),
+          }));
+          if (codebook.length > 0) {
+            setCodebookStructured(codebook);
+            setStage("done");
+          }
+        } catch {
+          // Fallback: try legacy per-row results reconstruction
+          const codebook: CodeEntry[] = restored.results
+            .filter((r) => r.Code || r.code)
+            .map((r) => ({
+              code: String(r.Code ?? r.code ?? ""),
+              description: String(r.Description ?? r.description ?? ""),
+              example: String(r.Example ?? r.example ?? ""),
+            }));
+          if (codebook.length > 0) {
+            setCodebookStructured(codebook);
+            setStage("done");
+          }
+        }
+      }
+
+      setLastRunId(restored.runId);
+      toast.success(`Restored session from "${restored.dataName}"`);
+    });
+  }, [restored]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleDataLoaded = (loaded: Row[], name: string) => {
     setData(loaded);
     setDataName(name);
@@ -168,7 +211,7 @@ export default function CodebookGeneratorPage() {
 
   const callLLM = async (systemPrompt: string, userContent: string): Promise<string> => {
     if (!providerConfig) throw new Error("No enabled provider with API key found");
-    const { output } = await dispatchProcessRow({
+    const { output, latency } = await dispatchProcessRow({
       provider: providerConfig.providerId,
       model: providerConfig.defaultModel,
       apiKey: providerConfig.apiKey || "",
@@ -178,6 +221,7 @@ export default function CodebookGeneratorPage() {
       temperature: systemSettings.temperature ?? 0.3,
       maxTokens: systemSettings.maxTokens ?? undefined,
     });
+    stageLatencyRef.current += latency;
     return output;
   };
 
@@ -194,6 +238,8 @@ export default function CodebookGeneratorPage() {
     setAwaitingReview(false);
     setAwaitingReview2(false);
     setLastRunId(null);
+    stageLatencyRef.current = 0;
+    cancelledRef.current = false;
 
     const sampleRows = data.slice(0, 100);
 
@@ -209,6 +255,7 @@ export default function CodebookGeneratorPage() {
         aiInstructions || getPrompt("codebook.discovery"),
         `Analyze these ${filteredRows.length} data samples:\n\n${JSON.stringify(filteredRows, null, 2)}`
       );
+      if (cancelledRef.current) return;
 
       try {
         const raw = JSON.parse(cleanJson(discoveryOutput)) as Record<string, unknown>[];
@@ -228,6 +275,7 @@ export default function CodebookGeneratorPage() {
       setStage("idle");
       setAwaitingReview(true);
     } catch (err: unknown) {
+      if (cancelledRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Stage 1 failed", { description: msg });
       setStage("idle");
@@ -239,6 +287,7 @@ export default function CodebookGeneratorPage() {
     if (!providerConfig) return toast.error("No enabled provider configured. Check Settings.");
 
     setAwaitingReview(false);
+    cancelledRef.current = false;
     const themesJson = JSON.stringify(discoveryThemes);
 
     try {
@@ -247,6 +296,7 @@ export default function CodebookGeneratorPage() {
         getPrompt("codebook.consolidation"),
         `Consolidate these raw themes:\n\n${themesJson}`
       );
+      if (cancelledRef.current) return;
 
       try {
         const parsed = JSON.parse(cleanJson(consolidationOutput)) as Record<string, unknown>[];
@@ -262,6 +312,7 @@ export default function CodebookGeneratorPage() {
       setStage("idle");
       setAwaitingReview2(true);
     } catch (err: unknown) {
+      if (cancelledRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Stage 2 failed", { description: msg });
       setStage("idle");
@@ -273,6 +324,7 @@ export default function CodebookGeneratorPage() {
     if (!providerConfig) return toast.error("No enabled provider configured. Check Settings.");
 
     setAwaitingReview2(false);
+    cancelledRef.current = false;
 
     try {
       setStage("definition");
@@ -280,6 +332,7 @@ export default function CodebookGeneratorPage() {
         `You are a qualitative researcher creating a formal codebook. Return a JSON array of objects, each with exactly these keys: "code" (short label), "description" (clear definition), "example" (a representative example from the data). Do not include any other keys. Do not include markdown or code fences.`,
         `Create formal definitions for these consolidated themes:\n\n${JSON.stringify(consolidatedThemes)}`
       );
+      if (cancelledRef.current) return;
 
       let structured: CodeEntry[] = [];
       try {
@@ -298,30 +351,58 @@ export default function CodebookGeneratorPage() {
       markIdle();
       toast.success("Codebook generated (3 stages complete)!");
 
-      // Save to history DB
+      // Save to history DB — encode config + codebook into systemPrompt (mirrors
+      // transform's pattern) so session restore can repopulate every field.
       try {
+        const sampled = data.slice(0, 100);
+        const promptLines: string[] = [];
+        if (codebookDescription.trim()) {
+          promptLines.push("CODEBOOK DESCRIPTION:", codebookDescription.trim(), "");
+        }
+        if (selectedCols.length > 0) {
+          promptLines.push("SELECTED COLUMNS:", ...selectedCols.map((c) => `- ${c}`), "");
+        }
+        if (aiInstructions.trim()) {
+          promptLines.push("AI INSTRUCTIONS:", aiInstructions.trim(), "");
+        }
+        promptLines.push("GENERATED CODEBOOK:", JSON.stringify(structured));
+        const encodedSystemPrompt = promptLines.join("\n");
+
+        const totalLatency = stageLatencyRef.current;
+
         const runId = await dispatchCreateRun({
           runType: "codebook-generator",
           provider: providerConfig.providerId,
           model: providerConfig.defaultModel,
           temperature: systemSettings.temperature ?? 0.3,
-          systemPrompt: "3-stage codebook pipeline",
+          systemPrompt: encodedSystemPrompt,
           inputFile: dataName || "unnamed",
-          inputRows: data.length,
+          inputRows: sampled.length,
         });
         if (runId) {
           setLastRunId(runId);
-          const resultRows = structured.map((entry, i) => ({
+          // One RunResult per sampled input row (transform's pattern). Output is
+          // empty because codebook-generator has no per-row output — the codebook
+          // itself is stored in systemPrompt.
+          const resultRows = sampled.map((row, i) => ({
             rowIndex: i,
-            input: { stage: "codebook" } as Record<string, unknown>,
-            output: JSON.stringify(entry),
+            input: row as Record<string, unknown>,
+            output: "",
             status: "success" as const,
             latency: 0,
           }));
           await dispatchSaveResults(runId, resultRows);
+          // saveResults computes avgLatency = mean(row latencies) = 0; overwrite
+          // with the total stage latency so the history UI shows a meaningful number.
+          await dispatchUpdateRun(runId, {
+            avgLatency: totalLatency,
+            totalDuration: totalLatency,
+            status: "completed",
+          });
         }
       } catch (err) { console.warn("Failed to save codebook to history:", err); }
     } catch (err: unknown) {
+      if (cancelledRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Codebook generation failed", { description: msg });
       setStage("idle");
@@ -334,13 +415,27 @@ export default function CodebookGeneratorPage() {
     setAwaitingReview(true);
   };
 
+  // Restart = re-run from Phase A. `generatePhaseA` already clears all stage
+  // state at its start, so we just delegate.
   const restart = () => {
+    generatePhaseA();
+  };
+
+  // Cancel in-flight stage: flip the ref so the awaiting phase function bails
+  // before mutating state, then reset the UI to its pre-Full-Run state. The
+  // network request itself isn't aborted (no AbortSignal plumbed through), but
+  // its result is discarded once it returns.
+  const cancelledRef = React.useRef(false);
+  const cancel = () => {
+    cancelledRef.current = true;
     setAwaitingReview(false);
     setAwaitingReview2(false);
     setDiscoveryThemes([]);
     setDiscoveryRaw("");
     setConsolidatedThemes([]);
     setStage("idle");
+    markIdle();
+    toast.info("Run cancelled");
   };
 
   const codebookRows: Row[] = codebookStructured.map((e) => ({
@@ -440,7 +535,7 @@ export default function CodebookGeneratorPage() {
         <Button size="lg" className="h-12 text-base bg-red-500 hover:bg-red-600 text-white w-full"
           disabled={data.length === 0 || isProcessing || awaitingReview || awaitingReview2 || !providerConfig}
           onClick={() => generatePhaseA()}>
-          {(isProcessing || awaitingReview || awaitingReview2) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+          {(isProcessing || awaitingReview || awaitingReview2) ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Sparkles className="h-4 w-4 mr-2" />}
           Full Run ({Math.min(data.length, 100)} rows)
         </Button>
 
@@ -545,6 +640,9 @@ export default function CodebookGeneratorPage() {
             </Button>
             <Button variant="outline" size="lg" className="h-10" onClick={restart}>
               Restart
+            </Button>
+            <Button variant="outline" size="lg" className="h-10" onClick={cancel}>
+              <X className="h-4 w-4 mr-2" /> Cancel
             </Button>
           </div>
         </div>

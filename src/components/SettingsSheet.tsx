@@ -50,7 +50,7 @@ const PROMPT_CATEGORIES = ["transform", "qualitative", "consensus", "codebook", 
 const PROMPT_CATEGORY_LABELS: Record<string, string> = {
   transform: "Transform Data",
   qualitative: "Qualitative Coder",
-  consensus: "Consensus Coder",
+  consensus: "Model Comparison",
   codebook: "Codebook Generator",
   generate: "Generate Data",
   automator: "Automator",

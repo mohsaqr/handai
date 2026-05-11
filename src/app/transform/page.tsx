@@ -597,20 +597,20 @@ export default function TransformPage() {
             {filters.map((f, idx) => (
               <div key={idx} className="flex items-center gap-2 flex-wrap">
                 <Select value={f.col} onValueChange={(v) => updateFilter(idx, { col: v })}>
-                  <SelectTrigger className="h-9 text-sm w-[200px]"><SelectValue placeholder="Column..." /></SelectTrigger>
+                  <SelectTrigger className="h-9 text-sm w-[400px]"><SelectValue placeholder="Column..." /></SelectTrigger>
                   <SelectContent>
                     {allColumns.map((c) => <SelectItem key={c} value={c} className="text-sm">{c}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <Select value={f.op} onValueChange={(v) => updateFilter(idx, { op: v as FilterOp })}>
-                  <SelectTrigger className="h-9 text-sm w-[140px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-9 text-sm w-[180px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {(OPS_BY_TYPE[colTypes[f.col] ?? "text"]).map((o) => (
                       <SelectItem key={o.value} value={o.value} className="text-sm">{o.label}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <Input value={f.val} onChange={(e) => updateFilter(idx, { val: e.target.value })} placeholder="Value..." className="h-9 text-sm w-[200px]" />
+                <Input value={f.val} onChange={(e) => updateFilter(idx, { val: e.target.value })} placeholder="Value..." className="h-9 text-sm w-[280px]" />
                 <Button variant="ghost" size="sm" className="h-9 w-9 p-0" onClick={() => removeFilter(idx)}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>

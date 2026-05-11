@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { parseStructuredFile, getFileExt } from "@/lib/parse-file";
 import { useFilesRef, useFileStatuses, fileKey } from "@/hooks/useFilesRef";
 import { useDropzone } from "react-dropzone";
 import { Button } from "@/components/ui/button";
@@ -9,12 +10,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { ResultsPanel } from "@/components/tools/ResultsPanel";
 import { PromptEditor } from "@/components/tools/PromptEditor";
-import { FileUploader } from "@/components/tools/FileUploader";
 import { useActiveModel, useSystemSettings } from "@/lib/hooks";
 import { NoModelWarning } from "@/components/tools/NoModelWarning";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { useSessionState, clearSessionKeys } from "@/hooks/useSessionState";
+import { useFileStatesState } from "@/hooks/useFileStatesState";
 import { useBatchProcessor } from "@/hooks/useBatchProcessor";
 import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { useProcessingStore } from "@/lib/processing-store";
@@ -46,13 +47,14 @@ import {
 import { toast } from "sonner";
 import type { FileState } from "@/types";
 import * as XLSX from "xlsx";
-import { isLikelyChunked } from "@/lib/chunk-text";
+import { isLikelyChunked, distributeBudget } from "@/lib/chunk-text";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 type Row = Record<string, unknown>;
 
 type OutputFormat = "csv" | "json" | "txt" | "md" | "gift";
+type RunMode = "preview" | "test" | "full";
 
 interface SuggestedField {
   name: string;
@@ -83,6 +85,43 @@ function getFileTypeKey(file: File): string | null {
   return null;
 }
 
+// Beyond this size we skip the snapshot — restore falls back to placeholder.
+const RESTORE_SIZE_CAP = 5_000_000; // 5 MB
+
+// Best-effort snapshot of a file's content for "Restore Session". Text-based
+// inputs (csv/json/txt/md/html) are kept verbatim; XLSX is converted to CSV.
+// PDF/DOCX and other binary formats return {} → placeholder on restore.
+async function captureFileSnapshot(file: File): Promise<{
+  _file_content?: string;
+  _file_mime?: string;
+  _file_restore_name?: string;
+}> {
+  if (file.size === 0 || file.size > RESTORE_SIZE_CAP) return {};
+  const ext = getFileExt(file.name);
+  try {
+    if (["csv", "json", "txt", "md", "html", "htm"].includes(ext)) {
+      return {
+        _file_content: await file.text(),
+        _file_mime: file.type || "text/plain",
+        _file_restore_name: file.name,
+      };
+    }
+    if (ext === "xlsx" || ext === "xls") {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const firstSheet = wb.Sheets[wb.SheetNames[0]];
+      return {
+        _file_content: XLSX.utils.sheet_to_csv(firstSheet),
+        _file_mime: "text/csv",
+        _file_restore_name: file.name.replace(/\.(xlsx|xls)$/i, ".csv"),
+      };
+    }
+  } catch {
+    // Snapshot is best-effort — on failure restore falls back to placeholder.
+  }
+  return {};
+}
+
 function normalizeType(raw: string): SuggestedField["type"] | null {
   const s = raw.toLowerCase().trim();
   if (s === "text" || s === "string" || s === "str" || s === "txt") return "text";
@@ -110,8 +149,8 @@ export default function ProcessDocumentsPage() {
   const systemSettings = useSystemSettings();
 
   // ── Section 1: Documents
-  const [fileStates, setFileStates] = useSessionState<FileState[]>("procdocs2_fileStates", []);
-  const filesRef = useFilesRef();
+  const filesRef = useFilesRef("process-documents");
+  const [fileStates, setFileStates] = useFileStatesState("procdocs2_fileStates", filesRef.current);
 
   // ── Section 2: Instructions
   const [customPrompt, setCustomPrompt] = useSessionState("procdocs2_customPrompt", "");
@@ -230,35 +269,65 @@ export default function ProcessDocumentsPage() {
 
     setIsSuggesting(true);
     try {
+      // Extract text from every file in parallel, then share a fixed total
+      // character budget across them: each file gets `TOTAL_BUDGET / N`, and
+      // any leftover from short files is redistributed to longer ones.
+      const { extractTextBrowser } = await import("@/lib/document-browser");
+      const TOTAL_BUDGET = 3000;
       const limit = pLimit(systemSettings.maxConcurrency || 5);
-      const settled = await Promise.allSettled(
-        fileStates.map((fs) => limit(() =>
-          dispatchDocumentAnalyze({
-            file: fs.file,
-            provider: activeModel.providerId,
-            model: activeModel.defaultModel,
-            apiKey: activeModel.apiKey || "",
-            baseUrl: activeModel.baseUrl,
-            hint: customPrompt.trim() || undefined,
-          })
-        ))
+      const settledTexts = await Promise.allSettled(
+        fileStates.map((fs) => limit(async () => {
+          if (fs.file.size === 0) return { name: fs.file.name, text: "" };
+          const { text } = await extractTextBrowser(fs.file);
+          return { name: fs.file.name, text };
+        }))
       );
+
+      let failed = 0;
+      const fullSections: Array<{ name: string; text: string }> = [];
+      for (const r of settledTexts) {
+        if (r.status !== "fulfilled" || !r.value.text.trim()) { failed++; continue; }
+        fullSections.push(r.value);
+      }
+      if (fullSections.length === 0) {
+        toast.error("Could not read any of the uploaded files.");
+        return;
+      }
+
+      // Allocate the shared budget proportionally across the surviving files.
+      const allocations = distributeBudget(fullSections.map((s) => s.text.length), TOTAL_BUDGET);
+      const readSections = fullSections.map((s, i) => ({ name: s.name, text: s.text.slice(0, allocations[i]) }));
+
+      // Alphabetize so upload order doesn't bias the suggestions.
+      readSections.sort((a, b) => a.name.localeCompare(b.name));
+      const sectionBlocks = readSections.map((s) => `=== ${s.name} ===\n\n${s.text}`);
+      const preamble =
+        `The text below contains ${readSections.length} separate document${readSections.length !== 1 ? "s" : ""}, ` +
+        `each introduced by a "=== filename ===" header and separated by "---". ` +
+        `Treat every section as equally important — do NOT prefer fields from earlier sections over later ones. ` +
+        `Derive a single unified schema that covers all documents.`;
+      const combinedText = `${preamble}\n\n${sectionBlocks.join("\n\n---\n\n")}`;
+      const combinedFile = new File([combinedText], "combined_documents.txt", { type: "text/plain" });
+
+      const { fields: suggested } = await dispatchDocumentAnalyze({
+        file: combinedFile,
+        provider: activeModel.providerId,
+        model: activeModel.defaultModel,
+        apiKey: activeModel.apiKey || "",
+        baseUrl: activeModel.baseUrl,
+        hint: customPrompt.trim() || undefined,
+      });
 
       const validTypes = new Set(COLUMN_TYPES);
       const merged = new Map<string, SuggestedField>();
-      let failed = 0;
-      for (const r of settled) {
-        if (r.status !== "fulfilled") { failed++; continue; }
-        const fields = (r.value.fields as Array<{ name: string; type: string; description?: string }> | undefined) ?? [];
-        for (const f of fields) {
-          const key = (f.name || "").trim().toLowerCase();
-          if (!key || merged.has(key)) continue;
-          merged.set(key, {
-            name: f.name,
-            type: validTypes.has(f.type as SuggestedField["type"]) ? (f.type as SuggestedField["type"]) : "text",
-            description: f.description || "",
-          });
-        }
+      for (const f of (suggested as Array<{ name: string; type: string; description?: string }> | undefined) ?? []) {
+        const key = (f.name || "").trim().toLowerCase();
+        if (!key || merged.has(key)) continue;
+        merged.set(key, {
+          name: f.name,
+          type: validTypes.has(f.type as SuggestedField["type"]) ? (f.type as SuggestedField["type"]) : "text",
+          description: f.description || "",
+        });
       }
 
       if (merged.size === 0) {
@@ -269,7 +338,7 @@ export default function ProcessDocumentsPage() {
       setSuggestedFields(Array.from(merged.values()));
       setHasSuggestedOnce(true);
       const analyzed = fileStates.length - failed;
-      toast.success(`${merged.size} fields suggested from ${analyzed} file${analyzed !== 1 ? "s" : ""}${failed > 0 ? ` (${failed} failed)` : ""}`);
+      toast.success(`${merged.size} fields suggested from ${analyzed} file${analyzed !== 1 ? "s" : ""}${failed > 0 ? ` (${failed} skipped)` : ""}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error("Suggestion failed", { description: msg });
@@ -279,6 +348,10 @@ export default function ProcessDocumentsPage() {
   };
 
   // ── From imported file ─────────────────────────────────────────────────────
+  const templateFileInputRef = useRef<HTMLInputElement>(null);
+  const openTemplateFilePicker = useCallback(() => {
+    templateFileInputRef.current?.click();
+  }, []);
   const handleTemplateFile = useCallback((data: Record<string, unknown>[]) => {
     if (data.length === 0) {
       toast.error("No rows found in file.");
@@ -306,6 +379,23 @@ export default function ProcessDocumentsPage() {
     if (warnings.length > 0) toast.warning(warnings.join("\n"));
     toast.success(`${fields.length} columns imported`);
   }, [setSuggestedFields]);
+
+  const handleTemplateFileSelected = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const rows = await parseStructuredFile(file);
+      if (!rows) {
+        toast.error(`Failed to parse .${getFileExt(file.name)} file`);
+        return;
+      }
+      setColumnMode("file");
+      handleTemplateFile(rows);
+    } catch (err: unknown) {
+      toast.error(`Failed to process file: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [handleTemplateFile]);
 
   // ── From pasted CSV text ───────────────────────────────────────────────────
   const extractFromPastedCsv = useCallback(() => {
@@ -403,6 +493,10 @@ export default function ProcessDocumentsPage() {
       const file = filesRef.current.get(fKey);
       if (!file) throw new Error(`File not found: ${row.document_name}`);
 
+      // Snapshot text-based / spreadsheet inputs so a future Restore Session can
+      // rebuild a real, runnable File. PDF/DOCX stay as placeholders on restore.
+      const snapshot = await captureFileSnapshot(file);
+
       const systemPrompt = buildSystemPrompt();
 
       const t0 = Date.now();
@@ -432,11 +526,19 @@ export default function ProcessDocumentsPage() {
         _chunk_count: result.chunks,
         status: "success",
         latency_ms: latency,
+        ...snapshot,
       };
     },
     buildResultEntry: (r: Row, i: number) => ({
       rowIndex: i,
-      input: { document_name: r.document_name } as Record<string, unknown>,
+      input: {
+        document_name: r.document_name,
+        ...(typeof r._file_content === "string" && {
+          _file_content: r._file_content,
+          _file_mime: r._file_mime,
+          _file_restore_name: r._file_restore_name,
+        }),
+      } as Record<string, unknown>,
       output: (r.output as string) ?? "",
       status: (r.status as string) ?? "success",
       latency: r.latency_ms as number | undefined,
@@ -444,6 +546,10 @@ export default function ProcessDocumentsPage() {
     }),
     onComplete: () => {},
   });
+
+  const handleRun = useCallback((mode: RunMode) => {
+    batch.run(mode);
+  }, [batch]);
 
   // ── Session restore from history ──────────────────────────────────────────
   const restored = useRestoreSession("process-documents");
@@ -480,15 +586,46 @@ export default function ProcessDocumentsPage() {
         }
       }
 
-      // Restore file list as placeholder entries (real File contents can't be
-      // serialized — names only, mirrors Extract Data's restore behavior).
-      const placeholderFiles: FileState[] = restored.data.map((row) => {
-        const name = (row.document_name as string) || "document";
-        const placeholder = new File([], name);
-        filesRef.current.set(fileKey(placeholder), placeholder);
-        return { file: placeholder, status: "done" as const };
-      });
-      setFileStates(placeholderFiles);
+      // Restore file list. For text-based / spreadsheet inputs, processRow
+      // snapshotted the content into inputJson — rebuild a real, runnable File
+      // from that. PDF/DOCX fall through to a zero-byte placeholder.
+      //
+      // Two shapes to handle:
+      //   • Current (per-file) runs: one row per file, each with optional
+      //     _file_content/_file_mime/_file_restore_name on the row itself.
+      //   • Legacy unified runs: ONE row whose input.`_files` is an array of
+      //     per-file snapshots (kept for backward compat with old history).
+      const buildFileFromSnap = (
+        name: string,
+        content: unknown,
+        mime: unknown,
+        restoreName: unknown,
+      ): File => {
+        if (typeof content === "string") {
+          const realName = (typeof restoreName === "string" && restoreName) || name;
+          const realMime = (typeof mime === "string" && mime) || "text/plain";
+          return new File([content], realName, { type: realMime });
+        }
+        return new File([], name);
+      };
+
+      const firstRow = restored.data[0] as Row | undefined;
+      const filesArr = firstRow && Array.isArray(firstRow._files) ? (firstRow._files as Row[]) : null;
+
+      const restoredFiles: FileState[] = filesArr
+        ? filesArr.map((entry) => {
+            const name = (entry.document_name as string) || "document";
+            const f = buildFileFromSnap(name, entry._file_content, entry._file_mime, entry._file_restore_name);
+            filesRef.current.set(fileKey(f), f);
+            return { file: f, status: "done" as const };
+          })
+        : restored.data.map((row) => {
+            const name = (row.document_name as string) || "document";
+            const f = buildFileFromSnap(name, row._file_content, row._file_mime, row._file_restore_name);
+            filesRef.current.set(fileKey(f), f);
+            return { file: f, status: "done" as const };
+          });
+      setFileStates(restoredFiles);
 
       // Populate results in global processing store
       const errors = restored.results.filter((r) => r.status === "error").length;
@@ -549,6 +686,8 @@ export default function ProcessDocumentsPage() {
       const raw = (r._all_records as string)
         .replace(/^```(?:csv|json)?\s*/im, "").replace(/\s*```\s*$/m, "").trim();
       const docName = r.document_name as string;
+      const rowStatus = r.status ?? "success";
+      const rowLatency = typeof r.latency_ms === "number" ? r.latency_ms : 0;
 
       if (resultFormat === "json") {
         try {
@@ -556,7 +695,12 @@ export default function ProcessDocumentsPage() {
           const arr = Array.isArray(parsed) ? parsed : [parsed];
           for (const obj of arr) {
             if (obj && typeof obj === "object") {
-              rows.push({ document_name: docName, ...(obj as Record<string, unknown>) });
+              rows.push({
+                document_name: docName,
+                ...(obj as Record<string, unknown>),
+                status: rowStatus,
+                latency_ms: rowLatency,
+              });
             }
           }
         } catch {
@@ -570,6 +714,8 @@ export default function ProcessDocumentsPage() {
             const values = parseCsvRow(lines[li]);
             const row: Row = { document_name: docName };
             headers.forEach((h, i) => { if (h) row[h] = values[i] ?? ""; });
+            row.status = rowStatus;
+            row.latency_ms = rowLatency;
             rows.push(row);
           }
         }
@@ -952,25 +1098,22 @@ export default function ProcessDocumentsPage() {
           )}
 
           {/* ── Import mode ── */}
+          <input
+            ref={templateFileInputRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            onChange={handleTemplateFileSelected}
+          />
           {columnMode === "file" && !fileExtracted && !suggestedFields.some((f) => f.name.trim()) && (
-            <div className="max-w-md">
-              <FileUploader
-                onDataLoaded={handleTemplateFile}
-                accept={{
-                  "text/csv": [".csv"],
-                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-                  "application/vnd.ms-excel": [".xls"],
-                }}
-              />
-            </div>
+            <Button variant="outline" size="sm" className="text-xs" onClick={openTemplateFilePicker}>
+              <Upload className="h-3.5 w-3.5 mr-1.5" /> Choose File
+            </Button>
           )}
           {columnMode === "file" && (fileExtracted || suggestedFields.some((f) => f.name.trim())) && (
             <>
-              <Button variant="outline" size="sm" className="text-xs" onClick={() => {
-                setFileExtracted(false);
-                setSuggestedFields(EMPTY_SUGGESTED);
-              }}>
-                <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Import"}
+              <Button variant="outline" size="sm" className="text-xs" onClick={openTemplateFilePicker}>
+                <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Choose File"}
               </Button>
               {renderSchemaTable()}
             </>
@@ -998,7 +1141,7 @@ export default function ProcessDocumentsPage() {
                 setPasteExtracted(false);
                 setSuggestedFields(EMPTY_SUGGESTED);
               }}>
-                <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit
+                <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit as CSV
               </Button>
               {renderSchemaTable()}
             </>
@@ -1048,7 +1191,7 @@ export default function ProcessDocumentsPage() {
             || !customPrompt.trim()
             || (isStructured && !suggestedFields.some((c) => c.name.trim()))
           }
-          onRun={batch.run}
+          onRun={handleRun}
           onAbort={batch.abort}
           onResume={batch.resume}
           onCancel={batch.clearResults}

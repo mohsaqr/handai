@@ -11,7 +11,6 @@ import {
     History,
     LayoutDashboard,
     Settings,
-    Users,
     Wand2,
     Sparkles,
     FileArchive,
@@ -95,22 +94,17 @@ const data = {
             ],
         },
         {
-            title: "Qualitative Analysis",
+            title: "Multi Agent System",
             items: [
-                {
-                    title: "Consensus Coder",
-                    url: "/consensus-coder",
-                    icon: Users,
-                },
                 {
                     title: "Model Comparison",
                     url: "/model-comparison",
                     icon: Columns,
                 },
                 {
-                    title: "AI Agents",
-                    url: "/ai-agents",
-                    icon: Users,
+                    title: "MAS Panel",
+                    url: "/mas-panel",
+                    icon: LayoutDashboard,
                 },
             ],
         },

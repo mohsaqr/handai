@@ -5,8 +5,11 @@ import { withRetry } from "@/lib/retry";
 import { DocumentAnalyzeSchema } from "@/lib/validation";
 import { getPrompt } from "@/lib/prompts";
 
-// Only take the first 3000 chars for field analysis — enough context, cheaper call
-const ANALYSIS_CHAR_LIMIT = 3_000;
+// Defensive ceiling for /api/document-analyze. The Suggest-with-AI flow in the
+// pages already shares a fixed character budget across uploaded files via
+// distributeBudget(), so this only kicks in for direct API callers or runaway
+// payloads. Keep enough headroom for the budget + preamble + per-file headers.
+const ANALYSIS_CHAR_LIMIT = 5_000;
 
 async function extractTextForAnalysis(fileContent: string, fileType: string): Promise<string> {
   const buffer = Buffer.from(fileContent, "base64");

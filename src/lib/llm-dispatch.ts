@@ -10,17 +10,16 @@
 import {
   processRowDirect,
   generateRowDirect,
-  comparisonRowDirect,
   consensusRowDirect,
   automatorRowDirect,
   documentExtractDirect,
   documentAnalyzeDirect,
   documentProcessDirect,
-  agentsRowDirect,
+  agentNetworkRowDirect,
 } from "./llm-browser";
-import type { ConsensusResult, AgentsResult } from "./llm-browser";
-export type { AgentsResult } from "./llm-browser";
-import { createRun as idbCreateRun, saveResults as idbSaveResults } from "./db-indexeddb";
+import type { ConsensusResult, AgentNetworkResult } from "./llm-browser";
+export type { AgentNetworkResult } from "./llm-browser";
+import { createRun as idbCreateRun, saveResults as idbSaveResults, updateRun as idbUpdateRun } from "./db-indexeddb";
 import type { FieldDef } from "@/types";
 
 // ── Runtime detection ────────────────────────────────────────────────────────
@@ -112,6 +111,33 @@ export async function dispatchSaveResults(
   }
 }
 
+// ── Run update (never throws) ────────────────────────────────────────────────
+
+export async function dispatchUpdateRun(
+  runId: string,
+  patch: {
+    avgLatency?: number;
+    totalDuration?: number;
+    status?: string;
+    completedAt?: string;
+    systemPrompt?: string;
+  },
+): Promise<void> {
+  try {
+    if (useBrowserStorage) {
+      await idbUpdateRun(runId, patch);
+    } else {
+      await fetch(`/api/runs/${runId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+    }
+  } catch (err) {
+    console.warn("Run update failed:", err);
+  }
+}
+
 // ── Single row processing (throws on error) ─────────────────────────────────
 // Latency normalized to MILLISECONDS in both paths.
 
@@ -154,10 +180,11 @@ export async function dispatchConsensusRow(params: {
     model: string;
     apiKey: string;
     baseUrl?: string;
+    persona?: string;
   }>;
-  judge: { provider: string; model: string; apiKey: string; baseUrl?: string };
+  reconciler: { provider: string; model: string; apiKey: string; baseUrl?: string; persona?: string };
   workerPrompt: string;
-  judgePrompt: string;
+  reconcilerPrompt: string;
   userContent: string;
   enableQualityScoring?: boolean;
   enableDisagreementAnalysis?: boolean;
@@ -184,65 +211,30 @@ export async function dispatchConsensusRow(params: {
   }
 }
 
-// ── Comparison row (throws on error) ─────────────────────────────────────────
+// ── Agent Network row (throws on error) ─────────────────────────────────────
 
-export async function dispatchComparisonRow(params: {
-  models: Array<{
-    id: string;
-    provider: string;
-    model: string;
-    apiKey: string;
-    baseUrl?: string;
-  }>;
-  systemPrompt: string;
-  userContent: string;
-  temperature?: number;
-  maxTokens?: number;
-}): Promise<{
-  results: Array<{
-    id: string;
-    output: string;
-    latency?: number;
-    success: boolean;
-  }>;
-}> {
-  if (useBrowserDirect) {
-    return await comparisonRowDirect(params);
-  } else {
-    const res = await fetch("/api/comparison-row", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data;
-  }
-}
-
-// ── AI Agents row (throws on error) ─────────────────────────────────────────
-
-export async function dispatchAgentsRow(params: {
+export async function dispatchAgentNetworkRow(params: {
   agents: Array<{
-    name: string;
+    label: string;
     role: string;
     provider: string;
     model: string;
     apiKey: string;
     baseUrl?: string;
-    columns?: string[];
-    isReferee: boolean;
   }>;
   userContent: string;
   maxRounds: number;
+  communicationStyle?: string;
+  convergenceMode?: "fixed" | "adaptive";
+  convergenceThreshold?: number;
   temperature?: number;
   maxTokens?: number;
   rowIdx?: number;
-}): Promise<AgentsResult> {
+}): Promise<AgentNetworkResult> {
   if (useBrowserDirect) {
-    return await agentsRowDirect(params);
+    return await agentNetworkRowDirect(params);
   } else {
-    const res = await fetch("/api/ai-agents-row", {
+    const res = await fetch("/api/agent-network-row", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(params),
@@ -359,10 +351,22 @@ export async function dispatchDocumentExtract(params: {
   if (useBrowserDirect) {
     return await documentExtractDirect(params);
   } else {
-    // Extract text in browser (pdfjs-dist works in browser but fails server-side)
-    const { extractTextBrowser } = await import("./document-browser");
-    const { text: rawText } = await extractTextBrowser(params.file);
-    const fileContent = btoa(unescape(encodeURIComponent(rawText)));
+    // Structured files (CSV/XLSX/JSON/RIS): parse in the browser and send rows
+    // as JSON so the server skips text extraction and sends a structured prompt.
+    const { getFileExt, isStructuredExt, parseStructuredFile } = await import("./parse-file");
+    const ext = getFileExt(params.file.name);
+    let structuredRows: Record<string, unknown>[] | null = null;
+    if (isStructuredExt(ext)) {
+      structuredRows = await parseStructuredFile(params.file);
+    }
+
+    let fileContent = "";
+    if (!structuredRows || structuredRows.length === 0) {
+      // Extract text in browser (pdfjs-dist works in browser but fails server-side)
+      const { extractTextBrowser } = await import("./document-browser");
+      const { text: rawText } = await extractTextBrowser(params.file);
+      fileContent = btoa(unescape(encodeURIComponent(rawText)));
+    }
 
     const res = await fetch("/api/document-extract", {
       method: "POST",
@@ -378,6 +382,7 @@ export async function dispatchDocumentExtract(params: {
         systemPrompt: params.systemPrompt,
         fields: params.fields,
         maxTokens: params.maxTokens,
+        ...(structuredRows && structuredRows.length > 0 ? { structuredRows } : {}),
       }),
     });
     if (!res.ok) {
@@ -401,11 +406,13 @@ export async function dispatchDocumentAnalyze(params: {
   if (useBrowserDirect) {
     return await documentAnalyzeDirect(params);
   } else {
-    // Extract text in browser (pdfjs-dist works in browser but fails server-side)
+    // Extract text in browser (pdfjs-dist works in browser but fails server-side).
+    // The caller (suggestFields) already shares a fixed budget across files via
+    // distributeBudget, so we forward the prepared combined text as-is. The
+    // /api/document-analyze route still applies a defensive ceiling on its end.
     const { extractTextBrowser } = await import("./document-browser");
     const { text: rawText } = await extractTextBrowser(params.file);
-    const sampleText = rawText.slice(0, 3_000);
-    const fileContent = btoa(unescape(encodeURIComponent(sampleText)));
+    const fileContent = btoa(unescape(encodeURIComponent(rawText)));
 
     const res = await fetch("/api/document-analyze", {
       method: "POST",
@@ -450,10 +457,22 @@ export async function dispatchDocumentProcess(params: {
   if (useBrowserDirect) {
     return await documentProcessDirect(params);
   } else {
-    // Extract text in browser (pdfjs-dist works in browser but fails server-side)
-    const { extractTextBrowser } = await import("./document-browser");
-    const { text: rawText } = await extractTextBrowser(params.file);
-    const fileContent = btoa(unescape(encodeURIComponent(rawText)));
+    // Structured files (CSV/XLSX/JSON/RIS): parse in the browser and send rows
+    // as JSON so the server sends the LLM a structured prompt instead of text.
+    const { getFileExt, isStructuredExt, parseStructuredFile } = await import("./parse-file");
+    const ext = getFileExt(params.file.name);
+    let structuredRows: Record<string, unknown>[] | null = null;
+    if (isStructuredExt(ext)) {
+      structuredRows = await parseStructuredFile(params.file);
+    }
+
+    let fileContent = "";
+    if (!structuredRows || structuredRows.length === 0) {
+      // Extract text in browser (pdfjs-dist works in browser but fails server-side)
+      const { extractTextBrowser } = await import("./document-browser");
+      const { text: rawText } = await extractTextBrowser(params.file);
+      fileContent = btoa(unescape(encodeURIComponent(rawText)));
+    }
 
     const res = await fetch("/api/document-process", {
       method: "POST",
@@ -468,6 +487,7 @@ export async function dispatchDocumentProcess(params: {
         baseUrl: params.baseUrl,
         systemPrompt: params.systemPrompt,
         maxTokens: params.maxTokens,
+        ...(structuredRows && structuredRows.length > 0 ? { structuredRows } : {}),
       }),
     });
     if (!res.ok) {

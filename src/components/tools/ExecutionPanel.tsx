@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Play, X } from "lucide-react";
+import { Loader2, Play, X, Sparkles } from "lucide-react";
 
 type RunMode = "preview" | "test" | "full";
 
@@ -33,6 +33,8 @@ interface ExecutionPanelProps {
   fullLabel?: string;
   /** Label for data items — defaults to "rows" (use "files" for document tools). */
   unitLabel?: string;
+  /** Hide the Test button and let Full Run take the full width. */
+  hideTestButton?: boolean;
   children?: React.ReactNode;
 }
 
@@ -57,6 +59,7 @@ export function ExecutionPanel({
   testLabel,
   fullLabel,
   unitLabel = "row",
+  hideTestButton = false,
   children,
 }: ExecutionPanelProps) {
   const plural = (n: number) => `${unitLabel}${n === 1 ? "" : "s"}`;
@@ -166,19 +169,21 @@ export function ExecutionPanel({
 
       {children}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <Button
-          variant="outline"
-          size="lg"
-          className="h-12 text-base"
-          disabled={disabled || isProcessing}
-          onClick={() => onRun("test")}
-        >
-          {isProcessing && runMode === "test" ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : null}
-          {testLabel ?? `Test (${Math.min(10, dataCount)} ${plural(Math.min(10, dataCount))})`}
-        </Button>
+      <div className={`grid gap-3 ${hideTestButton ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2"}`}>
+        {!hideTestButton && (
+          <Button
+            variant="outline"
+            size="lg"
+            className="h-12 text-base"
+            disabled={disabled || isProcessing}
+            onClick={() => onRun("test")}
+          >
+            {isProcessing && runMode === "test" ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : null}
+            {testLabel ?? `Test (${Math.min(10, dataCount)} ${plural(Math.min(10, dataCount))})`}
+          </Button>
+        )}
         <Button
           size="lg"
           className="h-12 text-base bg-red-500 hover:bg-red-600 text-white"
@@ -187,7 +192,9 @@ export function ExecutionPanel({
         >
           {isProcessing && runMode === "full" ? (
             <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : null}
+          ) : (
+            <Sparkles className="h-4 w-4 mr-2" />
+          )}
           {fullLabel ?? `Full Run (${dataCount} ${plural(dataCount)})`}
         </Button>
       </div>

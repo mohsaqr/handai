@@ -4,6 +4,7 @@ import { getModel } from "@/lib/ai/providers";
 import { withRetry } from "@/lib/retry";
 import { DocumentProcessSchema } from "@/lib/validation";
 import { chunkText, chunkPromptPrefix, CHUNK_CONCURRENCY } from "@/lib/chunk-text";
+import { buildStructuredUserPrompt, collectColumns } from "@/lib/structured-extract";
 import pLimit from "p-limit";
 
 // ── Text extraction (reuses same logic as document-extract) ──────────────────
@@ -135,8 +136,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt, maxTokens } =
+    const { fileContent, fileType, fileName, provider, model, apiKey, baseUrl, systemPrompt, maxTokens, structuredRows } =
       parsed.data;
+
+    // ── Structured-file fast path ──────────────────────────────────────────
+    // Caller already parsed CSV/XLSX/JSON/RIS into rows. Send the whole table
+    // to the LLM in one call (no chunking — the user's prompt typically
+    // expects one coherent output).
+    if (structuredRows && structuredRows.length > 0) {
+      return await handleStructured({
+        rows: structuredRows, fileName: fileName ?? "untitled",
+        provider, model, apiKey, baseUrl, systemPrompt, maxTokens,
+      });
+    }
 
     const { text: rawText, truncated, charCount } = await extractText(fileContent, fileType);
 
@@ -214,4 +226,42 @@ export async function POST(req: NextRequest) {
     console.error("document-process error:", msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+// ── Structured-rows handler ────────────────────────────────────────────────────
+
+async function handleStructured(params: {
+  rows: Record<string, unknown>[];
+  fileName: string;
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  systemPrompt: string;
+  maxTokens?: number;
+}): Promise<NextResponse> {
+  const { rows, fileName, systemPrompt } = params;
+  const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
+  const outputOpts: Record<string, unknown> = {};
+  if (params.maxTokens) outputOpts.maxOutputTokens = params.maxTokens;
+
+  const columns = collectColumns(rows);
+  const body = buildStructuredUserPrompt({
+    fileName, columns, rows, rowOffset: 0, totalRows: rows.length,
+  });
+  const userPrompt = `The input is tabular data — columns and rows below are represented as JSON. Apply the system instructions to this data.\n\n${body}`;
+
+  const { text } = await withRetry(
+    () => generateText({ model: aiModel, system: systemPrompt, prompt: userPrompt, ...outputOpts }),
+    { maxAttempts: 3, baseDelayMs: 200 }
+  );
+
+  if (!text.trim()) {
+    return NextResponse.json({ error: "Processing produced no output." }, { status: 422 });
+  }
+
+  return NextResponse.json({
+    text, fileName, charCount: userPrompt.length, truncated: false,
+    chunks: 1, failedChunks: 0,
+  });
 }

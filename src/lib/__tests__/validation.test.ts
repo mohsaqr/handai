@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   ProcessRowSchema,
   ConsensusRowSchema,
-  ComparisonRowSchema,
   GenerateRowSchema,
   DocumentExtractSchema,
   RunCreateSchema,
@@ -59,9 +58,9 @@ describe('ConsensusRowSchema', () => {
   const worker = { provider: 'openai', model: 'gpt-4', apiKey: '' };
   const valid = {
     workers: [worker, worker],
-    judge: worker,
+    reconciler: worker,
     workerPrompt: 'Analyze this text.',
-    judgePrompt: 'Arbitrate the responses.',
+    reconcilerPrompt: 'Arbitrate the responses.',
     userContent: 'Some text to analyze.',
   };
 
@@ -75,27 +74,6 @@ describe('ConsensusRowSchema', () => {
 
   it('rejects fewer than 2 workers', () => {
     expect(ConsensusRowSchema.safeParse({ ...valid, workers: [worker] }).success).toBe(false);
-  });
-});
-
-describe('ComparisonRowSchema', () => {
-  const model = { id: 'm1', provider: 'openai', model: 'gpt-4', apiKey: 'sk-test' };
-  const valid = {
-    models: [model, { ...model, id: 'm2' }],
-    systemPrompt: 'You are helpful.',
-    userContent: 'Compare this text.',
-  };
-
-  it('accepts valid input with two models', () => {
-    expect(ComparisonRowSchema.safeParse(valid).success).toBe(true);
-  });
-
-  it('rejects fewer than 2 models', () => {
-    expect(ComparisonRowSchema.safeParse({ ...valid, models: [model] }).success).toBe(false);
-  });
-
-  it('accepts optional temperature', () => {
-    expect(ComparisonRowSchema.safeParse({ ...valid, temperature: 1.0 }).success).toBe(true);
   });
 });
 

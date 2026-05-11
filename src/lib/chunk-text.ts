@@ -18,12 +18,11 @@ export const CHUNK_TARGET = 8_000;
 export const CHUNK_CONCURRENCY = 3;
 
 /**
- * File size (bytes) above which the upload warning shows.
- * Conservative — a text file at this size is likely above CHUNK_THRESHOLD,
- * while a PDF at this size may not be. We prefer false positives over
- * surprising the user with unexpected chunking.
+ * File size (bytes) above which the "Multi-section" upload hint shows.
+ * Tuned so typical single-page PDFs/DOCX stay under the threshold; only
+ * genuinely large documents that are likely to chunk get flagged.
  */
-export const LARGE_FILE_BYTES = 15_000;
+export const LARGE_FILE_BYTES = 100_000;
 
 export interface TextChunk {
   text: string;
@@ -92,4 +91,59 @@ export function chunkPromptPrefix(index: number, total: number, mode: "extract" 
  */
 export function isLikelyChunked(fileSize: number): boolean {
   return fileSize > LARGE_FILE_BYTES;
+}
+
+/**
+ * Distribute a fixed character `budget` across N sources of varying capacity.
+ *
+ * Each source initially gets a fair share (`budget / N`). Sources that can't
+ * use their full share (because their text is shorter) donate the leftover
+ * back into the pool, which is then redistributed evenly among sources that
+ * still have capacity. Repeats until the budget is exhausted or no source
+ * can accept more.
+ *
+ * Returns an array of allocations the same length as `capacities`, summing
+ * to at most `budget` (less only when the total available text is smaller).
+ *
+ * @example
+ * distributeBudget([200, 5000, 5000], 3000) // → [200, 1400, 1400]
+ * distributeBudget([10000, 10000], 3000)    // → [1500, 1500]
+ */
+export function distributeBudget(capacities: number[], budget: number): number[] {
+  const allocations = new Array<number>(capacities.length).fill(0);
+  if (budget <= 0 || capacities.length === 0) return allocations;
+
+  // Track each source's remaining capacity.
+  const remaining = capacities.map((c) => Math.max(0, Math.floor(c)));
+  let pool = budget;
+
+  while (pool > 0) {
+    const active: number[] = [];
+    for (let i = 0; i < remaining.length; i++) if (remaining[i] > 0) active.push(i);
+    if (active.length === 0) break;
+
+    const share = Math.floor(pool / active.length);
+    if (share === 0) {
+      // Less than 1 char per active source — hand out remaining chars one by one.
+      const give = Math.min(pool, active.length);
+      for (let k = 0; k < give; k++) {
+        allocations[active[k]] += 1;
+        remaining[active[k]] -= 1;
+      }
+      pool -= give;
+      break;
+    }
+
+    let consumed = 0;
+    for (const i of active) {
+      const take = Math.min(share, remaining[i]);
+      allocations[i] += take;
+      remaining[i] -= take;
+      consumed += take;
+    }
+    pool -= consumed;
+    // Loop continues with the unspent share + any leftovers from already-full sources.
+  }
+
+  return allocations;
 }
