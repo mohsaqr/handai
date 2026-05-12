@@ -12,9 +12,11 @@ import { generateText } from "ai";
 import { getModel } from "./ai/providers";
 import { withRetry } from "./retry";
 import { pairwiseJaccard, pairwiseAgreement, interpretKappa } from "./analytics";
-import { getPrompt, formatExtractionSchema, formatExtractionSchemaJson } from "./prompts";
+import { getPrompt, formatExtractionSchemaJson } from "./prompts";
 import type { FieldDef } from "@/types";
 import { chunkText, chunkPromptPrefix, CHUNK_CONCURRENCY } from "./chunk-text";
+import { getFileExt, isStructuredExt, parseStructuredBuffer } from "./parse-file";
+import { buildStructuredSystemPrompt, buildStructuredUserPrompt, chunkRows, collectColumns } from "./structured-extract";
 import pLimit from "p-limit";
 
 /** Build generateText options — only includes temperature when explicitly provided (reasoning models reject it). */
@@ -33,25 +35,26 @@ export interface WorkerResult {
   latency: number;
 }
 
-export interface AgentsResult {
-  agentOutputs: Array<{ name: string; output: string; latency: number }>;
-  refereeOutput: string;
-  refereeLatency: number;
-  negotiationLog: Array<{ round: number; agent: string; output: string }>;
+export interface AgentNetworkResult {
+  roundOutputs: Array<{
+    round: number;
+    outputs: Array<{ label: string; output: string; latency: number }>;
+  }>;
   roundsTaken: number;
   converged: boolean;
+  finalConsensus: string | null;
 }
 
 export interface ConsensusResult {
   workerResults: WorkerResult[];
-  judgeOutput: string;
-  judgeReasoning?: string;
-  judgeLatency: number;
+  reconcilerOutput: string;
+  reconcilerReasoning?: string;
+  reconcilerLatency: number;
   consensusType: string;
   kappa: number | null;
   kappaLabel: string;
   agreementMatrix: ReturnType<typeof pairwiseAgreement>;
-  qualityScores?: number[];
+  qualityScores?: (number | null)[];
   disagreementReason?: string;
 }
 
@@ -260,40 +263,13 @@ export async function generateRowDirect(params: {
   return { rows, rawCsv: cleaned, count: rows.length };
 }
 
-// ── comparisonRowDirect — mirrors /api/comparison-row ─────────────────────────
-
-export async function comparisonRowDirect(params: {
-  models: Array<{ id: string; provider: string; model: string; apiKey: string; baseUrl?: string }>;
-  systemPrompt: string;
-  userContent: string;
-  temperature?: number;
-  maxTokens?: number;
-}): Promise<{ results: Array<{ id: string; output: string; latency?: number; success: boolean }> }> {
-  const promises = params.models.map(async (m) => {
-    try {
-      const aiModel = getModel(m.provider, m.model, m.apiKey, m.baseUrl);
-      const start = Date.now();
-      const { text } = await withRetry(
-        () => generateText(genOpts(aiModel, params.systemPrompt, params.userContent, params.temperature, params.maxTokens)),
-        { maxAttempts: 3, baseDelayMs: 100 }
-      );
-      return { id: m.id, output: text, latency: (Date.now() - start) / 1000, success: true };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { id: m.id, output: `ERROR: ${msg}`, success: false };
-    }
-  });
-  const results = await Promise.all(promises);
-  return { results };
-}
-
 // ── consensusRowDirect — mirrors /api/consensus-row ───────────────────────────
 
 export async function consensusRowDirect(params: {
-  workers: Array<{ provider: string; model: string; apiKey: string; baseUrl?: string }>;
-  judge: { provider: string; model: string; apiKey: string; baseUrl?: string };
+  workers: Array<{ provider: string; model: string; apiKey: string; baseUrl?: string; persona?: string }>;
+  reconciler: { provider: string; model: string; apiKey: string; baseUrl?: string; persona?: string };
   workerPrompt: string;
-  judgePrompt: string;
+  reconcilerPrompt: string;
   userContent: string;
   enableQualityScoring?: boolean;
   enableDisagreementAnalysis?: boolean;
@@ -301,22 +277,23 @@ export async function consensusRowDirect(params: {
   temperature?: number;
   maxTokens?: number;
 }): Promise<ConsensusResult> {
-  // Enforce direct-answer-only rules on every worker prompt
-  const strictSuffix = `\n\nSTRICT OUTPUT RULES (always apply):
+  // Default direct-answer-only rules — overridden when the instruction above explicitly asks for reasoning
+  const strictSuffix = `\n\nDEFAULT OUTPUT RULES (apply only when the instruction above does NOT explicitly request explanations, reasoning, arguments, justification, or rationale; if it does, follow the instruction and ignore these rules):
 - Output ONLY the answer to the instruction. No notes, no explanations, no reasoning, no commentary, no caveats.
 - Plain text or CSV only. NEVER use markdown: no **, no ## headings, no bullet points, no code blocks, no backticks.
 - Do NOT add headers, labels, introductions, or sign-offs.
 - Do NOT prefix with "Answer:", "Result:", "Note:", or any label.
 - Do NOT add extra sentences, context, or qualifications.
 - If the instruction asks for a single value, return that value and NOTHING else.`;
-  const enforced = params.workerPrompt + strictSuffix;
 
   // Step 1: Run workers in parallel
+  const enforcedWorkerPrompt = params.workerPrompt + strictSuffix;
   const workerPromises = params.workers.map(async (w, i) => {
     const model = getModel(w.provider, w.model, w.apiKey || "local", w.baseUrl);
+    const workerSystem = w.persona ? `${w.persona}\n\n${enforcedWorkerPrompt}` : enforcedWorkerPrompt;
     const start = Date.now();
     const { text } = await withRetry(
-      () => generateText(genOpts(model, enforced, params.userContent, params.temperature, params.maxTokens)),
+      () => generateText(genOpts(model, workerSystem, params.userContent, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
     return { id: `worker_${i + 1}`, output: text, latency: (Date.now() - start) / 1000 };
@@ -327,7 +304,7 @@ export async function consensusRowDirect(params: {
     .filter((r): r is PromiseFulfilledResult<WorkerResult> => r.status === "fulfilled")
     .map((r) => r.value);
 
-  if (workerResults.length < 2) {
+  if (workerResults.length < 1) {
     const errors = workerSettled
       .filter((r): r is PromiseRejectedResult => r.status === "rejected")
       .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
@@ -350,39 +327,57 @@ export async function consensusRowDirect(params: {
   );
   const agreementMatrix = pairwiseAgreement(padded);
 
-  // Step 3: Run judge — also classify consensus level
-  const judgeModel = getModel(
-    params.judge.provider,
-    params.judge.model,
-    params.judge.apiKey || "local",
-    params.judge.baseUrl
+  // Step 3: Run reconciler — also classify consensus level
+  const reconcilerModel = getModel(
+    params.reconciler.provider,
+    params.reconciler.model,
+    params.reconciler.apiKey || "local",
+    params.reconciler.baseUrl
   );
   const workersFormatted = workerResults
     .map((r) => `${r.id} response:\n${r.output}`)
     .join("\n\n---\n\n");
-  const combinedContent = `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`;
+  const combinedContent = `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`;
+  const reconcilerPersonaPrefix = params.reconciler.persona ? `${params.reconciler.persona}\n\n` : "";
 
-  let judgeOutput: string;
-  let judgeLatency: number;
+  const taskContext = `\n\nTHE WORKERS WERE GIVEN THIS INSTRUCTION:
+${params.workerPrompt}
+
+GROUNDING RULE (highest priority — read carefully):
+- Your output MUST be derived ONLY from the content of the Worker Responses.
+- The "Original Data" is provided ONLY as context so you can understand what the workers were given. You MUST NOT use it as a source for your own output.
+- Do NOT translate, summarize, classify, rewrite, or otherwise transform the Original Data yourself. That was the workers' job, not yours.
+- Do NOT add facts, claims, or content that no worker provided. If a detail is not present in any worker's output, it must NOT appear in yours.
+- Your output's language and format MUST match what the worker outputs use. If workers output English text, you output English text. If workers output keywords or codes, you output keywords or codes. Do NOT translate, paraphrase, or transform worker outputs into a different language or form — even if the worker instruction asked for that language/form.
+- Your job is to judge or combine the workers' outputs — never to redo the workers' task. You are not allowed to "fix" or "complete" a worker's failure to comply.
+
+TASK COMPLIANCE GUIDANCE:
+- Use the worker instruction above to recognize whether each worker actually performed the task. A worker that returned the Original Data verbatim, returned content in the wrong language/format, or refused has NOT complied.
+- "Accuracy" means accuracy with respect to the worker instruction applied to the data, NOT similarity to the Original Data itself.
+- Prefer outputs from workers that complied with the instruction. If only one worker complied, base your answer on that worker.
+- If NO worker complied, you must STILL stay grounded in the worker outputs as they are. Pick or merge from what the workers actually produced — do NOT silently perform the task yourself on the Original Data, and do NOT translate or transform worker outputs to compensate for their failure.`;
+
+  let reconcilerOutput: string;
+  let reconcilerLatency: number;
   let consensusType: string;
-  let judgeReasoning: string | undefined;
+  let reconcilerReasoning: string | undefined;
 
-  const judgeDirectSuffix = `\n\nSTRICT OUTPUT RULES (always apply):
+  const reconcilerDirectSuffix = `\n\nDEFAULT OUTPUT RULES (apply only when the worker instruction above does NOT explicitly request explanations, reasoning, arguments, justification, or rationale; if it does, mirror that level of detail in your final answer and ignore these rules):
 - Output ONLY the final answer. No explanations, no reasoning, no commentary, no justifications.
 - Plain text only. No markdown, no headings, no bullet points, no code fences.
 - Do NOT explain why you chose this answer — just give the answer directly.`;
 
   if (allSame) {
     consensusType = "Unanimous";
-    const judgeStart = Date.now();
+    const reconcilerStart = Date.now();
     const { text } = await withRetry(
-      () => generateText(genOpts(judgeModel, params.judgePrompt + judgeDirectSuffix, combinedContent, params.temperature, params.maxTokens)),
+      () => generateText(genOpts(reconcilerModel, reconcilerPersonaPrefix + params.reconcilerPrompt + taskContext + reconcilerDirectSuffix, combinedContent, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
-    judgeOutput = text;
-    judgeLatency = (Date.now() - judgeStart) / 1000;
+    reconcilerOutput = text;
+    reconcilerLatency = (Date.now() - reconcilerStart) / 1000;
   } else {
-    const judgeSuffix = judgeDirectSuffix + `\n\nADDITIONAL TASK — After producing your direct answer, you MUST end your response with a consensus classification on its own line, in this exact format:
+    const reconcilerSuffix = reconcilerDirectSuffix + `\n\nADDITIONAL TASK — After producing your direct answer, you MUST end your response with a consensus classification on its own line, in this exact format:
 [CONSENSUS: <level>]
 Where <level> is one of:
 - "Unanimous" — all workers conveyed the same meaning (even if worded differently)
@@ -390,84 +385,107 @@ Where <level> is one of:
 - "Partial Agreement" — workers agree on some points but differ on others
 - "Divergent" — workers gave substantially different or contradictory responses`;
 
-    const judgeStart = Date.now();
-    const { text: rawJudge } = await withRetry(
-      () => generateText(genOpts(judgeModel, params.judgePrompt + judgeSuffix, combinedContent, params.temperature, params.maxTokens)),
+    const reconcilerStart = Date.now();
+    const { text: rawReconciler } = await withRetry(
+      () => generateText(genOpts(reconcilerModel, reconcilerPersonaPrefix + params.reconcilerPrompt + taskContext + reconcilerSuffix, combinedContent, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
-    judgeLatency = (Date.now() - judgeStart) / 1000;
+    reconcilerLatency = (Date.now() - reconcilerStart) / 1000;
 
     // Parse [CONSENSUS: ...] — tolerant of missing ], quotes, trailing whitespace
-    const consensusMatch = rawJudge.match(/\[CONSENSUS:\s*"?([^"\]\n]+)"?\]?\s*$/im);
+    const consensusMatch = rawReconciler.match(/\[CONSENSUS:\s*"?([^"\]\n]+)"?\]?\s*$/im);
     if (consensusMatch) {
       const level = consensusMatch[1].trim();
       const valid = ["Unanimous", "Strong Agreement", "Partial Agreement", "Divergent"];
       consensusType = valid.includes(level) ? level : "Partial Agreement";
-      judgeOutput = rawJudge.slice(0, consensusMatch.index).trim();
+      reconcilerOutput = rawReconciler.slice(0, consensusMatch.index).trim();
     } else {
       consensusType = "Partial Agreement";
-      judgeOutput = rawJudge.trim();
+      reconcilerOutput = rawReconciler.trim();
     }
   }
   // Step 4 (optional): Quality scoring
-  let qualityScores: number[] | undefined;
+  let qualityScores: (number | null)[] | undefined;
   if (params.enableQualityScoring) {
     try {
       const { text: qsText } = await withRetry(
         () =>
-          generateText(genOpts(judgeModel, `You are a quality assessor evaluating worker responses. Rate each worker on a scale of 1-10.
+          generateText(genOpts(reconcilerModel, `You are a quality assessor evaluating worker responses. Rate each worker on a scale of 1-10.
 
 SCORING CRITERIA:
-- Accuracy (does the response correctly address the original data?)
-- Completeness (does it cover all relevant aspects?)
+- Task compliance (did the worker actually perform the Worker Instruction on the Original Data? A response that returns the Original Data verbatim, refuses, or is in the wrong language fails the instruction and must score very low — typically 1-3.)
+- Accuracy (is the response correct with respect to the Worker Instruction applied to the Original Data — NOT similarity to the Original Data itself?)
+- Completeness (does it cover all relevant aspects required by the instruction?)
 - Relevance (does it stay focused on the task?)
-- Alignment with best answer (how close is it to the chosen judge output?)
+- Alignment with best answer (how close is it to the chosen reconciler output?)
 
 RULES:
 - If all workers gave the same answer, they should all receive the same score.
-- A response that matches the judge's chosen answer closely should score higher.
+- A response that matches the reconciler's chosen answer closely should score higher.
+- A response that did not perform the requested task is invalid — score it 1-3 regardless of fluency.
 - Deduct points for: factual errors, missing key information, off-topic content, unnecessary additions.
 - Be consistent: similar quality responses should get similar scores.
 
-Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number between 1.0 and 10.0 (one decimal place, e.g. 6.5, 7.3, 9.0). No other text.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nJudge's Chosen Answer:\n${judgeOutput}\n\nConsensus Level: ${consensusType}`, params.temperature, params.maxTokens)),
+Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number between 1.0 and 10.0 (one decimal place, e.g. 6.5, 7.3, 9.0). No other text.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nReconciler's Chosen Answer:\n${reconcilerOutput}\n\nConsensus Level: ${consensusType}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
-      const clean = qsText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      const parsed = JSON.parse(clean) as { quality_scores: number[] };
-      if (Array.isArray(parsed.quality_scores)) {
-        // Workers with identical outputs must receive identical scores — group
-        // by normalized text and average the judge's scores within each group.
+      const cleaned = qsText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+      const tryParse = (s: string): { quality_scores: unknown } | null => {
+        try { return JSON.parse(s) as { quality_scores: unknown }; } catch { return null; }
+      };
+      let parsed = tryParse(cleaned);
+      if (!parsed) {
+        const objMatch = cleaned.match(/\{[\s\S]*\}/);
+        if (objMatch) parsed = tryParse(objMatch[0]);
+      }
+      if (!parsed) {
+        const arrMatch = cleaned.match(/\[[\s\S]*?\]/);
+        if (arrMatch) parsed = tryParse(`{"quality_scores":${arrMatch[0]}}`);
+      }
+
+      if (parsed && Array.isArray(parsed.quality_scores)) {
+        const raw = parsed.quality_scores as unknown[];
+        const isFiniteNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
         const normalize = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
         const groups = new Map<string, number[]>();
         outputs.forEach((out, i) => {
+          const v = raw[i];
+          if (!isFiniteNum(v)) return;
           const key = normalize(out);
-          const score = parsed.quality_scores[i];
-          if (typeof score !== "number") return;
           const bucket = groups.get(key);
-          if (bucket) bucket.push(score);
-          else groups.set(key, [score]);
+          if (bucket) bucket.push(v);
+          else groups.set(key, [v]);
         });
         qualityScores = outputs.map((out, i) => {
           const bucket = groups.get(normalize(out));
-          if (!bucket || bucket.length === 0) return parsed.quality_scores[i];
-          const avg = bucket.reduce((a, b) => a + b, 0) / bucket.length;
-          return Math.round(avg * 10) / 10;
+          if (bucket && bucket.length > 0) {
+            const avg = bucket.reduce((a, b) => a + b, 0) / bucket.length;
+            return Math.round(avg * 10) / 10;
+          }
+          const v = raw[i];
+          return isFiniteNum(v) ? v : null;
         });
+      } else {
+        console.warn("[consensusRowDirect] quality_scores parse failed:", qsText.slice(0, 300));
+        qualityScores = outputs.map(() => null);
       }
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      console.warn("[consensusRowDirect] quality scoring error:", err instanceof Error ? err.message : String(err));
+      qualityScores = outputs.map(() => null);
+    }
   }
 
-  // Step 5 (optional): Judge reasoning — separate call for reliability
+  // Step 5 (optional): Reconciler reasoning — separate call for reliability
   if (params.includeReasoning && !allSame) {
     try {
       const { text: jrText } = await withRetry(
         () =>
-          generateText(genOpts(judgeModel, `You are a judge explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${judgeOutput}`, params.temperature, params.maxTokens)),
+          generateText(genOpts(reconcilerModel, `You are a reconciler explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${reconcilerOutput}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
-      judgeReasoning = jrText.trim() || "Could not generate reasoning";
+      reconcilerReasoning = jrText.trim() || "Could not generate reasoning";
     } catch {
-      judgeReasoning = "Could not generate reasoning";
+      reconcilerReasoning = "Could not generate reasoning";
     }
   }
 
@@ -477,7 +495,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
     try {
       const { text: drText } = await withRetry(
         () =>
-          generateText(genOpts(judgeModel, `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`, `Original Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`, params.temperature, params.maxTokens)),
+          generateText(genOpts(reconcilerModel, `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       disagreementReason = drText.trim() || "Could not analyze disagreement";
@@ -488,13 +506,13 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
 
   return {
     workerResults,
-    judgeOutput,
-    judgeLatency,
+    reconcilerOutput,
+    reconcilerLatency,
     consensusType,
     kappa: isNaN(kappa) ? null : kappa,
     kappaLabel: interpretKappa(kappa),
     agreementMatrix,
-    ...(judgeReasoning !== undefined ? { judgeReasoning } : {}),
+    ...(reconcilerReasoning !== undefined ? { reconcilerReasoning } : {}),
     ...(qualityScores !== undefined ? { qualityScores } : {}),
     ...(disagreementReason !== undefined ? { disagreementReason } : {}),
   };
@@ -591,6 +609,181 @@ RULES:
 
 // ── documentExtractDirect — mirrors /api/document-extract ─────────────────────
 
+/** Parse a JSON array out of an LLM response, tolerating code fences and prose wrappers. */
+function parseJsonArrayLoose(src: string): Record<string, unknown>[] {
+  const cleaned = src.replace(/^```(?:json|csv)?\s*/im, "").replace(/\s*```\s*$/m, "").trim();
+  try {
+    const parsed = JSON.parse(cleaned);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    const arrMatch = cleaned.match(/\[[\s\S]*\]/);
+    if (arrMatch) {
+      try { const p = JSON.parse(arrMatch[0]); return Array.isArray(p) ? p : [p]; } catch { /* fall through */ }
+    }
+    const objMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (objMatch) {
+      try { return [JSON.parse(objMatch[0])]; } catch { /* fall through */ }
+    }
+    return [];
+  }
+}
+
+/** Map LLM-returned keys to defined field names (exact match → fuzzy match)
+ * and fill any still-missing fields with "". Throws if every normalized record
+ * is entirely empty. */
+function normalizeFieldRecords(
+  records: Record<string, unknown>[],
+  fields: FieldDef[],
+  previewSource: string,
+): Record<string, unknown>[] {
+  const fieldNames = fields.map((f) => f.name);
+  const fieldNamesLower = fieldNames.map((n) => n.toLowerCase().replace(/[\s_-]+/g, ""));
+  const normalized = records.map((r) => {
+    const out: Record<string, unknown> = {};
+    for (const f of fieldNames) {
+      if (f in r) out[f] = r[f];
+    }
+    for (const [key, value] of Object.entries(r)) {
+      if (fieldNames.includes(key)) continue;
+      const keyNorm = key.toLowerCase().replace(/[\s_-]+/g, "");
+      for (let i = 0; i < fieldNamesLower.length; i++) {
+        if (out[fieldNames[i]] !== undefined) continue;
+        if (keyNorm === fieldNamesLower[i] || keyNorm.endsWith(fieldNamesLower[i]) || keyNorm.includes(fieldNamesLower[i])) {
+          out[fieldNames[i]] = value;
+          break;
+        }
+      }
+    }
+    for (const f of fieldNames) {
+      if (out[f] === undefined) out[f] = "";
+    }
+    return out;
+  });
+  const allEmpty = normalized.every((r) => fieldNames.every((f) => r[f] === "" || r[f] === null || r[f] === undefined));
+  if (allEmpty) {
+    const preview = previewSource.slice(0, 200).replace(/\s+/g, " ").trim();
+    throw new Error(`Model returned no usable field values. The document may lack extractable text (scanned PDF?) or the field definitions don't match its content. Preview: "${preview}${previewSource.length > 200 ? "…" : ""}"`);
+  }
+  return normalized;
+}
+
+/** Send already-parsed structured rows (CSV/XLSX/JSON/RIS) to the LLM as a
+ * JSON payload (file title + columns + rows). When no fields are defined, the
+ * rows are returned directly — no LLM call. */
+async function extractStructured(params: {
+  file: File;
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  fields?: FieldDef[];
+  maxTokens?: number;
+  rows: Record<string, unknown>[];
+}): Promise<{
+  records: Record<string, unknown>[];
+  fileName: string;
+  charCount: number;
+  truncated: boolean;
+  count: number;
+  chunks: number;
+  failedChunks: number;
+}> {
+  const { rows, fields } = params;
+  const columns = collectColumns(rows);
+
+  // No fields defined → the input columns are already the answer; skip the LLM.
+  if (!fields || fields.length === 0) {
+    return {
+      records: rows,
+      fileName: params.file.name,
+      charCount: 0,
+      truncated: false,
+      count: rows.length,
+      chunks: 1,
+      failedChunks: 0,
+    };
+  }
+
+  const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
+  const outputOpts: Record<string, unknown> = {};
+  if (params.maxTokens) outputOpts.maxOutputTokens = params.maxTokens;
+
+  const systemPrompt = buildStructuredSystemPrompt(fields);
+  const rowChunks = chunkRows(rows);
+
+  const runChunk = async (chunkRowsArr: Record<string, unknown>[], rowOffset: number): Promise<Record<string, unknown>[]> => {
+    const userPrompt = buildStructuredUserPrompt({
+      fileName: params.file.name,
+      columns,
+      rows: chunkRowsArr,
+      rowOffset,
+      totalRows: rows.length,
+    });
+    const { text } = await withRetry(
+      () => generateText({ ...genOpts(aiModel, systemPrompt, userPrompt), ...outputOpts }),
+      { maxAttempts: 3, baseDelayMs: 200 }
+    );
+    let recs = parseJsonArrayLoose(text);
+    if (recs.length === 0) {
+      // Reformat-retry: ask model to coerce its previous output into a JSON array.
+      const fieldList = fields
+        .map((f) => `- "${f.name}" (${f.type})${f.description ? ": " + f.description : ""}`)
+        .join("\n");
+      const reformatPrompt = `You are a JSON reformatter. Return ONLY a JSON array of records with these fields:\n${fieldList}\n\nFirst char "[", last char "]". No prose. Use null for missing values.`;
+      const { text: reformatted } = await withRetry(
+        () => generateText({ ...genOpts(aiModel, reformatPrompt, text), ...outputOpts }),
+        { maxAttempts: 2, baseDelayMs: 200 }
+      );
+      recs = parseJsonArrayLoose(reformatted);
+    }
+    return recs;
+  };
+
+  let records: Record<string, unknown>[] = [];
+  let failedChunks = 0;
+
+  if (rowChunks.length === 1) {
+    records = await runChunk(rowChunks[0], 0);
+  } else {
+    const limit = pLimit(CHUNK_CONCURRENCY);
+    const offsets: number[] = [];
+    let acc = 0;
+    for (const c of rowChunks) { offsets.push(acc); acc += c.length; }
+    const results = await Promise.allSettled(
+      rowChunks.map((c, i) => limit(() => runChunk(c, offsets[i])))
+    );
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === "fulfilled") records.push(...r.value);
+      else {
+        failedChunks++;
+        console.error(`documentExtractDirect (structured): chunk ${i + 1}/${rowChunks.length} failed:`, r.reason);
+      }
+    }
+  }
+
+  if (records.length === 0) {
+    throw new Error(failedChunks > 0
+      ? `All ${rowChunks.length} row batches failed during extraction.`
+      : "Model returned unparseable output. Try a stronger model.");
+  }
+
+  // Preview source for the "no usable field values" error — first row as JSON
+  // is more useful here than a flat text dump since the input was structured.
+  const preview = JSON.stringify(rows[0] ?? {});
+  records = normalizeFieldRecords(records, fields, preview);
+
+  return {
+    records,
+    fileName: params.file.name,
+    charCount: 0,
+    truncated: false,
+    count: records.length,
+    chunks: rowChunks.length,
+    failedChunks,
+  };
+}
+
 const DEFAULT_EXTRACT_PROMPT = `You are a document data extraction engine. Extract all structured records from the document as a CSV table.
 
 OUTPUT RULES:
@@ -619,6 +812,20 @@ export async function documentExtractDirect(params: {
   chunks: number;
   failedChunks: number;
 }> {
+  // ── Structured-file fast path ──────────────────────────────────────────────
+  // For CSV/XLSX/XLS/JSON/RIS we already know the column→value mapping; sending
+  // the file to the LLM as raw text would force it to re-parse what we already
+  // have. Instead, parse client-side and send the LLM a JSON array of rows.
+  const ext = getFileExt(params.file.name);
+  if (isStructuredExt(ext)) {
+    const buf = await params.file.arrayBuffer();
+    const parsedRows = parseStructuredBuffer(buf, ext);
+    if (parsedRows && parsedRows.length > 0) {
+      return await extractStructured({ ...params, rows: parsedRows });
+    }
+    // parseStructuredBuffer returned null/[] — fall through to text-based path
+  }
+
   const { extractTextBrowser } = await import("./document-browser");
   const { text: rawText, truncated, charCount } = await extractTextBrowser(params.file);
 
@@ -745,49 +952,22 @@ ABSOLUTE RULES:
       : "Model returned unparseable output. Try a stronger model.");
   }
 
-  // Merge single-key objects into one record (LLM sometimes returns one field per object)
+  // Merge single-key objects into one record only when they're true FRAGMENTS
+  // of a single record (each contributes a distinct field). Must NOT collapse
+  // legitimate single-column multi-record output (e.g. [{name:"Alice"},{name:"Bob"}])
+  // where every record has the same key — that's the answer the user asked for.
   if (records.length > 1 && records.every((r: Record<string, unknown>) => Object.keys(r).length === 1)) {
-    const merged: Record<string, unknown> = {};
-    for (const r of records) Object.assign(merged, r);
-    records = [merged];
+    const allKeys = new Set(records.flatMap((r) => Object.keys(r)));
+    if (allKeys.size === records.length) {
+      const merged: Record<string, unknown> = {};
+      for (const r of records) Object.assign(merged, r);
+      records = [merged];
+    }
   }
 
   // Map LLM-returned keys to defined field names and fill missing with ""
   if (params.fields && params.fields.length > 0) {
-    const fieldNames = params.fields.map((f) => f.name);
-    const fieldNamesLower = fieldNames.map((n) => n.toLowerCase().replace(/[\s_-]+/g, ""));
-
-    records = records.map((r) => {
-      const normalized: Record<string, unknown> = {};
-      for (const f of fieldNames) {
-        if (f in r) normalized[f] = r[f];
-      }
-      for (const [key, value] of Object.entries(r)) {
-        if (fieldNames.includes(key)) continue;
-        const keyNorm = key.toLowerCase().replace(/[\s_-]+/g, "");
-        for (let i = 0; i < fieldNamesLower.length; i++) {
-          if (normalized[fieldNames[i]] !== undefined) continue;
-          if (keyNorm === fieldNamesLower[i] || keyNorm.endsWith(fieldNamesLower[i]) || keyNorm.includes(fieldNamesLower[i])) {
-            normalized[fieldNames[i]] = value;
-            break;
-          }
-        }
-      }
-      for (const f of fieldNames) {
-        if (normalized[f] === undefined) normalized[f] = "";
-      }
-      return normalized;
-    });
-
-    // If every normalized field on every record is empty/null, the extraction
-    // produced no real data — surface it as an error instead of a row of blanks.
-    const allEmpty = records.every((r) =>
-      fieldNames.every((f) => r[f] === "" || r[f] === null || r[f] === undefined)
-    );
-    if (allEmpty) {
-      const preview = rawText.slice(0, 200).replace(/\s+/g, " ").trim();
-      throw new Error(`Model returned no usable field values. The document may lack extractable text (scanned PDF?) or the field definitions don't match its content. Preview: "${preview}${rawText.length > 200 ? "…" : ""}"`);
-    }
+    records = normalizeFieldRecords(records, params.fields, rawText);
   }
 
   return { records, fileName: params.file.name, charCount, truncated, count: records.length, chunks: chunks.length, failedChunks };
@@ -803,17 +983,18 @@ export async function documentAnalyzeDirect(params: {
   baseUrl?: string;
   hint?: string;
 }): Promise<{ fields: FieldDef[] }> {
+  // The caller (suggestFields) already shares a fixed character budget across
+  // files via distributeBudget, so we forward the prepared combined text as-is.
   const { extractTextBrowser } = await import("./document-browser");
   const { text: rawText } = await extractTextBrowser(params.file);
-  const sampleText = rawText.slice(0, 3000);
 
-  if (!sampleText.trim()) return { fields: [] };
+  if (!rawText.trim()) return { fields: [] };
 
   const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
 
   const promptParts = [`Document: ${params.file.name}`];
   if (params.hint) promptParts.push(`\nExtraction goal: ${params.hint}`);
-  promptParts.push(`\n\n${sampleText}`);
+  promptParts.push(`\n\n${rawText}`);
 
   const { text } = await withRetry(
     () =>
@@ -835,6 +1016,56 @@ export async function documentAnalyzeDirect(params: {
 
 // ── documentProcessDirect — mirrors /api/document-process ───────────────────
 
+/** Single-call structured-data processing for tabular files (CSV/XLSX/JSON/RIS).
+ * Sends the whole table as a JSON payload in one LLM call — no row chunking,
+ * because the user's prompt typically requests a single coherent output
+ * (CSV with one header, one summary, etc.) and chunked outputs would
+ * fragment that. */
+async function processStructured(params: {
+  file: File;
+  rows: Record<string, unknown>[];
+  provider: string;
+  model: string;
+  apiKey: string;
+  baseUrl?: string;
+  systemPrompt: string;
+  maxTokens?: number;
+}): Promise<{
+  text: string; fileName: string; charCount: number; truncated: boolean; chunks: number; failedChunks: number;
+}> {
+  const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
+  const outputOpts: Record<string, unknown> = {};
+  if (params.maxTokens) outputOpts.maxOutputTokens = params.maxTokens;
+
+  const columns = collectColumns(params.rows);
+  const body = buildStructuredUserPrompt({
+    fileName: params.file.name,
+    columns,
+    rows: params.rows,
+    rowOffset: 0,
+    totalRows: params.rows.length,
+  });
+  const userPrompt = `The input is tabular data — columns and rows below are represented as JSON. Apply the system instructions to this data.\n\n${body}`;
+
+  const { text } = await withRetry(
+    () => generateText({ ...genOpts(aiModel, params.systemPrompt, userPrompt), ...outputOpts }),
+    { maxAttempts: 3, baseDelayMs: 200 }
+  );
+
+  if (!text.trim()) {
+    throw new Error("Processing produced no output.");
+  }
+
+  return {
+    text,
+    fileName: params.file.name,
+    charCount: userPrompt.length,
+    truncated: false,
+    chunks: 1,
+    failedChunks: 0,
+  };
+}
+
 export async function documentProcessDirect(params: {
   file: File;
   provider: string;
@@ -851,6 +1082,18 @@ export async function documentProcessDirect(params: {
   chunks: number;
   failedChunks: number;
 }> {
+  // Structured-file fast path: parse rows client-side and send the LLM a JSON
+  // payload instead of a stringified CSV.
+  const ext = getFileExt(params.file.name);
+  if (isStructuredExt(ext)) {
+    const buf = await params.file.arrayBuffer();
+    const parsedRows = parseStructuredBuffer(buf, ext);
+    if (parsedRows && parsedRows.length > 0) {
+      return await processStructured({ ...params, rows: parsedRows });
+    }
+    // parseStructuredBuffer returned null/[] — fall through to text-based path
+  }
+
   const { extractTextBrowser } = await import("./document-browser");
   const { text: rawText, truncated, charCount } = await extractTextBrowser(params.file);
 
@@ -904,68 +1147,62 @@ export async function documentProcessDirect(params: {
   return { text, fileName: params.file.name, charCount, truncated, chunks: chunks.length, failedChunks };
 }
 
-// ── agentsRowDirect — mirrors /api/ai-agents-row ─────────────────────────────
+const COMMUNICATION_STYLE_PROMPTS: Record<string, string> = {
+  collaborative: "Review the other agents' outputs below. Incorporate their strongest insights into your answer. Build on areas of agreement, resolve minor differences by merging perspectives, and produce an improved unified response.",
+  adversarial: "Review the other agents' outputs below. Critically challenge their claims — identify weaknesses, logical gaps, unsupported assumptions, or factual errors. Defend your own position where you believe you are correct. If another agent makes a valid point that contradicts yours, acknowledge it but explain why your overall conclusion still holds or revise only what is genuinely wrong.",
+  deliberative: "Review the other agents' outputs below. Systematically evaluate each agent's position: list the strengths and weaknesses of each perspective. Then produce your revised answer by weighing the evidence objectively. Explain briefly which points you adopted and which you rejected and why.",
+  socratic: "Review the other agents' outputs below. For each agent's position, identify the underlying assumptions and question whether they hold. Ask probing questions about their reasoning. Then produce your revised answer that addresses these deeper questions and strengthens your reasoning.",
+};
 
-export async function agentsRowDirect(params: {
+// ── agentNetworkRowDirect — mirrors /api/agent-network-row ───────────────────
+
+export async function agentNetworkRowDirect(params: {
   agents: Array<{
-    name: string;
+    label: string;
     role: string;
     provider: string;
     model: string;
     apiKey: string;
     baseUrl?: string;
-    columns?: string[];
-    isReferee: boolean;
   }>;
   userContent: string;
   maxRounds: number;
+  communicationStyle?: string;
+  convergenceMode?: "fixed" | "adaptive";
+  convergenceThreshold?: number;
   temperature?: number;
   maxTokens?: number;
-}): Promise<AgentsResult> {
-  const nonReferees = params.agents.filter((a) => !a.isReferee);
-  const referee = params.agents.find((a) => a.isReferee);
-  if (!referee) throw new Error("No referee agent configured");
-  if (nonReferees.length < 1) throw new Error("Need at least one non-referee agent");
+}): Promise<AgentNetworkResult> {
+  if (params.agents.length < 2) throw new Error("Need at least 2 agents");
 
-  // Parse userContent once (may be JSON for structured data)
-  let parsedRow: Record<string, unknown> | null = null;
-  try { parsedRow = JSON.parse(params.userContent); } catch { /* unstructured text */ }
-
-  const negotiationLog: Array<{ round: number; agent: string; output: string }> = [];
-
-  // Track each agent's latest output across rounds
+  const roundOutputs: AgentNetworkResult["roundOutputs"] = [];
   const latestOutputs: Record<string, string> = {};
-  const totalLatencies: Record<string, number> = {};
-  nonReferees.forEach((a) => { totalLatencies[a.name] = 0; });
 
   let converged = false;
   let roundsTaken = 0;
+  const adaptive = params.convergenceMode === "adaptive";
+  const threshold = params.convergenceThreshold ?? 15;
+  // Adaptive runs up to 5 rounds max (hard cap), but uses delta scoring to stop early
+  const hardMaxRounds = adaptive ? 5 : params.maxRounds;
 
-  for (let round = 1; round <= params.maxRounds; round++) {
+  for (let round = 1; round <= hardMaxRounds; round++) {
     roundsTaken = round;
     const previousOutputs = { ...latestOutputs };
 
-    // Build prompts and run all non-referee agents in parallel
-    const promises = nonReferees.map(async (agent) => {
+    const promises = params.agents.map(async (agent) => {
       const model = getModel(agent.provider, agent.model, agent.apiKey, agent.baseUrl);
 
-      // Build user content: subset by columns if structured, else full text
-      let agentContent: string;
-      if (agent.columns && agent.columns.length > 0 && parsedRow) {
-        const subset: Record<string, unknown> = {};
-        agent.columns.forEach((col) => { subset[col] = parsedRow![col]; });
-        agentContent = JSON.stringify(subset);
-      } else {
-        agentContent = params.userContent;
-      }
+      let agentContent = params.userContent;
 
-      // For rounds 2+, append other agents' previous outputs
       if (round > 1) {
         const othersSection = Object.entries(previousOutputs)
-          .filter(([name]) => name !== agent.name)
-          .map(([name, output]) => `[${name}]:\n${output}`)
+          .filter(([label]) => label !== agent.label)
+          .map(([label, output]) => `[${label}]:\n${output}`)
           .join("\n\n");
-        agentContent += `\n\n--- Other agents' outputs from round ${round - 1} ---\n\n${othersSection}\n\n--- Refine your answer based on the above. ---`;
+        const styleInstruction = params.communicationStyle
+          ? (COMMUNICATION_STYLE_PROMPTS[params.communicationStyle] || "Refine your answer based on the above.")
+          : "Refine your answer based on the above.";
+        agentContent += `\n\n--- Other agents' outputs from round ${round - 1} ---\n\n${othersSection}\n\n--- ${styleInstruction} ---`;
       }
 
       const start = Date.now();
@@ -973,13 +1210,12 @@ export async function agentsRowDirect(params: {
         () => generateText(genOpts(model, agent.role, agentContent, params.temperature, params.maxTokens)),
         { maxAttempts: 3, baseDelayMs: 100 }
       );
-      const latency = (Date.now() - start) / 1000;
-      return { name: agent.name, output: text.trim(), latency };
+      return { label: agent.label, output: text.trim(), latency: (Date.now() - start) / 1000 };
     });
 
     const settled = await Promise.allSettled(promises);
     const results = settled
-      .filter((r): r is PromiseFulfilledResult<{ name: string; output: string; latency: number }> => r.status === "fulfilled")
+      .filter((r): r is PromiseFulfilledResult<{ label: string; output: string; latency: number }> => r.status === "fulfilled")
       .map((r) => r.value);
 
     if (results.length === 0) {
@@ -989,46 +1225,65 @@ export async function agentsRowDirect(params: {
       throw new Error(`All agents failed in round ${round}: ${errors.join("; ")}`);
     }
 
-    // Update outputs and log
     for (const r of results) {
-      latestOutputs[r.name] = r.output;
-      totalLatencies[r.name] = (totalLatencies[r.name] || 0) + r.latency;
-      negotiationLog.push({ round, agent: r.name, output: r.output });
+      latestOutputs[r.label] = r.output;
     }
 
-    // Check convergence: all agents' outputs same as previous round
+    roundOutputs.push({ round, outputs: results });
+
+    // Strict convergence: all outputs identical to previous round
     if (round > 1) {
-      converged = results.every((r) => previousOutputs[r.name] === r.output);
+      converged = results.every((r) => previousOutputs[r.label] === r.output);
       if (converged) break;
+    }
+
+    // Adaptive convergence: judge model scores semantic delta and decides if stable
+    if (adaptive && round > 1) {
+      try {
+        const judgeAgent = params.agents[0];
+        const judgeModel = getModel(judgeAgent.provider, judgeAgent.model, judgeAgent.apiKey, judgeAgent.baseUrl);
+        const comparison = params.agents.map((a) => {
+          const prev = previousOutputs[a.label] ?? "";
+          const curr = latestOutputs[a.label] ?? "";
+          return `[${a.label}]\nROUND ${round - 1}:\n${prev}\n\nROUND ${round}:\n${curr}`;
+        }).join("\n\n---\n\n");
+
+        const { text: judgeText } = await withRetry(
+          () => generateText(genOpts(
+            judgeModel,
+            `You are a convergence detector for a multi-agent deliberation. Compare each agent's output between two consecutive rounds. Score how much agents have changed their positions overall.
+
+Reply with ONLY a JSON object: {"delta": <number 0-100>, "stable": <boolean>}
+- delta: 0 = essentially identical (semantic), 100 = completely different positions
+- stable: true if agents have converged to stable positions (small revisions only)`,
+            comparison,
+            0,
+            500
+          )),
+          { maxAttempts: 2, baseDelayMs: 100 }
+        );
+
+        let delta = 100;
+        try {
+          let cleaned = judgeText.trim();
+          if (cleaned.startsWith("```")) cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+          const parsed = JSON.parse(cleaned) as { delta: number; stable?: boolean };
+          delta = typeof parsed.delta === "number" ? parsed.delta : 100;
+        } catch { /* parse failed — keep going */ }
+
+        if (delta <= threshold) {
+          converged = true;
+          break;
+        }
+      } catch {
+        // Judge failed — continue without adaptive stopping
+      }
     }
   }
 
-  // Referee round: sees original data + all agents' final outputs
-  const agentsSummary = Object.entries(latestOutputs)
-    .map(([name, output]) => `[${name}]:\n${output}`)
-    .join("\n\n");
-  const refereePrompt = `Original data:\n${params.userContent}\n\n--- Agent outputs (final round) ---\n\n${agentsSummary}`;
+  const allOutputs = Object.values(latestOutputs);
+  const allSame = allOutputs.every((o) => o === allOutputs[0]);
+  const finalConsensus = allSame ? allOutputs[0] : null;
 
-  const refereeModel = getModel(referee.provider, referee.model, referee.apiKey, referee.baseUrl);
-  const refStart = Date.now();
-  const { text: refereeText } = await withRetry(
-    () => generateText(genOpts(refereeModel, referee.role, refereePrompt, params.temperature, params.maxTokens)),
-    { maxAttempts: 3, baseDelayMs: 100 }
-  );
-  const refereeLatency = (Date.now() - refStart) / 1000;
-
-  const agentOutputs = nonReferees.map((a) => ({
-    name: a.name,
-    output: latestOutputs[a.name] || "",
-    latency: totalLatencies[a.name] || 0,
-  }));
-
-  return {
-    agentOutputs,
-    refereeOutput: refereeText.trim(),
-    refereeLatency,
-    negotiationLog,
-    roundsTaken,
-    converged,
-  };
+  return { roundOutputs, roundsTaken, converged, finalConsensus };
 }

@@ -51,7 +51,7 @@ export interface WorkerConfig {
   baseUrl?: string;
 }
 
-export interface JudgeConfig {
+export interface ReconcilerConfig {
   provider: string;
   model: string;
   apiKey: string;
@@ -66,8 +66,8 @@ export interface WorkerResult {
 
 export interface ConsensusResult {
   workerResults: WorkerResult[];
-  judgeOutput: string;
-  judgeLatency: number;
+  reconcilerOutput: string;
+  reconcilerLatency: number;
   consensusType: string;
   kappa: number;
   kappaLabel: string;

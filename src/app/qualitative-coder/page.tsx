@@ -591,6 +591,11 @@ export default function QualitativeCoderPage() {
               const text = codebook.filter((e) => e.code.trim()).map((e) => `${e.code}, ${e.description}, ${e.example}`).join("\n");
               setCsvPasteText(text);
               setPasteExtracted(false);
+              setCodebook([
+                { id: crypto.randomUUID(), code: "", description: "", example: "" },
+                { id: crypto.randomUUID(), code: "", description: "", example: "" },
+                { id: crypto.randomUUID(), code: "", description: "", example: "" },
+              ]);
             }}>
               <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit as CSV
             </Button>

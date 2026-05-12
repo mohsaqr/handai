@@ -25,8 +25,26 @@ export function useFileStatuses(fileStates: FileState[], results: FileResult[]) 
   }, [fileStates, results]);
 }
 
-/** Holds File objects in a ref keyed by `fileKey(file)`. File objects can't be
- * serialized, so anything relying on them must coordinate via this ref. */
-export function useFilesRef() {
-  return useRef<Map<string, File>>(new Map());
+// Module-level registry — survives component unmount (but not page reload).
+// Keyed by tool id so tools don't share their uploaded files.
+const moduleFileMaps = new Map<string, Map<string, File>>();
+
+function getOrCreateMap(key: string): Map<string, File> {
+  let map = moduleFileMaps.get(key);
+  if (!map) {
+    map = new Map<string, File>();
+    moduleFileMaps.set(key, map);
+  }
+  return map;
+}
+
+/** Holds File objects in a module-level Map keyed by `fileKey(file)`.
+ * File objects can't be serialized, so anything relying on them must coordinate
+ * via this ref. Pass a tool-unique `key` to keep each tool's files isolated. */
+export function useFilesRef(key: string = "default") {
+  const ref = useRef<Map<string, File> | null>(null);
+  if (ref.current === null) {
+    ref.current = getOrCreateMap(key);
+  }
+  return ref as { current: Map<string, File> };
 }

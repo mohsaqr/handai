@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { DataTable, ExportDropdown } from "@/components/tools/DataTable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,7 @@ import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection"
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
 import { useSessionState, clearSessionKeys } from "@/hooks/useSessionState";
 import { getPrompt } from "@/lib/prompts";
-import { FileUploader } from "@/components/tools/FileUploader";
+import { parseStructuredFile, getFileExt } from "@/lib/parse-file";
 import { SingleRunButton } from "@/components/tools/SingleRunButton";
 import { Textarea } from "@/components/ui/textarea";
 import Papa from "papaparse";
@@ -143,7 +143,14 @@ function parseJsonResponse(text: string): Array<{ name: string; type: string; de
 // ─── Module-level generation runner (survives navigation) ───────────────────
 
 const TOOL_ID = "/generate";
-const BATCH_SIZE = 25;
+// Rough heuristic: ~200 output tokens per structured row. Clamp to [1, 50] so
+// one misconfigured maxTokens can't produce a 1-row or 1000-row batch.
+const DEFAULT_BATCH_SIZE = 25;
+const TOKENS_PER_ROW_ESTIMATE = 200;
+function deriveBatchSize(maxTokens?: number): number {
+  if (!maxTokens || maxTokens <= 0) return DEFAULT_BATCH_SIZE;
+  return Math.max(1, Math.min(50, Math.floor(maxTokens / TOKENS_PER_ROW_ESTIMATE)));
+}
 
 const activeGenerateJobs = new Map<string, Promise<void>>();
 
@@ -224,16 +231,38 @@ async function executeGeneration(params: GenerateParams) {
   }
 
   // Batched structured generation
-  let accumulated: Record<string, unknown>[] = params.resumeFrom ? [...(params.existingData ?? [])] : [];
+  const META_KEYS = new Set(["_format", "_raw", "status", "latency_ms", "error_msg"]);
+  const stripMeta = (r: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(r)) {
+      if (!META_KEYS.has(k)) out[k] = v;
+    }
+    return out;
+  };
+
+  let accumulated: Record<string, unknown>[] = params.resumeFrom
+    ? (params.existingData ?? []).map(stripMeta)
+    : [];
+  const rowLatencies: number[] = params.resumeFrom
+    ? (params.existingData ?? []).map((r) => (typeof r.latency_ms === "number" ? (r.latency_ms as number) : 0))
+    : [];
   let errors = 0;
   let generated = startFrom;
   const latencies: number[] = [];
+  const batchCap = deriveBatchSize(params.maxTokens);
   const effectiveStructure = params.isStructured && params.columns?.some((c) => c.name.trim()) ? "define_columns" : "ai_decide";
+
+  const buildDisplayRows = () => accumulated.map((row, i) => ({
+    ...row,
+    status: "success" as const,
+    latency_ms: rowLatencies[i] ?? 0,
+    _format: params.outputFormat,
+  }));
 
   while (generated < totalCount) {
     if (getAbortFlag(TOOL_ID) || currentGeneration(TOOL_ID) !== gen) break;
 
-    const batchSize = Math.min(BATCH_SIZE, totalCount - generated);
+    const batchSize = Math.min(batchCap, totalCount - generated);
 
     // Build context from already-generated rows so the LLM maintains consistency
     // across batches and resume. Show a sample of up to 5 recent rows.
@@ -260,7 +289,10 @@ async function executeGeneration(params: GenerateParams) {
         maxTokens: params.maxTokens,
       });
 
-      latencies.push(Date.now() - t0);
+      const batchLatency = Date.now() - t0;
+      latencies.push(batchLatency);
+      const perRow = data.rows.length > 0 ? Math.round(batchLatency / data.rows.length) : batchLatency;
+      for (let i = 0; i < data.rows.length; i++) rowLatencies.push(perRow);
       accumulated = [...accumulated, ...(data.rows as Row[])];
       generated += data.rows.length;
     } catch {
@@ -271,13 +303,14 @@ async function executeGeneration(params: GenerateParams) {
 
     if (currentGeneration(TOOL_ID) === gen) {
       // Update progress and intermediate results in store
+      const displayRows = buildDisplayRows();
       useProcessingStore.setState((state) => ({
         jobs: {
           ...state.jobs,
           [TOOL_ID]: {
             ...state.jobs[TOOL_ID],
             progress: { completed: generated, total: totalCount },
-            results: accumulated.map((row) => ({ ...row, status: "success" as const })),
+            results: displayRows,
           },
         },
       }));
@@ -298,12 +331,12 @@ async function executeGeneration(params: GenerateParams) {
       input: row as Record<string, unknown>,
       output: JSON.stringify(row),
       status: "success" as const,
-      latency: avgLatency,
+      latency: rowLatencies[i] ?? avgLatency,
     }));
     await dispatchSaveResults(localRunId, resultRows);
   }
   const computedStats = { success: accumulated.length, errors, avgLatency };
-  const finalResults = accumulated.map((row) => ({ ...row, _format: params.outputFormat, status: "success" as const }));
+  const finalResults = buildDisplayRows();
   store.completeJob(TOOL_ID, finalResults, computedStats, localRunId);
 }
 
@@ -360,14 +393,24 @@ export default function GeneratePage() {
     if (storeResults.length === 0) return [];
     // Freetext results have _raw field, structured results don't
     if (storeResults[0]?._raw) return [];
-    return storeResults;
+    // Strip internal format marker; keep status + latency_ms for parity with historical runs
+    return storeResults.map((row) => {
+      const { _format, ...rest } = row as Record<string, unknown> & { _format?: unknown };
+      void _format;
+      return rest;
+    });
   }, [storeResults]);
 
   const generatedRaw = useMemo(() => {
     if (storeResults.length === 0) return "";
     if (storeResults[0]?._raw) return storeResults[0]._raw as string;
     if (resultFormat === "json" && storeResults.length > 0 && !storeResults[0]?._raw) {
-      return JSON.stringify(storeResults, null, 2);
+      const stripped = storeResults.map((row) => {
+        const { _format, ...rest } = row as Record<string, unknown> & { _format?: unknown };
+        void _format;
+        return rest;
+      });
+      return JSON.stringify(stripped, null, 2);
     }
     return "";
   }, [storeResults, resultFormat]);
@@ -392,6 +435,7 @@ export default function GeneratePage() {
   const [fileExtracted, setFileExtracted] = useState(false);
   const [pasteExtracted, setPasteExtracted] = useState(false);
   const [csvPasteText, setCsvPasteText] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isStructured = outputFormat === "tabular" || outputFormat === "json";
   const isFreetext = outputFormat === "freetext" || outputFormat === "markdown" || outputFormat === "gift";
@@ -408,8 +452,11 @@ export default function GeneratePage() {
       lines.push("");
     }
 
+    // Schema is structured-only — free-text outputs don't use a column schema,
+    // so omit the block entirely (the columns state is preserved untouched, so
+    // switching back to a structured format restores the schema in the prompt).
     const namedCols = columns.filter((c) => c.name.trim());
-    if (namedCols.length > 0) {
+    if (!isFreetext && namedCols.length > 0) {
       lines.push("SCHEMA:");
       namedCols.forEach((c) => {
         lines.push(`- ${c.name} (${c.type})${c.description ? `: ${c.description}` : ""}`);
@@ -445,10 +492,30 @@ export default function GeneratePage() {
     lines.push(AI_INSTRUCTIONS_MARKER);
 
     return lines.join("\n");
-  }, [description, columns, outputFormat, rowCount, isStructured]);
+  }, [description, columns, outputFormat, rowCount, isStructured, isFreetext]);
 
   // ── AI Instructions state ──
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
+
+  // When the user switches from a structured format (tabular/json) to a free-text
+  // format, strip any leftover `SCHEMA:` block out of the prompt — including
+  // content the user may have moved past the "Extra Instructions" marker.
+  // The auto-builder above already handles the before-marker portion via the
+  // `isFreetext` guard; this also cleans the after-marker portion.
+  const prevFormatRef = useRef<OutputFormat>(outputFormat);
+  useEffect(() => {
+    const prev = prevFormatRef.current;
+    prevFormatRef.current = outputFormat;
+    if (prev === outputFormat) return;
+    const wasStructured = prev === "tabular" || prev === "json";
+    if (wasStructured && isFreetext) {
+      setAiInstructions((current) =>
+        current
+          .replace(/^SCHEMA:\n(?:- [^\n]*\n)*/gm, "")
+          .replace(/\n{3,}/g, "\n\n"),
+      );
+    }
+  }, [outputFormat, isFreetext, setAiInstructions]);
 
 
   const canGenerate = description.trim().length > 0 && (isFreetext || columns.some((c) => c.name.trim()));
@@ -547,9 +614,14 @@ export default function GeneratePage() {
           const cleanResults = restored.results.map((row) => {
             const clean: Record<string, unknown> = {};
             for (const [k, v] of Object.entries(row)) {
-              if (k !== "status" && k !== "latency_ms" && k !== "error_msg" && k !== "ai_output") clean[k] = v;
+              if (k !== "error_msg" && k !== "ai_output") clean[k] = v;
             }
-            return { ...clean, _format: restoredFormat, status: "success" };
+            return {
+              ...clean,
+              _format: restoredFormat,
+              status: clean.status ?? "success",
+              latency_ms: typeof clean.latency_ms === "number" ? clean.latency_ms : 0,
+            };
           });
           useProcessingStore.getState().completeJob(
             TOOL_ID,
@@ -631,6 +703,27 @@ export default function GeneratePage() {
     setFileExtracted(true);
     if (warnings.length > 0) toast.warning(warnings.join("\n"));
     toast.success(`${fields.length} columns imported`);
+  }, []);
+
+  const handleFileSelected = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const rows = await parseStructuredFile(file);
+      if (!rows) {
+        toast.error(`Failed to parse .${getFileExt(file.name)} file`);
+        return;
+      }
+      setColumnMode("file");
+      handleTemplateFile(rows, file.name);
+    } catch (err: unknown) {
+      toast.error(`Failed to process file: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [handleTemplateFile]);
+
+  const openFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
   }, []);
 
   // ── From pasted CSV text ──
@@ -855,6 +948,13 @@ export default function GeneratePage() {
               <Upload className="h-3.5 w-3.5 mr-1.5" />
               Import CSV/Excel
             </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              className="hidden"
+              onChange={handleFileSelected}
+            />
             <Button
               variant="outline"
               size="sm"
@@ -935,24 +1035,14 @@ export default function GeneratePage() {
 
           {/* ── Import mode ── */}
           {columnMode === "file" && !fileExtracted && !suggestedFields.some((f) => f.name.trim()) && (
-            <div className="max-w-md">
-              <FileUploader
-                onDataLoaded={handleTemplateFile}
-                accept={{
-                  "text/csv": [".csv"],
-                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-                  "application/vnd.ms-excel": [".xls"],
-                }}
-              />
-            </div>
+            <Button variant="outline" size="sm" className="text-xs" onClick={openFilePicker}>
+              <Upload className="h-3.5 w-3.5 mr-1.5" /> Choose File
+            </Button>
           )}
           {columnMode === "file" && (fileExtracted || suggestedFields.some((f) => f.name.trim())) && (
             <>
-            <Button variant="outline" size="sm" className="text-xs" onClick={() => {
-              setFileExtracted(false);
-              setSuggestedFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }]);
-            }}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Import"}
+            <Button variant="outline" size="sm" className="text-xs" onClick={openFilePicker}>
+              <Upload className="h-3.5 w-3.5 mr-1.5" /> {fileExtracted ? "Re-import" : "Choose File"}
             </Button>
             <div className="border rounded-lg overflow-hidden">
               <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Column Schema</div>
@@ -1022,7 +1112,7 @@ export default function GeneratePage() {
               setPasteExtracted(false);
               setSuggestedFields([{ name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }, { name: "", type: "text", description: "" }]);
             }}>
-              <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit
+              <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit as CSV
             </Button>
             <div className="border rounded-lg overflow-hidden">
               <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium">Column Schema</div>

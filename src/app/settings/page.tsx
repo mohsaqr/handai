@@ -11,7 +11,7 @@ import { useAppStore, DEFAULT_SYSTEM_SETTINGS } from "@/lib/store";
 import { useSystemSettings, useConfiguredProviders } from "@/lib/hooks";
 import { PROMPTS, getPrompt, setPromptOverride, clearPromptOverride } from "@/lib/prompts";
 import { toast } from "sonner";
-import { Key, ShieldCheck, Loader2, Wifi, RotateCcw, ChevronDown, Bot, Sliders, RefreshCw, SlidersHorizontal, Minus, Plus } from "lucide-react";
+import { Key, ShieldCheck, Loader2, Wifi, RotateCcw, ChevronDown, Bot, Sliders, RefreshCw, SlidersHorizontal, Minus, Plus, Trash2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 
@@ -35,7 +35,7 @@ const PROMPT_CATEGORIES = ["transform", "qualitative", "consensus", "codebook", 
 const PROMPT_CATEGORY_LABELS: Record<string, string> = {
   transform: "Transform Data",
   qualitative: "Qualitative Coder",
-  consensus: "Consensus Coder",
+  consensus: "Model Comparison",
   codebook: "Codebook Generator",
   generate: "Generate Data",
   automator: "Automator",
@@ -53,6 +53,31 @@ export default function SettingsPage() {
   const [openCategories, setOpenCategories] = useState<Set<string>>(new Set());
   const [localModels, setLocalModels] = useState<Record<string, string[]>>({});
   const [isDetecting, setIsDetecting] = useState(false);
+
+  const [cloudSlots, setCloudSlots] = useState<(string | null)[]>(() => {
+    const initial = useAppStore.getState().providers;
+    const saved = CLOUD_PROVIDERS.filter((id) => initial[id]?.apiKey);
+    return saved.length > 0 ? saved : [null];
+  });
+
+  const addCloudSlot = () => {
+    const used = new Set(cloudSlots.filter((s): s is string => s !== null));
+    const firstAvailable = CLOUD_PROVIDERS.find((id) => !used.has(id));
+    if (!firstAvailable) return;
+    setProviderConfig(firstAvailable, { isEnabled: true });
+    setCloudSlots((prev) => [...prev, firstAvailable]);
+  };
+  const updateCloudSlot = (idx: number, providerId: string) => {
+    setProviderConfig(providerId, { isEnabled: true });
+    setCloudSlots((prev) => prev.map((s, i) => (i === idx ? providerId : s)));
+  };
+  const removeCloudSlot = (idx: number) => {
+    const providerId = cloudSlots[idx];
+    if (providerId) {
+      setProviderConfig(providerId, { apiKey: "", baseUrl: "", isEnabled: false });
+    }
+    setCloudSlots((prev) => (prev.length === 1 ? [null] : prev.filter((_, i) => i !== idx)));
+  };
 
   const providersRef = useRef<HTMLDivElement>(null);
   const systemRef = useRef<HTMLDivElement>(null);
@@ -160,6 +185,151 @@ export default function SettingsPage() {
   const modifiedCount = Object.keys(PROMPTS).filter(
     (id) => (promptValues[id] ?? PROMPTS[id].defaultValue) !== PROMPTS[id].defaultValue
   ).length;
+
+  const renderCloudSlot = (slotIdx: number, providerId: string | null) => {
+    const usedElsewhere = new Set(
+      cloudSlots
+        .map((s, i) => (i !== slotIdx ? s : null))
+        .filter((s): s is string => s !== null),
+    );
+    const availableIds = CLOUD_PROVIDERS.filter((id) => !usedElsewhere.has(id));
+
+    if (providerId === null) {
+      return (
+        <div key={`slot-${slotIdx}`} className="rounded-xl border border-dashed border-border bg-card/50">
+          <div className="flex items-center gap-3 px-4 py-3">
+            <span className="h-2 w-2 rounded-full shrink-0 bg-muted-foreground/25" />
+            <Key className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <Select value="" onValueChange={(v) => updateCloudSlot(slotIdx, v)}>
+              <SelectTrigger className="h-8 text-sm flex-1 max-w-xs">
+                <SelectValue placeholder="Select an AI provider..." />
+              </SelectTrigger>
+              <SelectContent>
+                {availableIds.map((id) => (
+                  <SelectItem key={id} value={id} className="text-sm">
+                    {PROVIDER_LABELS[id] ?? id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex-1" />
+            <button
+              onClick={() => removeCloudSlot(slotIdx)}
+              className="ml-auto p-1.5 rounded text-red-500 hover:text-red-600 hover:bg-red-500/10 transition-colors"
+              title="Remove"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    const config = providers[providerId];
+    const status = getStatus(providerId);
+    const showBaseUrl = BASE_URL_PROVIDERS.has(providerId);
+    const colCount = showBaseUrl ? 3 : 2;
+
+    const dotColor =
+      status === "ready" || status === "local"
+        ? "bg-green-500"
+        : status === "no-key"
+        ? "bg-amber-400"
+        : "bg-muted-foreground/25";
+
+    return (
+      <div
+        key={`slot-${slotIdx}`}
+        className={`rounded-xl border transition-all ${
+          config.isEnabled ? "border-border bg-card" : "border-border/30 bg-muted/10 opacity-55"
+        }`}
+      >
+        <div className="flex items-center gap-3 px-4 py-3">
+          <span className={`h-2 w-2 rounded-full shrink-0 ${dotColor}`} />
+          <Key className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <Select value={providerId} onValueChange={(v) => updateCloudSlot(slotIdx, v)}>
+            <SelectTrigger className="h-8 text-sm font-semibold flex-1 max-w-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {availableIds.map((id) => (
+                <SelectItem key={id} value={id} className="text-sm">
+                  {PROVIDER_LABELS[id] ?? id}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-1.5 ml-2">
+            <span className="text-[11px] text-muted-foreground">Enabled</span>
+            <Switch
+              checked={config.isEnabled}
+              onCheckedChange={(v) => setProviderConfig(providerId, { isEnabled: v })}
+              size="sm"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs px-2.5 ml-1"
+            onClick={() => testConnection(providerId)}
+            disabled={isTesting !== null || !config.isEnabled}
+          >
+            {isTesting === providerId ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ShieldCheck className="h-3.5 w-3.5" />
+            )}
+            <span className="ml-1">Test</span>
+          </Button>
+          <button
+            onClick={() => removeCloudSlot(slotIdx)}
+            className="ml-auto p-1.5 rounded text-red-500 hover:text-red-600 hover:bg-red-500/10 transition-colors"
+            title="Remove"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div
+          className="px-4 pb-3.5 pt-0 grid gap-x-4 gap-y-2.5"
+          style={{ gridTemplateColumns: `repeat(${colCount}, 1fr)` }}
+        >
+          <div className="space-y-1">
+            <Label className="text-[11px] text-muted-foreground">API Key</Label>
+            <Input
+              type="password"
+              placeholder={providerId === "azure" ? "Azure API Key" : "sk-..."}
+              value={config.apiKey}
+              onChange={(e) => setProviderConfig(providerId, { apiKey: e.target.value })}
+              className="h-8 text-xs font-mono"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-[11px] text-muted-foreground">Default Model</Label>
+            <Input
+              placeholder="e.g. gpt-4o"
+              value={config.defaultModel}
+              onChange={(e) => setProviderConfig(providerId, { defaultModel: e.target.value })}
+              className="h-8 text-xs font-mono"
+            />
+          </div>
+          {showBaseUrl && (
+            <div className="space-y-1">
+              <Label className="text-[11px] text-muted-foreground">
+                {providerId === "azure" ? "Resource Name" : "Base URL"}
+              </Label>
+              <Input
+                placeholder={providerId === "azure" ? "my-resource-name" : "https://api.example.com/v1"}
+                value={config.baseUrl ?? ""}
+                onChange={(e) => setProviderConfig(providerId, { baseUrl: e.target.value })}
+                className="h-8 text-xs font-mono"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   const renderProvider = (id: string) => {
     const config = providers[id];
@@ -319,14 +489,14 @@ export default function SettingsPage() {
     <div className="flex gap-10 min-h-[calc(100vh-112px)]">
 
       {/* ── Sticky side nav ─────────────────────────────────── */}
-      <nav className="w-40 shrink-0 pt-1">
+      <nav className="w-80 shrink-0 pt-1">
         <div className="sticky top-6 space-y-0.5">
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50 px-3 mb-2">
             Settings
           </p>
           {[
             { id: "providers", label: "AI Providers", icon: Bot },
-            { id: "system", label: "System", icon: SlidersHorizontal },
+            { id: "system", label: "System Settings", icon: SlidersHorizontal },
             { id: "prompts", label: "Prompt Templates", icon: Sliders, badge: modifiedCount },
           ].map(({ id, label, icon: Icon, badge }) => (
             <button
@@ -351,7 +521,7 @@ export default function SettingsPage() {
       </nav>
 
       {/* ── Main content ────────────────────────────────────── */}
-      <div className="flex-1 min-w-0 max-w-5xl space-y-14 pb-20">
+      <div className="flex-1 min-w-0 space-y-14 pb-20">
 
         {/* ── AI Providers ───────────────────────────────────── */}
         <section ref={providersRef}>
@@ -362,30 +532,36 @@ export default function SettingsPage() {
             </p>
           </div>
 
-          {configured.length > 1 && (
-            <div className="rounded-xl border bg-card p-4 space-y-2">
-              <Label className="text-xs font-medium">Default AI Provider</Label>
-              <Select
-                value={activeProviderId ?? "__auto__"}
-                onValueChange={(v) => setActiveProvider(v === "__auto__" ? null : v)}
-              >
-                <SelectTrigger className="h-9 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__auto__" className="text-sm">Auto (first available)</SelectItem>
-                  {configured.map((p) => (
-                    <SelectItem key={p.providerId} value={p.providerId} className="text-sm">
-                      {PROVIDER_LABELS[p.providerId] ?? p.providerId} — {p.defaultModel}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-[10px] text-muted-foreground">
-                Choose which provider is used by default across all tools, or leave on Auto to use the first available.
-              </p>
-            </div>
-          )}
+          {(() => {
+            const visibleConfigured = configured.filter((p) =>
+              LOCAL_PROVIDERS.includes(p.providerId) || cloudSlots.includes(p.providerId),
+            );
+            if (visibleConfigured.length <= 1) return null;
+            return (
+              <div className="rounded-xl border bg-card p-4 space-y-2">
+                <Label className="text-xs font-medium">Default AI Provider</Label>
+                <Select
+                  value={activeProviderId ?? "__auto__"}
+                  onValueChange={(v) => setActiveProvider(v === "__auto__" ? null : v)}
+                >
+                  <SelectTrigger className="h-9 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__auto__" className="text-sm">Auto (first available)</SelectItem>
+                    {visibleConfigured.map((p) => (
+                      <SelectItem key={p.providerId} value={p.providerId} className="text-sm">
+                        {PROVIDER_LABELS[p.providerId] ?? p.providerId} — {p.defaultModel}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-muted-foreground">
+                  Choose which provider is used by default across all tools, or leave on Auto to use the first available.
+                </p>
+              </div>
+            );
+          })()}
 
           <div className="space-y-8">
             <div>
@@ -393,7 +569,17 @@ export default function SettingsPage() {
                 Cloud APIs
               </p>
               <div className="space-y-2">
-                {CLOUD_PROVIDERS.map(renderProvider)}
+                {cloudSlots.map((id, idx) => renderCloudSlot(idx, id))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  onClick={addCloudSlot}
+                  disabled={cloudSlots.length >= CLOUD_PROVIDERS.length}
+                >
+                  <Plus className="h-3 w-3 mr-1.5" />
+                  Add AI Provider
+                </Button>
               </div>
             </div>
 

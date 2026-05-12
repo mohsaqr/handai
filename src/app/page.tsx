@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Bot, Database, Edit3, Users, Wand2, Columns, History, BookOpen, Sparkles, FileArchive, TableProperties, FlaskConical, ArrowRight, MoreVertical, Printer, Video, RefreshCw, Settings, Clock } from "lucide-react";
+import { Bot, Database, Edit3, Wand2, Columns, History, BookOpen, Sparkles, FileArchive, TableProperties, FlaskConical, ArrowRight, MoreVertical, Printer, Video, RefreshCw, Settings, Clock, LayoutDashboard } from "lucide-react";
 import Link from "next/link";
 import {
   DropdownMenu,
@@ -18,7 +18,7 @@ const CATEGORIES = [
     tools: [
       {
         title: "Transform Data",
-        description: "AI-powered transformation, enrichment, and classification of tabular data.",
+        description: "Apply a single AI prompt to every row of a CSV — classify, label, summarize, or rewrite at scale.",
         icon: Wand2,
         href: "/transform",
         color: "text-blue-400",
@@ -27,7 +27,7 @@ const CATEGORIES = [
       },
       {
         title: "General Automator",
-        description: "Build and run custom multi-step AI pipelines for any data task.",
+        description: "Chain multiple AI prompts into a pipeline — each step feeds the next, processed in parallel across rows.",
         icon: Database,
         href: "/automator",
         color: "text-indigo-500",
@@ -36,7 +36,7 @@ const CATEGORIES = [
       },
       {
         title: "Generate Data",
-        description: "Create realistic synthetic datasets — define a schema or describe freely.",
+        description: "Generate synthetic datasets from a column schema or a free-form description — useful for prototyping pipelines.",
         icon: Sparkles,
         href: "/generate",
         color: "text-cyan-500",
@@ -45,7 +45,7 @@ const CATEGORIES = [
       },
       {
         title: "Extract Data",
-        description: "Extract structured tabular data from documents using AI.",
+        description: "Pull structured rows out of PDFs or DOCX into a table — define columns once, run across many files.",
         icon: TableProperties,
         href: "/extract-data",
         color: "text-teal-500",
@@ -54,7 +54,7 @@ const CATEGORIES = [
       },
       {
         title: "Process Documents",
-        description: "Upload documents, write instructions, and get free-form AI output.",
+        description: "Run free-form prompts over PDFs, DOCX, or plain text — one AI response per file, exportable as CSV.",
         icon: FileArchive,
         href: "/process-documents",
         color: "text-violet-500",
@@ -64,20 +64,11 @@ const CATEGORIES = [
     ],
   },
   {
-    name: "Qualitative Analysis",
+    name: "Multi Agent System",
     tools: [
       {
-        title: "Consensus Coder",
-        description: "Multi-model consensus coding with inter-rater reliability (Cohen's Kappa).",
-        icon: Users,
-        href: "/consensus-coder",
-        color: "text-purple-500",
-        bg: "bg-purple-50 dark:bg-purple-950/30",
-        border: "hover:border-purple-200 dark:hover:border-purple-800",
-      },
-      {
         title: "Model Comparison",
-        description: "Compare outputs from multiple LLMs side-by-side on your dataset.",
+        description: "Run one prompt across multiple LLMs side-by-side, reconcile into a single answer, and score agreement with Cohen's kappa.",
         icon: Columns,
         href: "/model-comparison",
         color: "text-blue-500",
@@ -85,10 +76,10 @@ const CATEGORIES = [
         border: "hover:border-blue-200 dark:hover:border-blue-800",
       },
       {
-        title: "AI Agents",
-        description: "Role-based multi-agent negotiation with referee synthesis.",
-        icon: Users,
-        href: "/ai-agents",
+        title: "MAS Panel",
+        description: "Orchestrate multi-agent workflows — sequential pipelines, parallel deliberation rounds, or reconciler-with-workers.",
+        icon: LayoutDashboard,
+        href: "/mas-panel",
         color: "text-purple-500",
         bg: "bg-purple-50 dark:bg-purple-950/30",
         border: "hover:border-purple-200 dark:hover:border-purple-800",
@@ -100,7 +91,7 @@ const CATEGORIES = [
     tools: [
       {
         title: "Codebook Generator",
-        description: "3-stage AI pipeline: Discovery → Consolidation → Definition.",
+        description: "Build a qualitative codebook from raw text in three AI passes — discovery, consolidation, definition — with editable output.",
         icon: BookOpen,
         href: "/codebook-generator",
         color: "text-emerald-500",
@@ -109,7 +100,7 @@ const CATEGORIES = [
       },
       {
         title: "Qualitative Coder",
-        description: "AI-assisted qualitative coding — apply codes to each row of your dataset.",
+        description: "Assign codes from your codebook to each text row — AI does the first pass, you keep the final say.",
         icon: Edit3,
         href: "/qualitative-coder",
         color: "text-orange-500",
@@ -118,7 +109,7 @@ const CATEGORIES = [
       },
       {
         title: "AI Coder",
-        description: "Interactive thematic analysis with AI-assisted suggestions and manual review.",
+        description: "Thematic analysis with confidence-scored AI suggestions, row-by-row review, and built-in agreement analytics.",
         icon: Bot,
         href: "/ai-coder",
         color: "text-orange-400",
@@ -127,7 +118,7 @@ const CATEGORIES = [
       },
       {
         title: "Abstract Screener",
-        description: "AI-assisted abstract screening for systematic literature reviews.",
+        description: "Include/exclude screening for systematic reviews — title + abstract in, decision and rationale out, PRISMA-ready.",
         icon: FlaskConical,
         href: "/abstract-screener",
         color: "text-pink-500",
@@ -141,7 +132,7 @@ const CATEGORIES = [
     tools: [
       {
         title: "Historical Runs",
-        description: "Review past sessions, results, and performance metrics.",
+        description: "Browse, restore, or re-export every past run — full prompts, results, and latency/cost metrics preserved.",
         icon: History,
         href: "/history",
         color: "text-slate-500",
@@ -150,7 +141,7 @@ const CATEGORIES = [
       },
       {
         title: "Settings",
-        description: "Manage API keys, providers, and system preferences.",
+        description: "Configure API keys and providers, tune concurrency and retry behavior, and probe local Ollama / LM Studio models.",
         icon: Settings,
         href: "/settings",
         color: "text-slate-500",

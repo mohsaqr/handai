@@ -56,12 +56,15 @@ const TOOL_LABELS: Record<string, string> = {
   "extract-data": "Extract Data",
   "process-documents": "Process Documents",
   "qualitative-coder": "Qualitative Coder",
-  "consensus-coder": "Consensus Coder",
-  "ai-coder": "AI Coder",
   "model-comparison": "Model Comparison",
-  "ai-agents": "AI Agents",
+  "ai-coder": "AI Coder",
+  "agent-panel": "MAS Panel",
   "codebook-generator": "Codebook Generator",
   "abstract-screener": "Abstract Screener",
+  // Legacy run types — internal slug rename ("consensus-coder" → "model-comparison")
+  // and a fully-removed tool. Historical runs in the DB still carry the old slug.
+  "consensus-coder": "Model Comparison",
+  "ai-agents": "AI Agents (legacy)",
 };
 
 function toolLabel(runType: string): string {
@@ -430,15 +433,15 @@ function HistoryContent() {
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10 bg-muted shadow-[0_1px_0_0_var(--color-border)]">
               <tr>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Status</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">File</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Tool</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Model</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Date</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Duration</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Rows</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Results</th>
-                <th className="text-left font-bold px-4 py-2.5 select-none">Avg Latency</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Status</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">File</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Tool</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Model</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Date</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Duration</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Rows</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Success rate</th>
+                <th className="text-center font-bold px-4 py-2.5 select-none">Avg Latency</th>
                 <th className="px-4 py-2.5"></th>
               </tr>
             </thead>
@@ -449,9 +452,9 @@ function HistoryContent() {
                   onClick={() => navigateToDetail(run.id)}
                   className={`group cursor-pointer border-t hover:bg-muted/40 transition-colors ${i % 2 === 0 ? "" : "bg-muted/10"}`}
                 >
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5 text-center">
                     <div
-                      className={`h-7 w-7 rounded-md flex items-center justify-center ${
+                      className={`h-7 w-7 rounded-md flex items-center justify-center mx-auto ${
                         run.status === "completed"
                           ? "bg-green-50 dark:bg-green-950/30 text-green-600"
                           : "bg-indigo-50 dark:bg-indigo-950/30 text-indigo-600"
@@ -464,31 +467,31 @@ function HistoryContent() {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-2.5 font-medium max-w-[200px] truncate">{run.inputFile}</td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5 font-medium max-w-[200px] truncate text-center">{run.inputFile}</td>
+                  <td className="px-4 py-2.5 text-center">
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                       {toolLabel(run.runType)}
                     </Badge>
                   </td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5 text-center">
                     <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
                       {run.provider}/{run.model}
                     </Badge>
                   </td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs whitespace-nowrap">
+                  <td className="px-4 py-2.5 text-muted-foreground text-xs whitespace-nowrap text-center">
                     {new Date(run.startedAt).toLocaleDateString()}{" "}
                     {new Date(run.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground text-center">
                     {run.completedAt ? formatDuration(run.startedAt, run.completedAt) : "—"}
                   </td>
-                  <td className="px-4 py-2.5 text-xs">{run.inputRows}</td>
-                  <td className="px-4 py-2.5 text-xs">
-                    <span className="text-green-600 font-medium">{run.successCount}</span>
+                  <td className="px-4 py-2.5 text-xs text-center">{run.inputRows}</td>
+                  <td className="px-4 py-2.5 text-xs text-center">
+                    <span className={run.errorCount > 0 ? "text-amber-600 font-medium" : "text-green-600 font-medium"}>{run.successCount}</span>
                     {" / "}
-                    <span className={run.errorCount > 0 ? "text-red-500 font-medium" : "text-muted-foreground"}>{run.errorCount}</span>
+                    <span className="text-muted-foreground">{run.inputRows}</span>
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                  <td className="px-4 py-2.5 text-xs text-muted-foreground text-center">
                     {run.avgLatency ? `${(run.avgLatency / 1000).toFixed(2)}s` : "—"}
                   </td>
                   <td className="px-4 py-2.5">

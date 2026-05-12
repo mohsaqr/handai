@@ -88,7 +88,7 @@ Return ONLY the codes. No explanations, no prose.
 If no codes apply, return "Uncoded".`,
   },
 
-  // ── Consensus Coder ────────────────────────────────────────────────────────
+  // ── Model Comparison (formerly Consensus Coder) ────────────────────────────
   "consensus.worker_default": {
     id: "consensus.worker_default",
     name: "Consensus — Worker (Default)",
@@ -119,16 +119,16 @@ CODING PROCEDURE:
 1. For each text segment, evaluate it against every code in the codebook.
 2. Apply a code when the text clearly speaks to that theme — explicit statement or strong implication.
 3. Apply multiple codes when the text genuinely addresses multiple themes.
-4. When uncertain, lean toward applying the code — disagreements will be resolved by a judge.
+4. When uncertain, lean toward applying the code — disagreements will be resolved by a reconciler.
 
 OUTPUT:
 - Plain text only. No markdown, no headings, no code fences.
 - Return only the requested output. No explanations.`,
   },
 
-  "consensus.judge_default": {
-    id: "consensus.judge_default",
-    name: "Consensus — Judge (Default)",
+  "consensus.reconciler_default": {
+    id: "consensus.reconciler_default",
+    name: "Consensus — Reconciler (Default)",
     category: "consensus",
     defaultValue: `You are a senior researcher adjudicating between independent coders.
 
@@ -144,9 +144,9 @@ OUTPUT:
 - Plain text only. No markdown, no headings, no code fences.`,
   },
 
-  "consensus.judge_enhanced": {
-    id: "consensus.judge_enhanced",
-    name: "Consensus — Judge (Enhanced)",
+  "consensus.reconciler_enhanced": {
+    id: "consensus.reconciler_enhanced",
+    name: "Consensus — Reconciler (Enhanced)",
     category: "consensus",
     defaultValue: `You are a senior qualitative methodologist adjudicating between independent coders in an inter-rater reliability study.
 

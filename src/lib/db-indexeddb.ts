@@ -232,6 +232,29 @@ export async function renameRun(id: string, newName: string): Promise<{ ok: bool
   return { ok: true };
 }
 
+// ── Update run stats ─────────────────────────────────────────────────────────
+
+export async function updateRun(
+  id: string,
+  patch: {
+    avgLatency?: number;
+    totalDuration?: number;
+    status?: string;
+    completedAt?: string;
+    systemPrompt?: string;
+  },
+): Promise<{ ok: boolean }> {
+  const db = await openDb();
+  const tx = db.transaction("runs", "readwrite");
+  const store = tx.objectStore("runs");
+  const run: RunMeta | undefined = await idbReq(store.get(id));
+  if (!run) return { ok: false };
+  Object.assign(run, patch);
+  store.put(run);
+  await idbTx(tx);
+  return { ok: true };
+}
+
 // ── Delete run ────────────────────────────────────────────────────────────────
 
 export async function deleteRun(id: string): Promise<{ ok: boolean }> {

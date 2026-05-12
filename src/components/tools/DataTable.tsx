@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import {
     Table,
     TableBody,
@@ -79,15 +80,41 @@ export function exportData(data: Record<string, unknown>[], format: ExportFormat
     URL.revokeObjectURL(url);
 }
 
-/** Dropdown button for exporting data in multiple formats. */
+/** Dropdown button for exporting data in multiple formats.
+ *  Menu is portaled to <body> so it escapes any ancestor's `overflow: hidden`. */
 export function ExportDropdown({ data, filename }: { data: Record<string, unknown>[]; filename?: string }) {
     const [showMenu, setShowMenu] = useState(false);
+    const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+    const [mounted, setMounted] = useState(false);
+    const btnRef = useRef<HTMLButtonElement>(null);
+
+    useEffect(() => { setMounted(true); }, []);
+
+    useLayoutEffect(() => {
+        if (!showMenu || !btnRef.current) return;
+        const update = () => {
+            const rect = btnRef.current!.getBoundingClientRect();
+            const MENU_WIDTH = 88;
+            setMenuPos({
+                top: rect.bottom + 4,
+                left: rect.right - MENU_WIDTH,
+            });
+        };
+        update();
+        window.addEventListener("scroll", update, true);
+        window.addEventListener("resize", update);
+        return () => {
+            window.removeEventListener("scroll", update, true);
+            window.removeEventListener("resize", update);
+        };
+    }, [showMenu]);
 
     if (!data || data.length === 0) return null;
 
     return (
-        <div className="relative">
+        <>
             <Button
+                ref={btnRef}
                 variant="outline"
                 className="h-9 px-4 text-sm gap-1.5 font-medium"
                 onClick={() => setShowMenu((v) => !v)}
@@ -96,10 +123,13 @@ export function ExportDropdown({ data, filename }: { data: Record<string, unknow
                 Export
                 <ChevronDown className="h-3.5 w-3.5 opacity-50" />
             </Button>
-            {showMenu && (
+            {mounted && showMenu && menuPos && createPortal(
                 <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowMenu(false)} />
-                    <div className="absolute right-0 top-full mt-1 z-50 border rounded-md bg-popover shadow-md py-1 min-w-[120px]">
+                    <div className="fixed inset-0 z-[9998]" onClick={() => setShowMenu(false)} />
+                    <div
+                        className="fixed z-[9999] border rounded-md bg-popover shadow-md py-1 min-w-[88px]"
+                        style={{ top: menuPos.top, left: menuPos.left }}
+                    >
                         {(["xlsx", "csv", "json", "md"] as ExportFormat[]).map((fmt) => (
                             <button
                                 key={fmt}
@@ -113,9 +143,10 @@ export function ExportDropdown({ data, filename }: { data: Record<string, unknow
                             </button>
                         ))}
                     </div>
-                </>
+                </>,
+                document.body,
             )}
-        </div>
+        </>
     );
 }
 
@@ -199,7 +230,7 @@ export function DataTable({ data, maxRows = 10 }: DataTableProps) {
                                     className="max-w-[40vw] cursor-pointer hover:bg-muted/20"
                                     onClick={() => setExpanded({ col: header, value: String(row[header] ?? "") })}
                                 >
-                                    <div className="line-clamp-2 break-words text-sm">
+                                    <div className="line-clamp-2 break-words text-sm whitespace-pre-line">
                                         {String(row[header] ?? "")}
                                     </div>
                                 </TableCell>

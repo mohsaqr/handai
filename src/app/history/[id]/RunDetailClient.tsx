@@ -59,14 +59,44 @@ export default function RunDetailClient({ id }: { id: string }) {
     const setPendingRestore = useRestoreStore((s) => s.setPending);
     const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
+    /** Parse the GENERATED CODEBOOK: block out of a codebook-generator run's
+     * systemPrompt. Returns display rows for the codebook detail table. */
+    const parseCodebookFromSystemPrompt = (systemPrompt: string): Record<string, unknown>[] => {
+        const m = systemPrompt.match(/GENERATED CODEBOOK:\n([\s\S]*?)$/);
+        if (!m) return [];
+        try {
+            const parsed = JSON.parse(m[1].trim()) as Record<string, unknown>[];
+            return parsed.map((e) => ({
+                "Code label": String(e.code ?? ""),
+                Description: String(e.description ?? ""),
+                Examples: String(e.example ?? ""),
+            }));
+        } catch {
+            return [];
+        }
+    };
+
     /** Turn a single RunResult into one or more display rows. */
     const buildResultRows = (r: RunResult, runType?: string): Record<string, unknown>[] => {
-        const input = JSON.parse(r.inputJson ?? "{}");
+        const rawInput = JSON.parse(r.inputJson ?? "{}");
+        // Restore-only metadata: extract-data and process-documents snapshot input
+        // file content into inputJson so "Restore Session" can rebuild real Files.
+        // Hide these from the history-table display.
+        // - _file_content/_file_mime/_file_restore_name: per-row snapshot (structured runs)
+        // - _files: array of per-file snapshots (unified process-documents runs)
+        const {
+            _file_content: _fc,
+            _file_mime: _fm,
+            _file_restore_name: _frn,
+            _files: _fs,
+            ...input
+        } = rawInput;
+        void _fc; void _fm; void _frn; void _fs;
         const hasAiOutput = Object.keys(input).some((k) => k.startsWith("ai_output"));
 
         const meta = {
             status: r.status,
-            latency_ms: Math.round((r.latency ?? 0) * 1000),
+            latency_ms: Math.round(r.latency ?? 0),
             ...(r.errorMessage ? { error_message: r.errorMessage } : {}),
         };
 
@@ -75,10 +105,178 @@ export default function RunDetailClient({ id }: { id: string }) {
             return [{ ...input, output: r.output ?? "", ...meta }];
         }
 
-        // consensus-coder stores judge_output + worker_* columns inside input;
-        // r.output is intentionally blank, so skip the duplicate "output" column.
-        if (runType === "consensus-coder") {
+        // model-comparison (formerly consensus-coder) stores judge_output +
+        // worker_* columns inside input; r.output is intentionally blank, so
+        // skip the duplicate "output" column.
+        if (runType === "model-comparison" || runType === "consensus-coder") {
             return [{ ...input, ...meta }];
+        }
+
+        // agent-panel stores all per-step / per-worker / per-round outputs (and
+        // the final reconciler/consensus column) inside input; r.output is
+        // intentionally blank, so skip the duplicate "output" column. Reorder
+        // so columns flow: originals → agent outputs → final/consensus columns
+        // → per-step latencies → status → latency_ms → error_message.
+        if (runType === "agent-panel") {
+            const merged: Record<string, unknown> = { ...input, ...meta };
+            const allKeys = Object.keys(merged);
+            const TRAILING = new Set(["status", "latency_ms", "error_message"]);
+            const FINAL_KEYS = new Set(["final_output", "final_consensus", "reconciler_output", "rounds_taken", "converged"]);
+            const originalKeys = allKeys.filter((k) => !k.endsWith("_output") && !k.endsWith("_latency_ms") && !TRAILING.has(k) && !FINAL_KEYS.has(k));
+            const outputKeys = allKeys.filter((k) => k.endsWith("_output") && !FINAL_KEYS.has(k));
+            const finalKeys = allKeys.filter((k) => FINAL_KEYS.has(k));
+            const latencyKeys = allKeys.filter((k) => k.endsWith("_latency_ms"));
+            const trailing = ["status", "latency_ms", "error_message"].filter((k) => k in merged);
+            const ordered = [...originalKeys, ...outputKeys, ...finalKeys, ...latencyKeys, ...trailing];
+            const out: Record<string, unknown> = {};
+            ordered.forEach((k) => { out[k] = merged[k]; });
+            return [out];
+        }
+
+        // qualitative-coder stores the assigned code in r.output as a plain string,
+        // but the live tool / restore path label it `ai_code`. Drop the redundant
+        // `output` column from the history table — restore reads rawResults, so
+        // the value itself is still preserved.
+        if (runType === "qualitative-coder") {
+            return [{ ...input, ...meta }];
+        }
+
+        // ai-coder: r.output is one of three shapes (mirrors parseAIResponse in
+        // src/app/ai-coder/page.tsx):
+        //   1) {codes: {label: pct, ...}, reasoning: "..."}     — preferred
+        //   2) {label: pct, ...}                                 — legacy flat
+        //   3) "Code A, Code B, Uncoded"                         — comma fallback
+        // It may also be wrapped in ```json ... ``` fences. The earlier version
+        // only handled (1) unfenced, leaving (2)/(3)/fenced rows empty.
+        if (runType === "ai-coder") {
+            const { ai_codes: _rawAi, status: _s, latency_ms: _l, ...cleanInput } = input as Record<string, unknown>;
+            void _rawAi; void _s; void _l;
+            let formattedCodes = "";
+            let decision = "";
+            let reasoning = "";
+            const cleanKey = (k: string) => k.split(/\s*[—–]\s/)[0].trim();
+
+            const buildFromConfidence = (conf: [string, number][]) => {
+                const sorted = [...conf]
+                    .filter(([, v]) => Number.isFinite(v) && Math.round(v) > 0)
+                    .sort(([, a], [, b]) => b - a);
+                formattedCodes = JSON.stringify(Object.fromEntries(
+                    sorted.map(([k, v]) => [k, `${Math.round(v)}%`])
+                ));
+                const numericOnly = conf.filter(([, v]) => Number.isFinite(v));
+                if (numericOnly.length > 0) {
+                    const maxVal = Math.max(...numericOnly.map(([, v]) => v));
+                    decision = numericOnly
+                        .filter(([, v]) => v === maxVal)
+                        .map(([k]) => k)
+                        .join(", ");
+                }
+            };
+
+            if (typeof r.output === "string" && r.output) {
+                const stripped = r.output.replace(/^```json?\s*/i, "").replace(/\s*```$/, "").trim();
+                let handled = false;
+                try {
+                    const parsed = JSON.parse(stripped);
+                    if (parsed && typeof parsed === "object") {
+                        // Shape 1: nested under `codes`
+                        if (parsed.codes && typeof parsed.codes === "object" && !Array.isArray(parsed.codes)) {
+                            const conf = Object.entries(parsed.codes as Record<string, unknown>).map(([k, v]) => {
+                                const num = typeof v === "number" ? v : Number(v);
+                                return [cleanKey(k), num] as [string, number];
+                            });
+                            buildFromConfidence(conf);
+                            handled = true;
+                        } else if (!Array.isArray(parsed)) {
+                            // Shape 2: flat object of code → number
+                            const conf = Object.entries(parsed as Record<string, unknown>)
+                                .map(([k, v]) => {
+                                    const num = typeof v === "number" ? v : Number(v);
+                                    return [cleanKey(k), num] as [string, number];
+                                })
+                                .filter(([, v]) => Number.isFinite(v));
+                            if (conf.length > 0) {
+                                buildFromConfidence(conf);
+                                handled = true;
+                            }
+                        }
+                        if (typeof parsed.reasoning === "string") reasoning = parsed.reasoning;
+                    }
+                } catch {
+                    // not JSON — fall through to comma-list fallback
+                }
+                if (!handled) {
+                    // Shape 3: comma-separated code list
+                    const tokens = stripped.split(",").map((s) => s.trim()).filter((s) => s && s !== "Uncoded");
+                    if (tokens.length > 0) {
+                        const conf = tokens.map((t) => [cleanKey(t), 80] as [string, number]);
+                        buildFromConfidence(conf);
+                    } else if (!formattedCodes) {
+                        // Last resort: surface the raw output so the cell isn't blank
+                        formattedCodes = stripped;
+                    }
+                }
+            }
+            return [{ ...cleanInput, ai_codes: decision, ai_probabilities: formattedCodes, ai_reasoning: reasoning, ...meta }];
+        }
+
+        // abstract-screener: input was saved with ai_decision / ai_confidence / ai_probabilities
+        // (JSON string of {include,maybe,exclude} as 0-1 floats) / ai_reasoning / ai_highlight_terms
+        // (JSON string of string[]) plus status/latency_ms. The generic JSON-spread path also adds
+        // duplicate `decision/confidence/probabilities/reasoning` columns from r.output. Emit a
+        // clean, ordered shape and drop the duplicates.
+        if (runType === "abstract-screener") {
+            const {
+                ai_decision: aiDecision,
+                ai_confidence: _conf,
+                ai_probabilities: aiProbs,
+                ai_reasoning: aiReasoning,
+                ai_highlight_terms: aiHighlightTerms,
+                status: _s,
+                latency_ms: _l,
+                error_msg: _em,
+                ...cleanInput
+            } = input as Record<string, unknown>;
+            void _conf; void _s; void _l; void _em;
+
+            // Format probabilities as a single-line JSON object, sorted desc, 0% dropped
+            // (mirrors the ai-coder history view above).
+            let formattedProbs = "";
+            const probsObj = typeof aiProbs === "string"
+                ? (() => { try { return JSON.parse(aiProbs); } catch { return null; } })()
+                : (aiProbs && typeof aiProbs === "object" ? aiProbs : null);
+            if (probsObj && typeof probsObj === "object") {
+                const entries = Object.entries(probsObj as Record<string, unknown>)
+                    .map(([k, v]) => {
+                        const num = typeof v === "number" ? v : Number(v);
+                        return [k, Number.isFinite(num) ? Math.round(num * 100) : NaN] as [string, number];
+                    })
+                    .filter(([, pct]) => Number.isFinite(pct) && pct > 0)
+                    .sort(([, a], [, b]) => b - a);
+                formattedProbs = JSON.stringify(Object.fromEntries(
+                    entries.map(([k, pct]) => [k, `${pct}%`])
+                ));
+            } else if (typeof aiProbs === "string") {
+                formattedProbs = aiProbs;
+            }
+
+            // Format highlight terms (stored as JSON string[])
+            let formattedHighlights: unknown = aiHighlightTerms ?? "";
+            if (typeof aiHighlightTerms === "string") {
+                try {
+                    const arr = JSON.parse(aiHighlightTerms);
+                    if (Array.isArray(arr)) formattedHighlights = arr.join(", ");
+                } catch { /* keep raw string */ }
+            }
+
+            return [{
+                ...cleanInput,
+                ai_decision: aiDecision ?? "",
+                ai_probabilities: formattedProbs,
+                ai_reasoning: aiReasoning ?? "",
+                ai_highlight_terms: formattedHighlights,
+                ...meta,
+            }];
         }
 
         // If output is a JSON object (e.g. automator), spread its fields instead of adding an "output" column
@@ -113,14 +311,22 @@ export default function RunDetailClient({ id }: { id: string }) {
                     setRun(data.run);
                     const typedResults = data.results as RunResult[];
                     setRawResults(typedResults);
-                    setResults(typedResults.flatMap((r) => buildResultRows(r, data.run.runType)));
+                    if (data.run.runType === "codebook-generator") {
+                        setResults(parseCodebookFromSystemPrompt(data.run.systemPrompt ?? ""));
+                    } else {
+                        setResults(typedResults.flatMap((r) => buildResultRows(r, data.run.runType)));
+                    }
                 } else {
                     const res = await fetch(`/api/runs/${id}`);
                     const data = await res.json();
                     if (data.error) throw new Error(data.error);
                     setRun(data.run);
                     setRawResults(data.results);
-                    setResults(data.results.flatMap((r: RunResult) => buildResultRows(r, data.run.runType)));
+                    if (data.run.runType === "codebook-generator") {
+                        setResults(parseCodebookFromSystemPrompt(data.run.systemPrompt ?? ""));
+                    } else {
+                        setResults(data.results.flatMap((r: RunResult) => buildResultRows(r, data.run.runType)));
+                    }
                 }
             } catch {
                 toast.error("Failed to load run details");
@@ -206,7 +412,7 @@ export default function RunDetailClient({ id }: { id: string }) {
                     ...(fmt === "csv" ? { _all_records: r.output ?? "" } : {}),
                     _format: fmt,
                     status: r.status ?? "success",
-                    latency_ms: Math.round((r.latency ?? 0) * 1000),
+                    latency_ms: Math.round(r.latency ?? 0),
                     ...(r.errorMessage ? { error_msg: r.errorMessage } : {}),
                 };
             }
@@ -216,8 +422,8 @@ export default function RunDetailClient({ id }: { id: string }) {
                 // Qualitative coder uses ai_code as the output column name
                 if (run.runType === "qualitative-coder") {
                     outputFields = { ai_code: r.output };
-                // Consensus coder saves judge_output as the output
-                } else if (run.runType === "consensus-coder") {
+                // Model Comparison (formerly consensus-coder) saves judge_output as the output
+                } else if (run.runType === "model-comparison" || run.runType === "consensus-coder") {
                     outputFields = { judge_output: r.output };
                 } else if (typeof r.output === "string") {
                     try {
@@ -242,7 +448,7 @@ export default function RunDetailClient({ id }: { id: string }) {
                 ...input,
                 ...outputFields,
                 status: r.status ?? "success",
-                latency_ms: Math.round((r.latency ?? 0) * 1000),
+                latency_ms: Math.round(r.latency ?? 0),
                 ...(r.errorMessage ? { error_msg: r.errorMessage } : {}),
             };
         });
@@ -260,14 +466,20 @@ export default function RunDetailClient({ id }: { id: string }) {
         };
 
         setPendingRestore(payload);
-        router.push(`/${run.runType}`);
+        // Old runType slugs whose tools were renamed — route to the new URL.
+        const slugAlias: Record<string, string> = {
+          "consensus-coder": "model-comparison",
+          "agent-panel": "mas-panel",
+        };
+        const targetSlug = slugAlias[run.runType] ?? run.runType;
+        router.push(`/${targetSlug}`);
     };
 
     // Tools that support session restore (have row-level input data)
     const restorableTools = new Set([
-        "transform", "qualitative-coder", "consensus-coder",
-        "model-comparison", "automator", "abstract-screener",
-        "ai-coder", "codebook-generator", "ai-agents", "generate",
+        "transform", "qualitative-coder", "model-comparison", "consensus-coder",
+        "automator", "abstract-screener",
+        "ai-coder", "codebook-generator", "agent-panel", "generate",
         "extract-data", "process-documents",
     ]);
     const canRestore = run && rawResults.length > 0 && restorableTools.has(run.runType);
@@ -524,12 +736,23 @@ export default function RunDetailClient({ id }: { id: string }) {
                                     return { name, output: r.output as string };
                                 });
 
-                            // For JSON generate with multiple batched results, reconstruct array
+                            // For JSON generate, reconstruct array with per-row status + latency_ms
                             let combinedRaw: string;
-                            if (isJsonGenerate && rawResults.length > 1) {
+                            if (isJsonGenerate) {
                                 const rows = rawResults
                                     .filter((r) => r.status === "success" && r.output)
-                                    .map((r) => { try { return JSON.parse(r.output as string); } catch { return r.output; } });
+                                    .map((r) => {
+                                        let parsed: unknown;
+                                        try { parsed = JSON.parse(r.output as string); } catch { parsed = r.output; }
+                                        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                                            return {
+                                                ...(parsed as Record<string, unknown>),
+                                                status: r.status ?? "success",
+                                                latency_ms: Math.round(r.latency ?? 0),
+                                            };
+                                        }
+                                        return parsed;
+                                    });
                                 combinedRaw = JSON.stringify(rows, null, 2);
                             } else if (entries.length === 1) {
                                 combinedRaw = entries[0].output;

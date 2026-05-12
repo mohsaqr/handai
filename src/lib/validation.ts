@@ -28,11 +28,15 @@ export const ProcessRowSchema = z.object({
 });
 
 // ── /api/consensus-row ────────────────────────────────────────────────────────
+const ConsensusWorkerFields = ProviderFieldsLocal.extend({
+  persona: z.string().optional(),
+});
+
 export const ConsensusRowSchema = z.object({
-  workers: z.array(ProviderFieldsLocal).min(2),
-  judge: ProviderFieldsLocal,
+  workers: z.array(ConsensusWorkerFields).min(2),
+  reconciler: ConsensusWorkerFields,
   workerPrompt: z.string(),
-  judgePrompt: z.string(),
+  reconcilerPrompt: z.string(),
   userContent: z.string(),
   rowIdx: z.number().int().optional(),
   runId: z.string().optional(),
@@ -42,38 +46,23 @@ export const ConsensusRowSchema = z.object({
   ...LlmTuningFields,
 });
 
-// ── /api/comparison-row ───────────────────────────────────────────────────────
-export const ComparisonRowSchema = z.object({
-  models: z.array(
-    z.object({
-      id: z.string(),
-      provider: z.string().min(1),
-      model: z.string().min(1),
-      apiKey: z.string().default(""),
-      baseUrl: z.string().optional(),
-    })
-  ).min(2),
-  systemPrompt: z.string(),
-  userContent: z.string(),
-  ...LlmTuningFields,
-});
-
-// ── /api/ai-agents-row ───────────────────────────────────────────────────────
-const AgentConfigSchema = z.object({
-  name: z.string().min(1),
-  role: z.string(),
+// ── /api/agent-network-row ──────────────────────────────────────────────────
+const NetworkAgentSchema = z.object({
+  label: z.string().min(1),
+  role: z.string().default(""),
   provider: z.string().min(1),
   model: z.string().min(1),
   apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
-  columns: z.array(z.string()).optional(),
-  isReferee: z.boolean(),
 });
 
-export const AgentsRowSchema = z.object({
-  agents: z.array(AgentConfigSchema).min(2),
+export const AgentNetworkRowSchema = z.object({
+  agents: z.array(NetworkAgentSchema).min(2),
   userContent: z.string(),
   maxRounds: z.number().int().min(1).max(10).default(3),
+  communicationStyle: z.string().optional(),
+  convergenceMode: z.enum(["fixed", "adaptive"]).optional(),
+  convergenceThreshold: z.number().min(0).max(100).optional(),
   rowIdx: z.number().int().optional(),
   runId: z.string().optional(),
   ...LlmTuningFields,
@@ -134,8 +123,10 @@ const FieldDefSchema = z.object({
 const DocumentFileTypeEnum = z.enum(['pdf', 'docx', 'excel', 'txt', 'md', 'json', 'html', 'csv']);
 
 // ── /api/document-extract ─────────────────────────────────────────────────────
+// When `structuredRows` is provided, `fileContent` is ignored and the rows are
+// sent to the LLM as a JSON payload (better than re-serializing them as text).
 export const DocumentExtractSchema = z.object({
-  fileContent: z.string().min(1),
+  fileContent: z.string().default(""),
   fileType: DocumentFileTypeEnum,
   fileName: z.string().optional(),
   provider: z.string().min(1),
@@ -144,8 +135,12 @@ export const DocumentExtractSchema = z.object({
   baseUrl: z.string().optional(),
   systemPrompt: z.string().optional(),
   fields: z.array(FieldDefSchema).optional(),
+  structuredRows: z.array(z.record(z.string(), z.unknown())).optional(),
   ...LlmTuningFields,
-});
+}).refine(
+  (v) => v.fileContent.length > 0 || (v.structuredRows && v.structuredRows.length > 0),
+  { message: "Either fileContent or structuredRows must be provided", path: ["fileContent"] }
+);
 
 // ── /api/document-analyze ─────────────────────────────────────────────────────
 export const DocumentAnalyzeSchema = z.object({
@@ -160,8 +155,10 @@ export const DocumentAnalyzeSchema = z.object({
 });
 
 // ── /api/document-process ─────────────────────────────────────────────────────
+// When `structuredRows` is provided, `fileContent` is ignored and the rows are
+// sent to the LLM as a JSON payload (better than re-serializing them as text).
 export const DocumentProcessSchema = z.object({
-  fileContent: z.string().min(1),
+  fileContent: z.string().default(""),
   fileType: DocumentFileTypeEnum,
   fileName: z.string().optional(),
   provider: z.string().min(1),
@@ -169,8 +166,12 @@ export const DocumentProcessSchema = z.object({
   apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
   systemPrompt: z.string().min(1),
+  structuredRows: z.array(z.record(z.string(), z.unknown())).optional(),
   ...LlmTuningFields,
-});
+}).refine(
+  (v) => v.fileContent.length > 0 || (v.structuredRows && v.structuredRows.length > 0),
+  { message: "Either fileContent or structuredRows must be provided", path: ["fileContent"] }
+);
 
 // ── /api/runs POST ────────────────────────────────────────────────────────────
 export const RunCreateSchema = z.object({

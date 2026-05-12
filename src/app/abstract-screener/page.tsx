@@ -28,7 +28,7 @@ import {
   Save, FolderOpen, BarChart2, Download, X, Trash2,
   AlertCircle, ChevronDown, ChevronLeft, ChevronRight,
   Highlighter, Loader2, Play,
-  RotateCcw,
+  RotateCcw, Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -38,7 +38,25 @@ import { ScreenerAnalyticsPanel } from "./ScreenerAnalyticsDialog";
 
 type Row = Record<string, unknown>;
 
-type Decision = "include" | "exclude" | "maybe" | null;
+type DecisionFlag = "include" | "exclude" | "maybe";
+
+function normalizeDecisions(raw: unknown): Record<number, DecisionFlag[]> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<number, DecisionFlag[]> = {};
+  const isFlag = (x: unknown): x is DecisionFlag =>
+    x === "include" || x === "exclude" || x === "maybe";
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const idx = Number(k);
+    if (!Number.isFinite(idx)) continue;
+    if (Array.isArray(v)) {
+      const flags = v.filter(isFlag);
+      if (flags.length > 0) out[idx] = Array.from(new Set(flags));
+    } else if (isFlag(v)) {
+      out[idx] = [v];
+    }
+  }
+  return out;
+}
 
 interface AIScreenResult {
   decision: "include" | "exclude" | "maybe";
@@ -66,7 +84,7 @@ interface ASSession {
   savedAt: string;
   data: Row[];
   aiResults: Record<number, AIScreenResult>;
-  decisions: Record<number, Decision>;
+  decisions: Record<number, DecisionFlag[]>;
   criteria: string;
   colMap: ColMap;
   wordHighlighter: WordHighlighter;
@@ -245,7 +263,7 @@ export default function AbstractScreenerPage() {
   // ── Core state ─────────────────────────────────────────────────────────────
   const [data, setData]                 = useSessionState<Row[]>("abscreen_data", []);
   const [aiResults, setAiResults]       = useSessionState<Record<number, AIScreenResult>>("abscreen_aiResults", {});
-  const [decisions, setDecisions]       = useSessionState<Record<number, Decision>>("abscreen_decisions", {});
+  const [decisions, setDecisions]       = useSessionState<Record<number, DecisionFlag[]>>("abscreen_decisions", {});
   const [includeCriteria, setIncludeCriteria] = useSessionState("abscreen_includeCriteria", "");
   const [excludeCriteria, setExcludeCriteria] = useSessionState("abscreen_excludeCriteria", "");
   const [colMap, setColMap]             = useSessionState<ColMap>("abscreen_colMap", { title: "", abstract: "", keywords: "", journal: "" });
@@ -253,6 +271,7 @@ export default function AbstractScreenerPage() {
   const [currentIndex, setCurrentIndex] = useSessionState("abscreen_currentIndex", 0);
   const [dataName, setDataName]         = useSessionState("abscreen_dataName", "");
   const [sessionName, setSessionName]   = useSessionState("abscreen_sessionName", "");
+  const [loadedSessionName, setLoadedSessionName] = useState<string | null>(null);
 
   const criteria = includeCriteria || excludeCriteria
     ? `Include if:\n${includeCriteria}\n\nExclude if:\n${excludeCriteria}`
@@ -266,17 +285,17 @@ export default function AbstractScreenerPage() {
   const [showAnalytics, setShowAnalytics]   = useState(false);
   const [showTable, setShowTable]           = useState(false);
   const [tablePage, setTablePage]           = useState(0);
-  const [tableFilter, setTableFilter]       = useState<"all" | "include" | "exclude" | "maybe" | "undecided">("all");
+  const [tableFilter, setTableFilter]       = useState<Set<"include" | "exclude" | "maybe" | "undecided">>(new Set());
   const [showSessions, setShowSessions]     = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [showAIReasoning, setShowAIReasoning] = useState(false);
   const [sessions, setSessions]             = useState<ASSession[]>([]);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<string | null>(null);
   const [settings, setSettings]             = useState<ASSettings>({ autoAdvance: false, lightMode: true, horizontalDecisions: true, buttonsAboveText: false });
-  const [recovered, setRecovered]           = useState<{ count: number; savedAt: string; sessionName: string } | null>(null);
   const [autosaveTime, setAutosaveTime]     = useState<Date | null>(null);
   const [autosaveDisplay, setAutosaveDisplay] = useState("");
   const [pendingLoad, setPendingLoad]       = useState<{ data: Row[]; name: string } | null>(null);
+  const [resumeSessionOpen, setResumeSessionOpen] = useState(false);
 
   // ── Refs ───────────────────────────────────────────────────────────────────
   const stateRef = useRef<ASAutosave>({
@@ -288,6 +307,19 @@ export default function AbstractScreenerPage() {
 
   const activeModel = useActiveModel();
   const systemSettings = useSystemSettings();
+
+  // ── Normalize legacy decisions (single-string per row → array) ────────────
+  useEffect(() => {
+    setDecisions((prev) => {
+      const normalized = normalizeDecisions(prev);
+      const sameSize = Object.keys(prev).length === Object.keys(normalized).length;
+      if (sameSize && Object.entries(prev).every(([k, v]) => Array.isArray(v) && v === normalized[+k])) {
+        return prev;
+      }
+      return normalized;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Auto-generate AI Instructions ──────────────────────────────────────────
   const buildAutoInstructions = useCallback(() => {
@@ -446,7 +478,7 @@ export default function AbstractScreenerPage() {
       if (!s.data?.length) return;
       setData(s.data);
       setAiResults(s.aiResults || {});
-      setDecisions(s.decisions || {});
+      setDecisions(normalizeDecisions(s.decisions));
       const savedCriteria = s.criteria || "";
       const includeMatch = savedCriteria.match(/Include if:\n([\s\S]*?)(?:\n\nExclude if:|$)/);
       const excludeMatch = savedCriteria.match(/Exclude if:\n([\s\S]*?)$/);
@@ -457,8 +489,6 @@ export default function AbstractScreenerPage() {
       setCurrentIndex(s.currentIndex || 0);
       setDataName(s.dataName || "");
       setSessionName(s.sessionName || (s.dataName || "").replace(/\.[^.]+$/, ""));
-      const cnt = Object.values(s.decisions || {}).filter(Boolean).length;
-      setRecovered({ count: cnt, savedAt: s.savedAt || new Date().toISOString(), sessionName: s.sessionName || "" });
     } catch { /* corrupt autosave */ }
   }, []);
 
@@ -517,32 +547,42 @@ export default function AbstractScreenerPage() {
   const totalRows       = data.length;
   const currentRow      = data[currentIndex] as Row | undefined;
   const currentAI       = aiResults[currentIndex];
-  const currentDecision = decisions[currentIndex] ?? null;
+  const currentDecisions = decisions[currentIndex] ?? [];
   const allColumns      = data.length > 0 ? Object.keys(data[0]) : [];
   const aiCount         = Object.keys(aiResults).length;
 
-  const decidedEntries  = Object.values(decisions).filter(Boolean);
-  const decidedCount    = decidedEntries.length;
+  const decidedCount    = Object.values(decisions).filter((v) => Array.isArray(v) && v.length > 0).length;
   // ── Navigation ───────────────────────────────────────────────────────────
   const navigate = (dir: number) =>
     setCurrentIndex((i) => Math.max(0, Math.min(totalRows - 1, i + dir)));
 
+  const isUndecided = (i: number) => !decisions[i] || decisions[i].length === 0;
+
   const goToNextUndecided = () => {
     for (let i = currentIndex + 1; i < totalRows; i++) {
-      if (!decisions[i]) { setCurrentIndex(i); return; }
+      if (isUndecided(i)) { setCurrentIndex(i); return; }
     }
     for (let i = 0; i < currentIndex; i++) {
-      if (!decisions[i]) { setCurrentIndex(i); return; }
+      if (isUndecided(i)) { setCurrentIndex(i); return; }
     }
     if (currentIndex < totalRows - 1) setCurrentIndex(currentIndex + 1);
   };
 
-  // ── Decision toggling ────────────────────────────────────────────────────
-  const setDecision = (d: Decision) => {
-    const wasActive = currentDecision === d;
-    const next: Decision = wasActive ? null : d;
-    setDecisions((prev) => ({ ...prev, [currentIndex]: next }));
-    if (!wasActive && settings.autoAdvance) {
+  // ── Decision toggling (multi-select: each flag toggles independently) ────
+  const setDecision = (d: DecisionFlag) => {
+    const current = decisions[currentIndex] ?? [];
+    const wasActive = current.includes(d);
+    const next: DecisionFlag[] = wasActive
+      ? current.filter((x) => x !== d)
+      : [...current, d];
+    setDecisions((prev) => {
+      const out = { ...prev };
+      if (next.length === 0) delete out[currentIndex];
+      else out[currentIndex] = next;
+      return out;
+    });
+    // Auto-advance only when transitioning from no decisions → at least one
+    if (!wasActive && current.length === 0 && settings.autoAdvance) {
       setTimeout(goToNextUndecided, 200);
     }
   };
@@ -566,7 +606,6 @@ export default function AbstractScreenerPage() {
 
   // ── Data loading ─────────────────────────────────────────────────────────
   const doDataLoaded = (newData: Row[], name: string, autoFillCriteria?: string) => {
-    setRecovered(null);
     setData(newData);
     setDataName(name);
     setAiResults({});
@@ -589,7 +628,21 @@ export default function AbstractScreenerPage() {
   const restored = useRestoreSession("abstract-screener");
   useEffect(() => {
     if (!restored) return;
-    setData(restored.data as Row[]);
+    // Strip output columns added by processing so the restored input data
+    // matches what the user originally uploaded (mirrors qualitative-coder / ai-coder).
+    const outputCols = new Set([
+      "ai_decision", "ai_confidence", "ai_probabilities",
+      "ai_reasoning", "ai_highlight_terms",
+      "status", "latency_ms", "error_msg",
+    ]);
+    const cleanData = (restored.data as Row[]).map((row) => {
+      const clean: Row = {};
+      for (const [k, v] of Object.entries(row)) {
+        if (!outputCols.has(k)) clean[k] = v;
+      }
+      return clean;
+    });
+    setData(cleanData);
     setDataName(restored.dataName);
 
     const fullPrompt = restored.systemPrompt ?? "";
@@ -652,14 +705,23 @@ export default function AbstractScreenerPage() {
     upsertSession(s);
     setSessions(listSessions());
     setSessionName(n);
+    setLoadedSessionName(n);
     setShowSaveDialog(false);
     toast.success(`Saved "${n}"`);
+  };
+
+  const saveCurrent = () => {
+    if (loadedSessionName) {
+      saveSession(loadedSessionName);
+    } else {
+      setShowSaveDialog(true);
+    }
   };
 
   const loadSession = (s: ASSession) => {
     setData(s.data);
     setAiResults(s.aiResults || {});
-    setDecisions(s.decisions || {});
+    setDecisions(normalizeDecisions(s.decisions));
     const loadedCriteria = s.criteria || "";
     const lInclude = loadedCriteria.match(/Include if:\n([\s\S]*?)(?:\n\nExclude if:|$)/);
     const lExclude = loadedCriteria.match(/Exclude if:\n([\s\S]*?)$/);
@@ -670,7 +732,9 @@ export default function AbstractScreenerPage() {
     setCurrentIndex(s.currentIndex || 0);
     setDataName(s.dataName || "");
     setSessionName(s.name);
+    setLoadedSessionName(s.name);
     setShowSessions(false);
+    setResumeSessionOpen(false);
     toast.success(`Loaded "${s.name}"`);
   };
 
@@ -720,27 +784,30 @@ export default function AbstractScreenerPage() {
 
   // ── Export functions ────────────────────────────────────────────────────────
 
-  // ── Human-only export (original data + final_decision) ──
+  // ── Human-only export (original data + human_decision) ──
   const buildHumanRows = () => data.map((row, i) => ({
     ...row,
-    final_decision: decisions[i] ?? "",
+    human_decision: (decisions[i] ?? []).join(", "),
   }));
 
-  const buildHumanDecisionsOnly = () => data.map((row, i) => ({
-    title:          colMap.title   ? String(row[colMap.title]   ?? "") : "",
-    journal:        colMap.journal ? String(row[colMap.journal] ?? "") : "",
-    year:           String(row.year ?? row.Year ?? ""),
-    final_decision: decisions[i] ?? "",
-  }));
+  const buildHumanOnehot = () => data.map((row, i) => {
+    const flags = decisions[i] ?? [];
+    return {
+      ...row,
+      include: flags.includes("include") ? 1 : 0,
+      maybe:   flags.includes("maybe")   ? 1 : 0,
+      exclude: flags.includes("exclude") ? 1 : 0,
+    };
+  });
 
   const exportHumanCsv = () => {
     const base = dataName.replace(/\.[^.]+$/, "") || "session";
-    void downloadCSV(buildHumanRows(), `${base}_human_full.csv`);
+    void downloadCSV(buildHumanRows(), `${base}_human_standard.csv`);
   };
 
-  const exportHumanDecisions = () => {
+  const exportHumanOnehot = () => {
     const base = dataName.replace(/\.[^.]+$/, "") || "session";
-    void downloadCSV(buildHumanDecisionsOnly(), `${base}_human_decisions.csv`);
+    void downloadCSV(buildHumanOnehot(), `${base}_human_onehot.csv`);
   };
 
   const exportHumanXlsx = () => {
@@ -756,40 +823,66 @@ export default function AbstractScreenerPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ── With-AI export (original data + ai columns + final_decision) ──
+  // ── With-AI export (original data + ai columns + human_decision) ──
   const formatProbs = (probs?: { include: number; maybe: number; exclude: number }) => {
     if (!probs) return "";
-    return (["include", "maybe", "exclude"] as const)
+    const sorted = (["include", "maybe", "exclude"] as const)
       .filter((d) => probs[d] > 0)
-      .map((d) => `${d.charAt(0).toUpperCase() + d.slice(1)} ${Math.round(probs[d] * 100)}%`)
-      .join(", ");
+      .sort((a, b) => probs[b] - probs[a]);
+    return JSON.stringify(Object.fromEntries(
+      sorted.map((d) => [d, `${Math.round(probs[d] * 100)}%`])
+    ));
   };
 
-  const buildWithAIRows = () => data.map((row, i) => ({
-    ...row,
-    ai_decision: aiResults[i]?.decision ?? "",
-    ai_probabilities: formatProbs(aiResults[i]?.probabilities),
-    ai_reasoning: aiResults[i]?.reasoning ?? "",
-    final_decision: decisions[i] ?? "",
-  }));
+  const buildWithAIRows = () => data.map((row, i) => {
+    const humanFlags = decisions[i] ?? [];
+    const N = humanFlags.length;
+    const probs = aiResults[i]?.probabilities;
+    const aiByConfidence: ("include" | "maybe" | "exclude")[] = probs
+      ? (["include", "maybe", "exclude"] as const)
+          .filter((d) => probs[d] > 0)
+          .sort((a, b) => probs[b] - probs[a])
+      : aiResults[i]?.decision
+        ? [aiResults[i].decision]
+        : [];
+    const topNAi = aiByConfidence.slice(0, N);
+    const humanSet = new Set(humanFlags);
+    const agree =
+      N > 0 &&
+      topNAi.length === N &&
+      topNAi.every((d) => humanSet.has(d));
+    return {
+      ...row,
+      human_decision: humanFlags.join(", "),
+      ai_decision: topNAi.join(", "),
+      ai_probabilities: formatProbs(probs),
+      agreement: String(agree),
+    };
+  });
 
-  const buildWithAIDecisionsOnly = () => data.map((row, i) => ({
-    title:          colMap.title   ? String(row[colMap.title]   ?? "") : "",
-    journal:        colMap.journal ? String(row[colMap.journal] ?? "") : "",
-    year:           String(row.year ?? row.Year ?? ""),
-    ai_decision: aiResults[i]?.decision ?? "",
-    ai_probabilities: formatProbs(aiResults[i]?.probabilities),
-    final_decision: decisions[i] ?? "",
-  }));
+  const buildWithAIOnehot = () => data.map((row, i) => {
+    const flags = decisions[i] ?? [];
+    const probs = aiResults[i]?.probabilities;
+    const round4 = (v: number) => +v.toFixed(4);
+    return {
+      ...row,
+      Human_include: flags.includes("include") ? 1 : 0,
+      Human_maybe:   flags.includes("maybe")   ? 1 : 0,
+      Human_exclude: flags.includes("exclude") ? 1 : 0,
+      ai_include: probs ? round4(probs.include) : 0,
+      ai_maybe:   probs ? round4(probs.maybe)   : 0,
+      ai_exclude: probs ? round4(probs.exclude) : 0,
+    };
+  });
 
   const exportWithAICsv = () => {
     const base = dataName.replace(/\.[^.]+$/, "") || "session";
-    void downloadCSV(buildWithAIRows(), `${base}_with_ai.csv`);
+    void downloadCSV(buildWithAIRows(), `${base}_with_ai_standard.csv`);
   };
 
-  const exportWithAIDecisions = () => {
+  const exportWithAIOnehot = () => {
     const base = dataName.replace(/\.[^.]+$/, "") || "session";
-    void downloadCSV(buildWithAIDecisionsOnly(), `${base}_with_ai_decisions.csv`);
+    void downloadCSV(buildWithAIOnehot(), `${base}_with_ai_onehot.csv`);
   };
 
   const exportWithAIXlsx = () => {
@@ -827,15 +920,15 @@ export default function AbstractScreenerPage() {
     .map((row, i) => ({
       i,
       title: getField(row, colMap.title) || `Record ${i + 1}`,
-      decision: decisions[i] ?? null,
+      decisions: decisions[i] ?? [],
       aiDecision: aiResults[i]?.decision ?? null,
       aiConf: aiResults[i]?.confidence ?? null,
       aiProbs: aiResults[i]?.probabilities ?? null,
     }))
     .filter((r) => {
-      if (tableFilter === "all") return true;
-      if (tableFilter === "undecided") return !r.decision;
-      return r.decision === tableFilter;
+      if (tableFilter.size === 0) return true;
+      if (r.decisions.length === 0) return tableFilter.has("undecided");
+      return r.decisions.some((d) => tableFilter.has(d));
     });
 
   const canRunAI = !!activeModel && !!criteria.trim() && (!!colMap.title || !!colMap.abstract || !!colMap.keywords || !!colMap.journal);
@@ -860,57 +953,60 @@ export default function AbstractScreenerPage() {
           </Button>
       </div>
 
-      {/* ── Recovery banner ──────────────────────────────────────────────── */}
-      {recovered && (
-        <div className="flex items-start justify-between gap-3 px-4 py-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 mb-4">
-          <div className="flex items-start gap-2.5 min-w-0">
-            <span className="text-amber-500 mt-0.5 shrink-0">⚠</span>
-            <div>
-              <p className="text-sm font-semibold text-amber-800 dark:text-amber-200">Session recovered</p>
-              <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
-                {recovered.sessionName && <><strong>{recovered.sessionName}</strong> · </>}
-                {recovered.count} record{recovered.count !== 1 ? "s" : ""} screened
-                {" · "}saved {timeAgo(new Date(recovered.savedAt))}
-              </p>
-            </div>
-          </div>
-          <button onClick={() => setRecovered(null)}
-            className="shrink-0 text-amber-500 hover:text-amber-700 p-0.5" aria-label="Dismiss">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
       {/* ── Session resume ────────────────────────────────────────────────── */}
       {sessions.length > 0 && (
-        <Collapsible className="border rounded-xl overflow-hidden mb-4">
+        <Collapsible open={resumeSessionOpen} onOpenChange={setResumeSessionOpen} className="border rounded-xl mb-4">
           <CollapsibleTrigger className="flex items-center gap-2 w-full px-4 py-3 text-sm font-medium hover:bg-muted/30 transition-colors">
             <ChevronRight className="h-3.5 w-3.5 transition-transform [[data-state=open]_&]:rotate-90" />
             Resume a Session
             <span className="text-xs text-muted-foreground font-normal ml-auto">{sessions.length} saved</span>
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="p-3 pt-0 space-y-2">
-              {sessions.slice(0, 5).map((s) => {
-                const decided = Object.values(s.decisions || {}).filter(Boolean).length;
-                return (
-                  <div key={s.name} className="flex items-center justify-between p-2.5 rounded border hover:bg-muted/30">
-                    <div>
-                      <div className="text-sm font-medium">{s.name}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {s.data.length} records · {decided} screened · {new Date(s.savedAt).toLocaleDateString()}
+            <div className="p-3 pt-0">
+              <div
+                className="grid gap-2"
+                style={{ gridTemplateColumns: "repeat(8, minmax(0, 1fr))" }}
+              >
+                {sessions.map((s) => {
+                  const decided = Object.values(s.decisions || {}).filter(Boolean).length;
+                  return (
+                    <div
+                      key={s.name}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => loadSession(s)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          loadSession(s);
+                        }
+                      }}
+                      className="flex flex-col gap-0.5 p-2 rounded-md border bg-muted/20 hover:bg-muted/40 cursor-pointer transition-colors min-w-0"
+                    >
+                      <div className="flex items-center justify-between gap-1 min-w-0">
+                        <div className="text-xs font-medium truncate min-w-0" title={s.name}>{s.name}</div>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDeleteSession(s.name);
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                      <div
+                        className="text-[10px] text-muted-foreground leading-tight truncate"
+                        title={`${s.data.length} records · ${decided} screened · ${new Date(s.savedAt).toLocaleDateString()}`}
+                      >
+                        {s.data.length} rec · {decided} · {new Date(s.savedAt).toLocaleDateString()}
                       </div>
                     </div>
-                    <div className="flex gap-1.5">
-                      <Button size="sm" variant="outline" onClick={() => loadSession(s)}>Load</Button>
-                      <Button size="icon" variant="ghost" className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                        onClick={() => setPendingDeleteSession(s.name)}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </CollapsibleContent>
         </Collapsible>
@@ -1132,6 +1228,7 @@ export default function AbstractScreenerPage() {
                       size="sm"
                       className="bg-red-500 hover:bg-red-600 text-white"
                     >
+                      {batch.isProcessing ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
                       Full Batch ({totalRows} rows)
                     </Button>
                   </div>
@@ -1244,7 +1341,7 @@ export default function AbstractScreenerPage() {
                       inactive: "border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30" },
                   ] as const
                 ).map(({ d, label, shortcut, active, aiHint, inactive }) => {
-                  const isActive = currentDecision === d;
+                  const isActive = currentDecisions.includes(d);
                   const isAISuggested = !isActive && currentAI?.decision === d;
                   const conf = currentAI?.probabilities?.[d] ?? null;
                   return (
@@ -1254,12 +1351,14 @@ export default function AbstractScreenerPage() {
                         isActive ? active : isAISuggested ? aiHint : inactive
                       )}
                     >
-                      <span>{label}</span>
-                      {conf !== null && conf > 0 && (
-                        <span className={cn("text-[10px]", isActive ? "opacity-80" : "opacity-60")}>
-                          AI {Math.round(conf * 100)}%
-                        </span>
-                      )}
+                      <span>
+                        {label}
+                        {conf !== null && conf > 0 && (
+                          <span className={cn("ml-1 text-sm", isActive ? "opacity-80" : "opacity-60")}>
+                            ({Math.round(conf * 100)}%)
+                          </span>
+                        )}
+                      </span>
                       <span className="absolute bottom-1 right-2 text-[9px] opacity-30">{shortcut}</span>
                     </button>
                   );
@@ -1326,7 +1425,7 @@ export default function AbstractScreenerPage() {
                       inactive: "border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30" },
                   ] as const
                 ).map(({ d, label, shortcut, active, aiHint, inactive }) => {
-                  const isActive = currentDecision === d;
+                  const isActive = currentDecisions.includes(d);
                   const isAISuggested = !isActive && currentAI?.decision === d;
                   const conf = currentAI?.probabilities?.[d] ?? null;
                   return (
@@ -1336,12 +1435,14 @@ export default function AbstractScreenerPage() {
                         isActive ? active : isAISuggested ? aiHint : inactive
                       )}
                     >
-                      <span>{label}</span>
-                      {conf !== null && conf > 0 && (
-                        <span className={cn("text-[10px]", isActive ? "opacity-80" : "opacity-60")}>
-                          AI {Math.round(conf * 100)}%
-                        </span>
-                      )}
+                      <span>
+                        {label}
+                        {conf !== null && conf > 0 && (
+                          <span className={cn("ml-1 text-sm", isActive ? "opacity-80" : "opacity-60")}>
+                            ({Math.round(conf * 100)}%)
+                          </span>
+                        )}
+                      </span>
                       <span className="absolute bottom-1 right-2 text-[9px] opacity-30">{shortcut}</span>
                     </button>
                   );
@@ -1349,22 +1450,29 @@ export default function AbstractScreenerPage() {
               </div>
             )}
 
-            {/* AI result badge + reasoning */}
+            {/* AI result badge + reasoning — same layout as AI Coder:
+                gray "AI:" label + a single colored pill for the top decision. */}
             {currentAI && (
               <div className="flex items-start gap-3 px-4 py-3 border rounded-lg">
-                <span className={cn(
-                  "shrink-0 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wide",
-                  currentAI.decision === "include"
-                    ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                    : currentAI.decision === "maybe"
-                    ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                    : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                )}>
-                  AI: {(["include", "maybe", "exclude"] as const)
-                    .filter((d) => (currentAI.probabilities?.[d] ?? 0) > 0)
-                    .map((d) => `${d.charAt(0).toUpperCase() + d.slice(1)} ${Math.round((currentAI.probabilities?.[d] ?? 0) * 100)}%`)
-                    .join(", ")}
-                </span>
+                <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                  <span className="text-xs font-medium text-muted-foreground">AI:</span>
+                  {(() => {
+                    const topProb = currentAI.probabilities?.[currentAI.decision] ?? 0;
+                    return (
+                      <span className={cn(
+                        "text-xs font-medium px-2 py-0.5 rounded",
+                        currentAI.decision === "include"
+                          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                          : currentAI.decision === "maybe"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                          : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+                      )}>
+                        {currentAI.decision.charAt(0).toUpperCase() + currentAI.decision.slice(1)}
+                        {topProb > 0 ? ` (${Math.round(topProb * 100)}%)` : ""}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <div className="flex-1 min-w-0">
                   <button onClick={() => setShowAIReasoning((v) => !v)}
                     className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
@@ -1390,25 +1498,18 @@ export default function AbstractScreenerPage() {
               </div>
             )}
 
-            {/* ── Next button ──────────────────────────────────────────── */}
-            <Button className="w-full h-10 text-base"
-              onClick={() => navigate(1)}
-              disabled={currentIndex >= totalRows - 1}>
-              Next →
-            </Button>
-
             {/* ── Navigation bar (5 elements) ──────────────────────────── */}
             <div className="grid grid-cols-5 gap-1.5 items-center">
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => setCurrentIndex(0)}
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => setCurrentIndex(0)}
                 disabled={currentIndex === 0}>◀◀</Button>
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => navigate(-1)}
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => navigate(-1)}
                 disabled={currentIndex === 0}>◀</Button>
               <div className="text-center text-sm font-medium border rounded px-3 py-1.5">
                 {currentIndex + 1} / {totalRows}
               </div>
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => navigate(1)}
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => navigate(1)}
                 disabled={currentIndex >= totalRows - 1}>▶</Button>
-              <Button variant="destructive" className="gap-2 px-5" onClick={() => setCurrentIndex(totalRows - 1)}
+              <Button className="gap-2 px-5 bg-zinc-800 hover:bg-zinc-700 text-white" onClick={() => setCurrentIndex(totalRows - 1)}
                 disabled={currentIndex >= totalRows - 1}>▶▶</Button>
             </div>
             <div className="text-[10px] text-muted-foreground text-center">
@@ -1432,13 +1533,13 @@ export default function AbstractScreenerPage() {
                 </span>
               )}
               <div className="flex gap-2 ml-auto flex-wrap">
-                <Button size="sm" variant="outline" onClick={() => setShowSaveDialog((v) => !v)}>
+                <Button size="sm" variant="outline" className="px-5" onClick={saveCurrent} title={loadedSessionName ? `Overwrite "${loadedSessionName}"` : "No session loaded — opens Save As"}>
                   <Save className="h-3.5 w-3.5 mr-1" /> Save
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setShowSessions((v) => !v)}>
-                  <FolderOpen className="h-3.5 w-3.5 mr-1" /> Load
+                <Button size="sm" variant="outline" className="px-5" onClick={() => setShowSaveDialog((v) => !v)}>
+                  <Save className="h-3.5 w-3.5 mr-1" /> Save As
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => setShowTable((v) => !v)}>
+                <Button size="sm" variant="outline" className="px-6" onClick={() => setShowTable((v) => !v)}>
                   Table
                 </Button>
               </div>
@@ -1500,10 +1601,25 @@ export default function AbstractScreenerPage() {
                   <div className="px-4 py-3 border-b font-medium text-sm flex items-center gap-2 flex-wrap">
                     <span>Records</span>
                     <div className="flex gap-1 flex-wrap">
-                      {(["all", "include", "exclude", "maybe", "undecided"] as const).map((f) => (
-                        <button key={f} onClick={() => { setTableFilter(f); setTablePage(0); }}
+                      <button onClick={() => { setTableFilter(new Set()); setTablePage(0); }}
+                        className={cn("px-2 py-0.5 rounded text-xs border",
+                          tableFilter.size === 0
+                            ? "bg-foreground text-background border-foreground"
+                            : "border-muted-foreground/30 text-muted-foreground hover:border-foreground/50"
+                        )}>
+                        All
+                      </button>
+                      {(["include", "exclude", "maybe", "undecided"] as const).map((f) => (
+                        <button key={f} onClick={() => {
+                          setTableFilter((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(f)) next.delete(f); else next.add(f);
+                            return next;
+                          });
+                          setTablePage(0);
+                        }}
                           className={cn("px-2 py-0.5 rounded text-xs border",
-                            tableFilter === f
+                            tableFilter.has(f)
                               ? "bg-foreground text-background border-foreground"
                               : "border-muted-foreground/30 text-muted-foreground hover:border-foreground/50"
                           )}>
@@ -1514,7 +1630,7 @@ export default function AbstractScreenerPage() {
                     <span className="ml-auto text-xs text-muted-foreground">{tableRows.length} rows</span>
                   </div>
                   <div className="divide-y">
-                    {pageRows.map(({ i, title, decision, aiDecision, aiProbs }) => (
+                    {pageRows.map(({ i, title, decisions: rowDecisions, aiDecision, aiProbs }) => (
                       <button key={i} onClick={() => { setCurrentIndex(i); setShowTable(false); }}
                         className={cn(
                           "w-full text-left px-4 py-2.5 hover:bg-muted/30 transition-colors flex items-center gap-3",
@@ -1537,11 +1653,15 @@ export default function AbstractScreenerPage() {
                                 .join(", ")}
                             </span>
                           )}
-                          {decision ? (
-                            <span className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium",
-                              decision === "include" ? "bg-green-500 text-white" :
-                              decision === "maybe"   ? "bg-amber-500 text-white" : "bg-red-500 text-white"
-                            )}>{decision}</span>
+                          {rowDecisions.length > 0 ? (
+                            <span className="flex items-center gap-1">
+                              {rowDecisions.map((d) => (
+                                <span key={d} className={cn("text-[10px] px-1.5 py-0.5 rounded font-medium",
+                                  d === "include" ? "bg-green-500 text-white" :
+                                  d === "maybe"   ? "bg-amber-500 text-white" : "bg-red-500 text-white"
+                                )}>{d}</span>
+                              ))}
+                            </span>
                           ) : (
                             <span className="text-[10px] text-muted-foreground">—</span>
                           )}
@@ -1595,8 +1715,8 @@ export default function AbstractScreenerPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
-              <DropdownMenuItem onClick={exportHumanCsv}>CSV (full)</DropdownMenuItem>
-              <DropdownMenuItem onClick={exportHumanDecisions}>CSV (decisions only)</DropdownMenuItem>
+              <DropdownMenuItem onClick={exportHumanCsv}>CSV (standard)</DropdownMenuItem>
+              <DropdownMenuItem onClick={exportHumanOnehot}>CSV (one-hot)</DropdownMenuItem>
               <DropdownMenuItem onClick={exportHumanXlsx}>Excel (.xlsx)</DropdownMenuItem>
               <DropdownMenuItem onClick={exportHumanJson}>JSON</DropdownMenuItem>
             </DropdownMenuContent>
@@ -1607,12 +1727,12 @@ export default function AbstractScreenerPage() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" disabled={decidedCount === 0}>
-                  <Download className="h-3.5 w-3.5 mr-1.5" /> Export with AI <ChevronDown className="h-3 w-3 ml-1.5" />
+                  <Download className="h-3.5 w-3.5 mr-1.5" /> Export with AI Codes <ChevronDown className="h-3 w-3 ml-1.5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
-                <DropdownMenuItem onClick={exportWithAICsv}>CSV (full)</DropdownMenuItem>
-                <DropdownMenuItem onClick={exportWithAIDecisions}>CSV (decisions only)</DropdownMenuItem>
+                <DropdownMenuItem onClick={exportWithAICsv}>CSV (standard)</DropdownMenuItem>
+                <DropdownMenuItem onClick={exportWithAIOnehot}>CSV (one-hot)</DropdownMenuItem>
                 <DropdownMenuItem onClick={exportWithAIXlsx}>Excel (.xlsx)</DropdownMenuItem>
                 <DropdownMenuItem onClick={exportWithAIJson}>JSON</DropdownMenuItem>
               </DropdownMenuContent>
@@ -1625,7 +1745,10 @@ export default function AbstractScreenerPage() {
       {showAnalytics && (
         <ScreenerAnalyticsPanel
           data={data}
-          decisions={decisions}
+          decisions={Object.fromEntries(
+            Object.entries(decisions)
+              .map(([k, arr]) => [k, arr && arr.length > 0 ? arr[0] : null] as const)
+          )}
           aiResults={aiResults}
           colMap={colMap}
           onGoToRow={(idx) => { setCurrentIndex(idx); }}

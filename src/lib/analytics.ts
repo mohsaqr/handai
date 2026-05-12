@@ -80,10 +80,12 @@ export function interpretKappa(k: number): string {
 /**
  * Average pairwise agreement across all workers using set-based Jaccard similarity.
  *
- * Each worker output is tokenized into a set of codes (split by comma/newline).
- * For free-form text, the entire output is treated as a single token.
+ * Each worker output is tokenized into a set of word-level tokens (split on any
+ * non-letter/non-digit character — handles whitespace, punctuation, apostrophes
+ * across scripts via Unicode property escapes). Works for both short comma- or
+ * newline-separated code labels (e.g. "positive, urgent") and free-form prose.
  * Agreement = |intersection| / |union| (Jaccard index), averaged across all pairs.
- * Returns a value in [0, 1]: 0 = no overlap, 1 = identical sets.
+ * Returns a value in [0, 1]: 0 = no overlap, 1 = identical token sets.
  *
  * NOTE: This is Jaccard similarity, NOT Cohen's/Fleiss' Kappa. Kappa adjusts for
  * chance agreement; Jaccard does not. Use the correct label when reporting.
@@ -91,9 +93,13 @@ export function interpretKappa(k: number): string {
 export function pairwiseJaccard(workerOutputs: string[]): number {
   if (workerOutputs.length < 2) return NaN;
 
-  // Tokenize each worker's output into a normalized set
+  // Tokenize each worker's output into a word-level set.
+  // Split on any sequence of non-letter/non-digit chars (Unicode-aware).
   const workerSets = workerOutputs.map((output) => {
-    const tokens = output.split(/[,\n]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const tokens = output
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(Boolean);
     return new Set(tokens.length > 0 ? tokens : [output.trim().toLowerCase()]);
   });
 
