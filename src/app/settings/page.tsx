@@ -57,7 +57,7 @@ export default function SettingsPage() {
   const [cloudSlots, setCloudSlots] = useState<(string | null)[]>(() => {
     const initial = useAppStore.getState().providers;
     const saved = CLOUD_PROVIDERS.filter((id) => initial[id]?.apiKey);
-    return saved.length > 0 ? saved : [null];
+    return saved.length > 0 ? saved : [CLOUD_PROVIDERS[0]];
   });
 
   const addCloudSlot = () => {
@@ -76,7 +76,12 @@ export default function SettingsPage() {
     if (providerId) {
       setProviderConfig(providerId, { apiKey: "", baseUrl: "", isEnabled: false });
     }
-    setCloudSlots((prev) => (prev.length === 1 ? [null] : prev.filter((_, i) => i !== idx)));
+    setCloudSlots((prev) => {
+      if (prev.length > 1) return prev.filter((_, i) => i !== idx);
+      const removed = prev[idx];
+      const fallback = CLOUD_PROVIDERS.find((id) => id !== removed) ?? CLOUD_PROVIDERS[0];
+      return [fallback];
+    });
   };
 
   const providersRef = useRef<HTMLDivElement>(null);
@@ -241,7 +246,7 @@ export default function SettingsPage() {
       <div
         key={`slot-${slotIdx}`}
         className={`rounded-xl border transition-all ${
-          config.isEnabled ? "border-border bg-card" : "border-border/30 bg-muted/10 opacity-55"
+          config.isEnabled ? "border-border bg-card" : "border-border/60 bg-muted/30 opacity-80"
         }`}
       >
         <div className="flex items-center gap-3 px-4 py-3">
@@ -348,7 +353,7 @@ export default function SettingsPage() {
       <div
         key={id}
         className={`rounded-xl border transition-all ${
-          config.isEnabled ? "border-border bg-card" : "border-border/30 bg-muted/10 opacity-55"
+          config.isEnabled ? "border-border bg-card" : "border-border/60 bg-muted/30 opacity-80"
         }`}
       >
         {/* Header row */}
@@ -359,33 +364,7 @@ export default function SettingsPage() {
           ) : (
             <Key className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
           )}
-          <span className="font-semibold text-sm flex-1 truncate">{PROVIDER_LABELS[id] ?? id}</span>
-          {config.isLocal && (
-            <>
-              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-green-600 border-green-500/40">
-                local
-              </Badge>
-              {localModels[id]?.length ? (
-                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground">
-                  {localModels[id].length} model{localModels[id].length !== 1 ? "s" : ""}
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground/50">
-                  not detected
-                </Badge>
-              )}
-            </>
-          )}
-          {config.isLocal && (
-            <button
-              onClick={detectLocalModels}
-              disabled={isDetecting}
-              className="p-1 rounded hover:bg-muted/40 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
-              title="Re-detect local models"
-            >
-              <RefreshCw className={`h-3 w-3 ${isDetecting ? "animate-spin" : ""}`} />
-            </button>
-          )}
+          <span className="font-semibold text-sm flex-1 max-w-xs truncate">{PROVIDER_LABELS[id] ?? id}</span>
           <div className="flex items-center gap-1.5 ml-2">
             <span className="text-[11px] text-muted-foreground">Enabled</span>
             <Switch
@@ -408,6 +387,30 @@ export default function SettingsPage() {
             )}
             <span className="ml-1">Test</span>
           </Button>
+          {config.isLocal && (
+            <>
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-green-600 border-green-500/40 ml-auto">
+                local
+              </Badge>
+              {localModels[id]?.length ? (
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground">
+                  {localModels[id].length} model{localModels[id].length !== 1 ? "s" : ""}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 text-muted-foreground/50">
+                  not detected
+                </Badge>
+              )}
+              <button
+                onClick={detectLocalModels}
+                disabled={isDetecting}
+                className="p-1 rounded hover:bg-muted/40 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                title="Re-detect local models"
+              >
+                <RefreshCw className={`h-3 w-3 ${isDetecting ? "animate-spin" : ""}`} />
+              </button>
+            </>
+          )}
         </div>
 
         {/* Fields */}
