@@ -266,11 +266,12 @@ export async function generateRowDirect(params: {
 // ── consensusRowDirect — mirrors /api/consensus-row ───────────────────────────
 
 export async function consensusRowDirect(params: {
-  workers: Array<{ provider: string; model: string; apiKey: string; baseUrl?: string; persona?: string }>;
+  workers: Array<{ provider: string; model: string; apiKey: string; baseUrl?: string; persona?: string; userContent?: string }>;
   reconciler: { provider: string; model: string; apiKey: string; baseUrl?: string; persona?: string };
   workerPrompt: string;
   reconcilerPrompt: string;
   userContent: string;
+  reconcilerUserContent?: string;
   enableQualityScoring?: boolean;
   enableDisagreementAnalysis?: boolean;
   includeReasoning?: boolean;
@@ -293,7 +294,7 @@ export async function consensusRowDirect(params: {
     const workerSystem = w.persona ? `${w.persona}\n\n${enforcedWorkerPrompt}` : enforcedWorkerPrompt;
     const start = Date.now();
     const { text } = await withRetry(
-      () => generateText(genOpts(model, workerSystem, params.userContent, params.temperature, params.maxTokens)),
+      () => generateText(genOpts(model, workerSystem, w.userContent ?? params.userContent, params.temperature, params.maxTokens)),
       { maxAttempts: 3, baseDelayMs: 100 }
     );
     return { id: `worker_${i + 1}`, output: text, latency: (Date.now() - start) / 1000 };
@@ -337,7 +338,10 @@ export async function consensusRowDirect(params: {
   const workersFormatted = workerResults
     .map((r) => `${r.id} response:\n${r.output}`)
     .join("\n\n---\n\n");
-  const combinedContent = `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`;
+  // The manager/reconciler's view of "Original Data" — its own card may have
+  // removed columns (per-card column removal in the Manager template).
+  const reconcilerOriginalData = params.reconcilerUserContent ?? params.userContent;
+  const combinedContent = `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}`;
   const reconcilerPersonaPrefix = params.reconciler.persona ? `${params.reconciler.persona}\n\n` : "";
 
   const taskContext = `\n\nTHE WORKERS WERE GIVEN THIS INSTRUCTION:
@@ -426,7 +430,7 @@ RULES:
 - Deduct points for: factual errors, missing key information, off-topic content, unnecessary additions.
 - Be consistent: similar quality responses should get similar scores.
 
-Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number between 1.0 and 10.0 (one decimal place, e.g. 6.5, 7.3, 9.0). No other text.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nReconciler's Chosen Answer:\n${reconcilerOutput}\n\nConsensus Level: ${consensusType}`, params.temperature, params.maxTokens)),
+Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number between 1.0 and 10.0 (one decimal place, e.g. 6.5, 7.3, 9.0). No other text.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}\n\nReconciler's Chosen Answer:\n${reconcilerOutput}\n\nConsensus Level: ${consensusType}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       const cleaned = qsText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
@@ -480,7 +484,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
     try {
       const { text: jrText } = await withRetry(
         () =>
-          generateText(genOpts(reconcilerModel, `You are a reconciler explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${reconcilerOutput}`, params.temperature, params.maxTokens)),
+          generateText(genOpts(reconcilerModel, `You are a reconciler explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${reconcilerOutput}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       reconcilerReasoning = jrText.trim() || "Could not generate reasoning";
@@ -495,7 +499,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
     try {
       const { text: drText } = await withRetry(
         () =>
-          generateText(genOpts(reconcilerModel, `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${params.userContent}\n\nWorker Responses:\n${workersFormatted}`, params.temperature, params.maxTokens)),
+          generateText(genOpts(reconcilerModel, `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`, `Worker Instruction: ${params.workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}`, params.temperature, params.maxTokens)),
         { maxAttempts: 2, baseDelayMs: 100 }
       );
       disagreementReason = drText.trim() || "Could not analyze disagreement";

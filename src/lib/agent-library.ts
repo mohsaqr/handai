@@ -7,11 +7,19 @@ export interface Agent {
   providerId: string;
   model: string;
   category: string;
+  /** Main system prompt — the agent's primary goal (e.g. "You help students with their homework…"). */
+  goal: string;
   personalityStyle: string;
   personalityInstruction: string;
   communicationStyle: string;
   responseStyle: string;
   knowledgeContext: string;
+  /** Per-agent max response length in tokens. Null = use the global default. */
+  maxTokens: number | null;
+  /** Strict rules — behaviors to encourage. */
+  dos: string[];
+  /** Strict rules — behaviors to avoid. */
+  donts: string[];
   /** Index into the avatars sprite sheet (public/avatars.png). 0..31. */
   avatar?: number;
 }
@@ -46,30 +54,30 @@ export function avatarStyle(index: number): CSSProperties {
 }
 
 export const AGENT_CATEGORIES = [
+  "Neutral",
   "Analyst",
   "Critic",
   "Creative",
   "Synthesizer",
   "Researcher",
   "Devil's Advocate",
-  "Generalist",
   "Specialist",
 ] as const;
 
 export const PERSONALITY_STYLES = [
+  "Neutral",
   "Formal",
-  "Casual",
   "Concise",
   "Verbose",
   "Technical",
   "Empathetic",
   "Direct",
   "Diplomatic",
-  "Skeptical",
 ] as const;
 
 // Reused from agent-network tool.
 export const COMMUNICATION_STYLES = [
+  "Neutral",
   "Collaborative",
   "Adversarial",
   "Deliberative",
@@ -94,14 +102,28 @@ export function emptyAgent(overrides: Partial<Agent> = {}): Agent {
     name: "",
     providerId: "openai",
     model: "gpt-4o",
-    category: AGENT_CATEGORIES[6],
-    personalityStyle: PERSONALITY_STYLES[2],
+    category: AGENT_CATEGORIES[0],
+    goal: "",
+    personalityStyle: PERSONALITY_STYLES[0],
     personalityInstruction: "",
     communicationStyle: COMMUNICATION_STYLES[0],
     responseStyle: RESPONSE_STYLES[1],
     knowledgeContext: "",
+    maxTokens: null,
+    dos: [],
+    donts: [],
     ...overrides,
   };
+}
+
+/**
+ * Fills any fields missing from a persisted/restored agent with current
+ * defaults. Library entries and historical-run snapshots saved before a field
+ * was introduced lack it — without this they'd drive uncontrolled inputs and
+ * skip the new behavior. `emptyAgent` spreads defaults then the stored values.
+ */
+export function normalizeAgent(a: Partial<Agent>): Agent {
+  return emptyAgent(a);
 }
 
 function readStore(): Agent[] {
@@ -110,7 +132,7 @@ function readStore(): Agent[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map((a) => normalizeAgent(a)) : [];
   } catch {
     return [];
   }
@@ -150,9 +172,18 @@ export function loadAgent(id: string): Agent | null {
 export function buildAgentSystemPrefix(agent: Agent): string {
   const parts: string[] = [];
   if (agent.name) parts.push(`You are an agent named "${agent.name}".`);
-  if (agent.category) parts.push(`Your role category is: ${agent.category}.`);
-  if (agent.personalityStyle) parts.push(`Respond in a ${agent.personalityStyle.toLowerCase()} tone.`);
-  if (agent.communicationStyle) parts.push(`Use a ${agent.communicationStyle.toLowerCase()} communication style.`);
+  if (agent.category && agent.category !== "Neutral")
+    parts.push(`Your role category is: ${agent.category}.`);
+  if (agent.goal?.trim()) {
+    parts.push("");
+    parts.push("Main goal:");
+    parts.push(agent.goal.trim());
+    parts.push("");
+  }
+  if (agent.personalityStyle && agent.personalityStyle !== "Neutral")
+    parts.push(`Respond in a ${agent.personalityStyle.toLowerCase()} tone.`);
+  if (agent.communicationStyle && agent.communicationStyle !== "Neutral")
+    parts.push(`Use a ${agent.communicationStyle.toLowerCase()} communication style.`);
   if (agent.responseStyle) {
     const rs = agent.responseStyle.toLowerCase();
     const guide = rs === "concise"
@@ -166,6 +197,14 @@ export function buildAgentSystemPrefix(agent: Agent): string {
     parts.push("");
     parts.push("Personality description:");
     parts.push(agent.personalityInstruction.trim());
+  }
+  const dos = (agent.dos ?? []).map((r) => r.trim()).filter(Boolean);
+  const donts = (agent.donts ?? []).map((r) => r.trim()).filter(Boolean);
+  if (dos.length > 0 || donts.length > 0) {
+    parts.push("");
+    parts.push("Strict rules:");
+    dos.forEach((r) => parts.push(`- DO: ${r}`));
+    donts.forEach((r) => parts.push(`- DON'T: ${r}`));
   }
   if (agent.knowledgeContext.trim()) {
     parts.push("");

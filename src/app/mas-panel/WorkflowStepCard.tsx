@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { User, X } from "lucide-react";
+import { User, X, Plus } from "lucide-react";
 import { type Agent, avatarStyle } from "@/lib/agent-library";
 import { type WorkflowStep } from "./workflow-types";
 
@@ -29,6 +29,33 @@ interface Props {
   onUpdate: (step: WorkflowStep) => void;
   onRemove: () => void;
   canRemove: boolean;
+  /** Personalized & Sequential — render the editable Input DATA chip row. */
+  showInputData?: boolean;
+  /** Page-level selected columns available to this card. */
+  inputCols?: string[];
+  /** Personalized — connected upstream sources feeding this card. */
+  connectedSources?: { id: string; label: string }[];
+  /** Sequential — label of the previous step (e.g. "Step 1"), or null. */
+  prevStepLabel?: string | null;
+  /** Non-removable info chips for intrinsic inputs (e.g. the manager's
+   *  "Workers' outputs", which it always receives and can't opt out of). */
+  staticSources?: string[];
+}
+
+function Chip({ text, onRemove }: { text: string; onRemove: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+      <span className="font-mono truncate max-w-[120px]">{text}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="hover:text-destructive shrink-0"
+        title="Remove from this card's input"
+      >
+        <X className="h-3 w-3" strokeWidth={2.5} />
+      </button>
+    </span>
+  );
 }
 
 export function WorkflowStepCard({
@@ -44,7 +71,22 @@ export function WorkflowStepCard({
   onUpdate,
   onRemove,
   canRemove,
+  showInputData = false,
+  inputCols = [],
+  connectedSources = [],
+  prevStepLabel = null,
+  staticSources = [],
 }: Props) {
+  const excluded = new Set(step.excludedCols ?? []);
+  const keptCols = inputCols.filter((c) => !excluded.has(c));
+  const removedCols = inputCols.filter((c) => excluded.has(c));
+  const removeCol = (c: string) =>
+    onUpdate({ ...step, excludedCols: [...(step.excludedCols ?? []), c] });
+  const restoreCol = (c: string) =>
+    onUpdate({ ...step, excludedCols: (step.excludedCols ?? []).filter((x) => x !== c) });
+  const removeSource = (srcId: string) =>
+    onUpdate({ ...step, inputs: (step.inputs ?? []).filter((s) => s !== srcId) });
+
   const statusRing =
     status === "running" ? "ring-2 ring-red-400 animate-pulse" :
     status === "done"    ? "ring-2 ring-green-400" :
@@ -114,9 +156,81 @@ export function WorkflowStepCard({
         </Select>
       </div>
 
+      {showInputData && (
+        <div className="space-y-1">
+          <Label className="text-[10px] text-muted-foreground">Input DATA</Label>
+          <div className="flex flex-wrap gap-1 items-center">
+            {keptCols.map((c) => (
+              <Chip key={`col-${c}`} text={c} onRemove={() => removeCol(c)} />
+            ))}
+            {connectedSources.map((s) => (
+              <Chip
+                key={`src-${s.id}`}
+                text={`${s.label} output`}
+                onRemove={() => removeSource(s.id)}
+              />
+            ))}
+            {staticSources.map((label) => (
+              <span
+                key={`static-${label}`}
+                className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                title="Always provided to this card"
+              >
+                <span className="font-mono truncate max-w-[140px]">{label}</span>
+              </span>
+            ))}
+            {prevStepLabel && !step.ignorePrevOutput && (
+              <Chip
+                text={`${prevStepLabel} output`}
+                onRemove={() => onUpdate({ ...step, ignorePrevOutput: true })}
+              />
+            )}
+            {prevStepLabel && step.ignorePrevOutput && (
+              <button
+                type="button"
+                onClick={() => onUpdate({ ...step, ignorePrevOutput: false })}
+                className="inline-flex items-center gap-1 rounded-md border border-dashed px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                <Plus className="h-3 w-3" /> {prevStepLabel} output
+              </button>
+            )}
+            {removedCols.length > 0 && (
+              <details className="relative inline-block text-[10px]">
+                <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-dashed px-1.5 py-0.5 text-muted-foreground hover:text-foreground">
+                  <Plus className="h-3 w-3" /> column
+                </summary>
+                <div className="absolute left-0 z-30 mt-1 max-h-48 min-w-[140px] overflow-y-auto rounded-md border bg-background p-1 shadow-md">
+                  {removedCols.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={(e) => {
+                        restoreCol(c);
+                        e.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                      className="block w-full truncate rounded px-2 py-1 text-left font-mono hover:bg-muted"
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            )}
+            {keptCols.length === 0 &&
+              connectedSources.length === 0 &&
+              staticSources.length === 0 &&
+              !(prevStepLabel && !step.ignorePrevOutput) && (
+                <span className="text-[10px] text-muted-foreground italic">
+                  no input — uses original input
+                </span>
+              )}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-1">
         <div className="flex items-center justify-between">
-          <Label className="text-[10px] text-muted-foreground">Describe Task</Label>
+          <Label className="text-[10px] text-muted-foreground">Description</Label>
           {samplePrompts && (
             <Select
               onValueChange={(key) => {
@@ -141,8 +255,8 @@ export function WorkflowStepCard({
           value={step.taskDescription}
           onChange={(e) => onUpdate({ ...step, taskDescription: e.target.value })}
           placeholder={taskPlaceholder}
-          rows={compact ? 1 : 2}
-          className={`text-xs resize-y ${compact ? "min-h-[28px]" : "min-h-[48px]"}`}
+          rows={2}
+          className={`text-xs resize-y ${compact ? "min-h-[56px]" : "min-h-[48px]"}`}
         />
       </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { Wand2, GitBranch, Users } from "lucide-react";
+import { Wand2, GitBranch, Users, Workflow } from "lucide-react";
 import { type WorkflowMode } from "./workflow-types";
 
 interface Option {
@@ -13,12 +13,12 @@ interface Option {
 
 const OPTIONS: Option[] = [
   {
-    id: "reconcilier",
-    title: "Reconcilier",
-    subtitle: "Hierarchical — reconciler on top, workers below",
+    id: "personalized",
+    title: "Personalized",
+    subtitle: "Custom — independent sequential lines",
     description:
-      "Multiple workers analyze the task in parallel. The topmost card reconciles their outputs into one final answer.",
-    Icon: Wand2,
+      "Build one or more lines by hand. Each line is a sequential chain (up to 4 agents) and runs independently, producing its own output.",
+    Icon: Workflow,
   },
   {
     id: "sequential",
@@ -27,6 +27,14 @@ const OPTIONS: Option[] = [
     description:
       "Each step processes the previous step's output. Use when later agents build on earlier work.",
     Icon: GitBranch,
+  },
+  {
+    id: "reconcilier",
+    title: "Manager",
+    subtitle: "Hierarchical — manager on top, workers below",
+    description:
+      "Multiple workers analyze the task in parallel. The topmost card (the manager) synthesizes their outputs into one final answer.",
+    Icon: Wand2,
   },
   {
     id: "deliberation",
@@ -45,7 +53,7 @@ interface Props {
 
 export function WorkflowModeSelector({ value, onChange }: Props) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
       {OPTIONS.map((opt) => {
         const selected = value === opt.id;
         return (
