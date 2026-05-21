@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
       workerPrompt,
       reconcilerPrompt,
       userContent,
+      reconcilerUserContent,
       rowIdx,
       runId,
       enableQualityScoring,
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
           generateText({
             model,
             system: workerSystem,
-            prompt: userContent,
+            prompt: w.userContent ?? userContent,
             ...llmOpts,
           }),
         { maxAttempts: 3, baseDelayMs: 100 }
@@ -112,7 +113,10 @@ export async function POST(req: NextRequest) {
     const workersFormatted = workerResults
       .map((r) => `${r.id} response:\n${r.output}`)
       .join("\n\n---\n\n");
-    const combinedContent = `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`;
+    // The manager/reconciler's view of "Original Data" — its own card may have
+    // removed columns (per-card column removal in the Manager template).
+    const reconcilerOriginalData = reconcilerUserContent ?? userContent;
+    const combinedContent = `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}`;
     const reconcilerPersonaPrefix = reconciler.persona ? `${reconciler.persona}\n\n` : "";
 
     const taskContext = `\n\nTHE WORKERS WERE GIVEN THIS INSTRUCTION:
@@ -219,7 +223,7 @@ RULES:
 - Be consistent: similar quality responses should get similar scores.
 
 Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number between 1.0 and 10.0 (one decimal place, e.g. 6.5, 7.3, 9.0). No other text.`,
-              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nReconciler's Chosen Answer:\n${reconcilerOutput}\n\nConsensus Level: ${consensusType}`,
+              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}\n\nReconciler's Chosen Answer:\n${reconcilerOutput}\n\nConsensus Level: ${consensusType}`,
               ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
@@ -281,7 +285,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
             generateText({
               model: reconcilerModel,
               system: `You are a reconciler explaining your decision. Given the original data, the worker responses, and your chosen best answer, explain in one or two sentences why you chose this answer over the alternatives. Return ONLY the explanation, no labels or prefixes.`,
-              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${reconcilerOutput}`,
+              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}\n\nChosen Answer:\n${reconcilerOutput}`,
               ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }
@@ -301,7 +305,7 @@ Return ONLY valid JSON: {"quality_scores":[N,N,...]} where N is a decimal number
             generateText({
               model: reconcilerModel,
               system: `You are an expert analyst. In exactly one sentence, explain why the workers disagreed.`,
-              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${userContent}\n\nWorker Responses:\n${workersFormatted}`,
+              prompt: `Worker Instruction: ${workerPrompt}\n\nOriginal Data: ${reconcilerOriginalData}\n\nWorker Responses:\n${workersFormatted}`,
               ...llmOpts,
             }),
           { maxAttempts: 2, baseDelayMs: 100 }

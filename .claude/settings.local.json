@@ -36,7 +36,28 @@
       "Bash(git mv *)",
       "Bash(git diff *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(git fetch *)",
+      "Bash(git merge *)",
+      "Bash(git rm *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "WebSearch",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 40)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 20)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 30)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 15)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 12)",
+      "PowerShell(npm test *)",
+      "PowerShell(npx eslint src/app/mas-panel/WorkflowLayouts.tsx src/app/mas-panel/workflow-types.ts 2>&1 | Select-Object -First 40)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 10; Write-Output \"---LINT---\"; npx eslint src/app/mas-panel/WorkflowLayouts.tsx src/app/mas-panel/workflow-types.ts src/app/mas-panel/page.tsx 2>&1 | Select-Object -First 30)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 10)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 15; Write-Output \"---LINT---\"; npx eslint src/app/mas-panel/WorkflowLayouts.tsx src/app/mas-panel/workflow-types.ts 2>&1 | Select-Object -First 20)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 8)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 10; Write-Output \"---LINT---\"; npx eslint src/app/mas-panel/WorkflowStepCard.tsx 2>&1 | Select-Object -First 15)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('SCRIPTS'\\); [print\\(' ',k,'=',v\\) for k,v in d['scripts'].items\\(\\)]\")",
+      "Bash(node -e \"const d=require\\('./package.json'\\); console.log\\('SCRIPTS'\\); for\\(const[k,v]of Object.entries\\(d.scripts\\)\\)console.log\\(' ',k,'=',v\\)\")",
+      "Bash(grep *)"
     ]
   }
 }

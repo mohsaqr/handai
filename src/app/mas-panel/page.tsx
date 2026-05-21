@@ -8,7 +8,13 @@ import { SAMPLE_DATASETS, sampleAsFile } from "@/lib/sample-data";
 import { useAppStore } from "@/lib/store";
 import { useSystemSettings } from "@/lib/hooks";
 import { useRestoreSession } from "@/hooks/useRestoreSession";
-import { AlertCircle, Plus, RotateCcw, Settings2, User, X } from "lucide-react";
+import { AlertCircle, Copy, HelpCircle, Plus, RotateCcw, Settings2, User, X } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import Link from "next/link";
 
@@ -40,6 +46,7 @@ import {
   avatarStyle,
   emptyAgent,
   makeAgentId,
+  normalizeAgent,
 } from "@/lib/agent-library";
 
 import { WorkflowModeSelector } from "./WorkflowModeSelector";
@@ -56,6 +63,10 @@ import {
   composeStepSystemPrompt,
   emptyStep,
   migrateLegacyMode,
+  buildStepLabels,
+  wouldCreateCycle,
+  topoOrder,
+  includedColumns,
 } from "./workflow-types";
 
 type Row = Record<string, unknown>;
@@ -66,14 +77,38 @@ function providerLabel(id: string) {
   return id.charAt(0).toUpperCase() + id.slice(1);
 }
 
+// "?" icon next to a step heading — hover/focus shows what that step does.
+function HelpHint({ text }: { text: string }) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label="What is this step?"
+            className="text-muted-foreground/70 hover:text-foreground transition-colors"
+          >
+            <HelpCircle className="h-[18px] w-[18px]" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="max-w-xs text-xs leading-relaxed">
+          {text}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function AgentCard({
   agent,
   onConfigure,
+  onDuplicate,
   onRemove,
   canRemove,
 }: {
   agent: Agent;
   onConfigure: () => void;
+  onDuplicate: () => void;
   onRemove: () => void;
   canRemove: boolean;
 }) {
@@ -119,9 +154,14 @@ function AgentCard({
         </div>
 
         <div className="mt-auto pt-1">
-          <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onConfigure}>
-            <Settings2 className="h-3.5 w-3.5" /> Configure
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onConfigure}>
+              <Settings2 className="h-3.5 w-3.5" /> Configure
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onDuplicate}>
+              <Copy className="h-3.5 w-3.5" /> Duplicate
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -133,9 +173,12 @@ export default function AgentPanelPage() {
   const filesRef = useFilesRef();
   const [previewRows, setPreviewRows] = useState<Row[] | null>(null);
   const [agents, setAgents] = useSessionState<Agent[]>("agentpanel_agents", []);
-  const [workflowMode, setWorkflowMode] = useSessionState<WorkflowMode | null>("agentpanel_mode", null);
+  const [workflowMode, setWorkflowMode] = useSessionState<WorkflowMode | null>("agentpanel_mode", "personalized");
   useEffect(() => {
-    const migrated = migrateLegacyMode(workflowMode);
+    // Personalized is the default mode: a missing/legacy-null stored value
+    // (e.g. sessions saved before personalized became the default) is coerced
+    // to "personalized" so a mode is always selected.
+    const migrated = migrateLegacyMode(workflowMode) ?? "personalized";
     if (migrated !== workflowMode) setWorkflowMode(migrated);
   }, [workflowMode, setWorkflowMode]);
   const [workflowSteps, setWorkflowSteps] = useSessionState<WorkflowStep[]>("agentpanel_steps", []);
@@ -170,8 +213,8 @@ export default function AgentPanelPage() {
       enabledProviders.length > 0
         ? enabledProviders.map((p) => ({ providerId: p.providerId, model: p.defaultModel || "" }))
         : [{ providerId: firstId, model: firstModel }];
-    // Always 4 default cards; cycle through enabled providers if fewer than 4 are configured.
-    return Array.from({ length: 4 }, (_, i) => {
+    // One default card; the user adds more as needed.
+    return Array.from({ length: 1 }, (_, i) => {
       const s = pool[i % pool.length];
       return emptyAgent({
         id: makeAgentId(),
@@ -190,6 +233,29 @@ export default function AgentPanelPage() {
   useEffect(() => {
     if (hydrationDone && agents.length === 0) setAgents(makeDefaultAgents());
   }, [hydrationDone, agents.length, makeDefaultAgents, setAgents]);
+
+  // Personalized is the default mode and has no fixed step minimum, so the
+  // padding effect never seeds it. Seed the starter lines once (Line 1 with
+  // 3 agents + Line 2 with 1), AFTER hydration — doing it earlier gets
+  // clobbered when useSessionState restores a persisted empty `[]` from a
+  // prior visit. The ref makes it a one-shot so the user can still delete
+  // every line later without it re-seeding.
+  const personalizedSeededRef = React.useRef(false);
+  useEffect(() => {
+    if (!hydrationDone || personalizedSeededRef.current) return;
+    if (workflowMode !== "personalized") return;
+    personalizedSeededRef.current = true;
+    setWorkflowSteps((prev) =>
+      prev.length === 0
+        ? [
+            emptyStep({ line: 0, slot: 0 }),
+            emptyStep({ line: 0, slot: 1 }),
+            emptyStep({ line: 0, slot: 2 }),
+            emptyStep({ line: 1, slot: 0 }),
+          ]
+        : prev,
+    );
+  }, [hydrationDone, workflowMode, setWorkflowSteps]);
 
   // Pad workflow steps to the mode's default minimum when the mode changes.
   // Reconcilier = 1 reconciler + 3 workers. Only adds — never removes.
@@ -221,6 +287,20 @@ export default function AgentPanelPage() {
       emptyAgent({ id: makeAgentId(), name: `Agent ${prev.length + 1}`, providerId: firstId, model: firstModel }),
     ]);
   };
+  // Insert a copy right after the source card, with a fresh id and name.
+  const duplicateAgent = (id: string) => {
+    setAgents((prev) => {
+      const idx = prev.findIndex((a) => a.id === id);
+      if (idx === -1) return prev;
+      const src = prev[idx];
+      const copy = normalizeAgent({
+        ...src,
+        id: makeAgentId(),
+        name: src.name ? `${src.name} (copy)` : `Agent ${prev.length + 1}`,
+      });
+      return [...prev.slice(0, idx + 1), copy, ...prev.slice(idx + 1)];
+    });
+  };
   const removeAgent = (id: string) => {
     setAgents((prev) => prev.filter((a) => a.id !== id));
     // Also clear any workflow step that references it
@@ -236,7 +316,68 @@ export default function AgentPanelPage() {
     setWorkflowSteps((prev) => prev.map((s) => (s.id === id ? updated : s)));
   };
   const addStep = () => setWorkflowSteps((prev) => [...prev, emptyStep()]);
-  const removeStep = (id: string) => setWorkflowSteps((prev) => prev.filter((s) => s.id !== id));
+  // Removing a step also drops any edges that referenced it.
+  const removeStep = (id: string) =>
+    setWorkflowSteps((prev) =>
+      prev
+        .filter((s) => s.id !== id)
+        .map((s) =>
+          (s.inputs ?? []).includes(id)
+            ? { ...s, inputs: (s.inputs ?? []).filter((src) => src !== id) }
+            : s,
+        ),
+    );
+
+  // Personalized mode: lines are visual rows; data flow is explicit edges only.
+  const addAgentLine = () =>
+    setWorkflowSteps((prev) => {
+      const nextLine = prev.length > 0 ? Math.max(...prev.map((s) => s.line ?? 0)) + 1 : 0;
+      return [...prev, emptyStep({ line: nextLine, slot: 0 })];
+    });
+  const addStepToLine = (line: number, slot: number) =>
+    setWorkflowSteps((prev) => {
+      const inLine = prev.filter((s) => (s.line ?? 0) === line);
+      if (inLine.length >= 3) return prev;
+      if (inLine.some((s) => (s.slot ?? 0) === slot)) return prev; // slot taken
+      return [...prev, emptyStep({ line, slot })];
+    });
+  // Edge from→to is stored as to.inputs containing from. Reject self-links,
+  // duplicates, and anything that would introduce a cycle.
+  const connectSteps = (fromId: string, toId: string) =>
+    setWorkflowSteps((prev) => {
+      if (fromId === toId) return prev;
+      const target = prev.find((s) => s.id === toId);
+      if (!target) return prev;
+      if ((target.inputs ?? []).includes(fromId)) return prev;
+      if (wouldCreateCycle(prev, fromId, toId)) {
+        toast.error("That connection would create a loop");
+        return prev;
+      }
+      return prev.map((s) =>
+        s.id === toId ? { ...s, inputs: [...(s.inputs ?? []), fromId] } : s,
+      );
+    });
+  const disconnectSteps = (fromId: string, toId: string) =>
+    setWorkflowSteps((prev) =>
+      prev.map((s) =>
+        s.id === toId
+          ? { ...s, inputs: (s.inputs ?? []).filter((src) => src !== fromId) }
+          : s,
+      ),
+    );
+  // Switching INTO personalized seeds two starter lines, each with one agent
+  // (other modes keep and reinterpret the shared step pool).
+  const handleModeChange = (m: WorkflowMode) => {
+    if (m === "personalized" && workflowMode !== "personalized") {
+      setWorkflowSteps([
+        emptyStep({ line: 0, slot: 0 }),
+        emptyStep({ line: 0, slot: 1 }),
+        emptyStep({ line: 0, slot: 2 }),
+        emptyStep({ line: 1, slot: 0 }),
+      ]);
+    }
+    setWorkflowMode(m);
+  };
 
   // File objects can't survive a reload
   useEffect(() => {
@@ -351,7 +492,11 @@ export default function AgentPanelPage() {
   // Validate the run
   const validate = (): string | null => {
     if (!workflowMode) return "Pick a workflow mode";
-    if (workflowSteps.length < 2) return "Add at least 2 workflow steps";
+    if (workflowMode === "personalized") {
+      if (workflowSteps.length < 1) return "Add at least one AI agent";
+    } else if (workflowSteps.length < 2) {
+      return "Add at least 2 workflow steps";
+    }
     if (hasStructuredFile && selectedCols.length === 0) return "Select at least one column";
     for (let i = 0; i < workflowSteps.length; i++) {
       const s = workflowSteps[i];
@@ -409,12 +554,32 @@ export default function AgentPanelPage() {
       return { step: s, agent, prov: providers[agent.providerId] };
     });
 
+    // Per-card "Input columns" block — the card's kept selected columns for
+    // this row (Personalized & Sequential honor per-card column removal).
+    const colsMode = hasStructuredFile && outputFormat === "per-row";
+    const cardColumnsBlock = (step: WorkflowStep): string => {
+      if (!colsMode) return "";
+      const inc = includedColumns(step, selectedCols);
+      if (inc.length === 0) return "";
+      const subset: Row = {};
+      inc.forEach((c) => (subset[c] = row[c]));
+      return `[Input columns]:\n${JSON.stringify(subset)}`;
+    };
+
     if (workflowMode === "sequential") {
-      let currentInput = userContent;
       const outputs: Row = {};
       let totalLatencyMs = 0;
+      let prevOutput: string | null = null;
       for (let i = 0; i < resolved.length; i++) {
         const { step, agent, prov } = resolved[i];
+        const blocks: string[] = [];
+        const cb = cardColumnsBlock(step);
+        if (cb) blocks.push(cb);
+        if (i > 0 && !step.ignorePrevOutput && prevOutput != null) {
+          blocks.push(`[From Step ${i}] Output:\n${prevOutput}`);
+        }
+        const stepInput = blocks.length > 0 ? blocks.join("\n\n") : userContent;
+
         markStepStatus(step.id, "running");
         const systemPrompt = `${aiInstructions}\n\n${composeStepSystemPrompt(agent, step)}`;
         try {
@@ -424,14 +589,88 @@ export default function AgentPanelPage() {
             apiKey: prov?.apiKey ?? "",
             baseUrl: prov?.baseUrl,
             systemPrompt,
-            userContent: currentInput,
+            userContent: stepInput,
             temperature: systemSettings.temperature,
-            maxTokens: systemSettings.maxTokens ?? undefined,
+            maxTokens: agent.maxTokens ?? systemSettings.maxTokens ?? undefined,
           });
           outputs[`step_${i + 1}_output`] = result.output;
           outputs[`step_${i + 1}_latency_ms`] = String(result.latency);
           totalLatencyMs += result.latency;
-          currentInput = result.output;
+          prevOutput = result.output;
+          markStepStatus(step.id, "done");
+        } catch (err) {
+          markStepStatus(step.id, "error");
+          throw err;
+        }
+      }
+      return { ...baseRow, ...outputs, status: "success", latency_ms: totalLatencyMs };
+    }
+
+    if (workflowMode === "personalized") {
+      // Explicit DAG: each step's input is the concatenation of its connected
+      // sources' outputs (labeled). A step with no incoming edges receives the
+      // original row/file input. Execute in topological order.
+      const labels = buildStepLabels(workflowSteps);
+      const resolvedById = new Map(resolved.map((r) => [r.step.id, r]));
+      const order = topoOrder(workflowSteps);
+      const outputById = new Map<string, string>();
+
+      // Per-agent system prompt = short output rule + the user's own AI
+      // Instructions extras (text after the marker) + the step's composed
+      // persona. The auto workflow preamble (orchestrator line, STEPS list,
+      // WORKFLOW CONFIG json) is intentionally NOT sent to each agent.
+      const outputRule =
+        "Return only the final result — no explanation, no markdown, no code fences.";
+      const markerIdx = aiInstructions.indexOf(AI_INSTRUCTIONS_MARKER);
+      const userExtras =
+        markerIdx === -1
+          ? ""
+          : aiInstructions.slice(markerIdx + AI_INSTRUCTIONS_MARKER.length).trim();
+
+      const outputs: Row = {};
+      let totalLatencyMs = 0;
+      for (const stepId of order) {
+        const entry = resolvedById.get(stepId);
+        if (!entry) continue;
+        const { step, agent, prov } = entry;
+        const sources = (step.inputs ?? []).filter((s) => resolvedById.has(s));
+        const blocks: string[] = [];
+        const cb = cardColumnsBlock(step);
+        if (cb) blocks.push(cb);
+        for (const src of sources) {
+          const srcStep = resolvedById.get(src)?.step;
+          const task = srcStep?.taskDescription?.trim();
+          blocks.push(
+            `[From ${labels[src] ?? src}]\n` +
+              `Task: ${task || "(no specific task)"}\n` +
+              `Output:\n${outputById.get(src) ?? ""}`,
+          );
+        }
+        const stepInput = blocks.length > 0 ? blocks.join("\n\n") : userContent;
+
+        markStepStatus(step.id, "running");
+        const systemPrompt = [outputRule, userExtras, composeStepSystemPrompt(agent, step)]
+          .filter(Boolean)
+          .join("\n\n");
+        try {
+          const result = await dispatchProcessRow({
+            provider: agent.providerId,
+            model: agent.model,
+            apiKey: prov?.apiKey ?? "",
+            baseUrl: prov?.baseUrl,
+            systemPrompt,
+            userContent: stepInput,
+            temperature: systemSettings.temperature,
+            maxTokens: agent.maxTokens ?? systemSettings.maxTokens ?? undefined,
+          });
+          outputById.set(step.id, result.output);
+          const colBase = (labels[step.id] ?? step.id)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "");
+          outputs[`${colBase}_output`] = result.output;
+          outputs[`${colBase}_latency_ms`] = String(result.latency);
+          totalLatencyMs += result.latency;
           markStepStatus(step.id, "done");
         } catch (err) {
           markStepStatus(step.id, "error");
@@ -468,6 +707,16 @@ export default function AgentPanelPage() {
       const reconcilerPrompt = userExtras
         ? `${reconcilerOnlyContext}\n\n${userExtras}`
         : reconcilerOnlyContext;
+      // Per-card column removal: each worker (and the manager) gets only its
+      // own kept columns of the original data. Undefined → the dispatch falls
+      // back to the shared `userContent` (non-structured / document input).
+      const cardUserContent = (step: WorkflowStep): string | undefined => {
+        if (!colsMode) return undefined;
+        const inc = includedColumns(step, selectedCols);
+        const subset: Row = {};
+        inc.forEach((c) => (subset[c] = row[c]));
+        return JSON.stringify(subset);
+      };
       let result;
       try {
         result = await dispatchConsensusRow({
@@ -479,6 +728,7 @@ export default function AgentPanelPage() {
           // Full per-step prompt (agent base + step persona + step knowledge +
           // step task) lives in `persona`. Each worker only sees its own.
           persona: composeStepSystemPrompt(agent, step),
+          userContent: cardUserContent(step),
         })),
         reconciler: {
           provider: reconciler.agent.providerId,
@@ -487,6 +737,7 @@ export default function AgentPanelPage() {
           baseUrl: reconciler.prov?.baseUrl,
           persona: composeStepSystemPrompt(reconciler.agent, reconciler.step),
         },
+        reconcilerUserContent: cardUserContent(reconciler.step),
         // workerPrompt is shared by every worker AND the reconciler — keep it
         // to user extras only so workers don't see peer task descriptions.
         workerPrompt: userExtras,
@@ -658,7 +909,9 @@ export default function AgentPanelPage() {
         if (mode !== workflowMode) skipPaddingOnceRef.current = true;
         setWorkflowMode(mode);
       }
-      if (Array.isArray(cfg.agents) && cfg.agents.length > 0) setAgents(cfg.agents);
+      if (Array.isArray(cfg.agents) && cfg.agents.length > 0) {
+        setAgents(cfg.agents.map((a) => normalizeAgent(a)));
+      }
       if (Array.isArray(cfg.steps)) setWorkflowSteps(cfg.steps);
       if (cfg.outputFormat) setOutputFormat(cfg.outputFormat);
       if (cfg.delibSettings) setDelibSettings(cfg.delibSettings);
@@ -789,8 +1042,15 @@ export default function AgentPanelPage() {
     setFileStates([]);
     setPreviewRows(null);
     setAgents(makeDefaultAgents());
-    setWorkflowMode(null);
-    setWorkflowSteps([]);
+    setWorkflowMode("personalized");
+    // Default mode is personalized — seed its starter lines so the canvas
+    // isn't the empty "No agents yet" state after a reset.
+    setWorkflowSteps([
+      emptyStep({ line: 0, slot: 0 }),
+      emptyStep({ line: 0, slot: 1 }),
+      emptyStep({ line: 0, slot: 2 }),
+      emptyStep({ line: 1, slot: 0 }),
+    ]);
     setDelibSettings(DEFAULT_DELIBERATION_SETTINGS);
     setOutputFormat("per-row");
     setConcurrency(systemSettings.maxConcurrency);
@@ -858,7 +1118,7 @@ export default function AgentPanelPage() {
       <div className="pb-6 flex items-start justify-between">
         <div className="space-y-1 max-w-3xl">
           <h1 className="text-4xl font-bold">MAS Panel</h1>
-          <p className="text-muted-foreground text-sm">Unified multi-agent workflows — Reconcilier, Sequential, or Deliberation.</p>
+          <p className="text-muted-foreground text-sm">Unified multi-agent workflows — Manager, Sequential, or Deliberation.</p>
         </div>
         <Button variant="destructive" className="gap-2 px-5" onClick={handleStartOver}>
           <RotateCcw className="h-3.5 w-3.5" /> Start Over
@@ -901,9 +1161,12 @@ export default function AgentPanelPage() {
 
       {/* ── N. Configure Agents */}
       <div className="space-y-4 py-8">
-        <h2 className="text-2xl font-bold">{nAgents}. Configure Agents</h2>
-        <p className="text-sm text-muted-foreground">
-          Define a pool of agents. Each agent can later be assigned to one or more workflow steps.
+        <div className="flex items-center gap-2">
+          <h2 className="text-2xl font-bold">{nAgents}. Configure Agents</h2>
+          <HelpHint text="Build your pool of AI agents. For each agent pick its provider and model, and set its role, personality, and instructions. Agents defined here can be assigned to one or more steps in the workflow below, and saved to the shared library to reuse on other pages." />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Define your agent pool — assign them to steps below.
         </p>
 
         {availableProviders.length === 0 ? (
@@ -921,8 +1184,9 @@ export default function AgentPanelPage() {
                   key={a.id}
                   agent={a}
                   onConfigure={() => setConfiguringId(a.id)}
+                  onDuplicate={() => duplicateAgent(a.id)}
                   onRemove={() => removeAgent(a.id)}
-                  canRemove={agents.length > 2}
+                  canRemove={agents.length > 1}
                 />
               ))}
             </div>
@@ -935,10 +1199,13 @@ export default function AgentPanelPage() {
 
       <div className="border-t" />
 
-      {/* ── N. Workflow Mode */}
+      {/* ── N. Configure Template */}
       <div className="space-y-4 py-8">
-        <h2 className="text-2xl font-bold">{nMode}. Workflow Mode</h2>
-        <WorkflowModeSelector value={workflowMode} onChange={setWorkflowMode} />
+        <div className="flex items-center gap-2">
+          <h2 className="text-2xl font-bold">{nMode}. Configure Template</h2>
+          <HelpHint text="Choose how the agents collaborate. Personalized: build your own custom lines and connections. Sequential: a pipeline where each step's output feeds the next. Manager: workers run in parallel and a manager merges their answers. Deliberation: all agents discuss over several rounds. This sets the structure used in the Agent Workflow step." />
+        </div>
+        <WorkflowModeSelector value={workflowMode} onChange={handleModeChange} />
       </div>
 
       {workflowMode && (
@@ -947,11 +1214,15 @@ export default function AgentPanelPage() {
 
           {/* ── N. Agent Workflow */}
           <div className="space-y-4 py-8">
-            <h2 className="text-2xl font-bold">{nWorkflow}. Agent Workflow</h2>
-            <p className="text-sm text-muted-foreground">
-              {workflowMode === "sequential" && "Steps run in order — output of one feeds the next."}
-              {workflowMode === "reconcilier" && "The top card is the reconciler. Workers run in parallel; reconciler synthesizes their outputs."}
-              {workflowMode === "deliberation" && "All agents deliberate over multiple rounds, each seeing the others' outputs."}
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-bold">{nWorkflow}. Agent Workflow</h2>
+              <HelpHint text="Assign an agent to each step and give it its task and input data. The layout follows the template chosen above." />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {workflowMode === "sequential" && "Steps run in order — each feeds the next."}
+              {workflowMode === "reconcilier" && "Workers run in parallel; the top manager card synthesizes their outputs."}
+              {workflowMode === "deliberation" && "Agents deliberate over rounds, each seeing the others' outputs."}
+              {workflowMode === "personalized" && "Add agents in lines, then connect them: click an output dot, then another agent. Runs in dependency order."}
             </p>
             <WorkflowLayout
               mode={workflowMode}
@@ -961,6 +1232,11 @@ export default function AgentPanelPage() {
               onUpdate={updateStep}
               onRemove={removeStep}
               onAdd={addStep}
+              onAddLine={addAgentLine}
+              onAddToLine={addStepToLine}
+              onConnect={connectSteps}
+              onDisconnect={disconnectSteps}
+              selectedCols={selectedCols}
             />
           </div>
 

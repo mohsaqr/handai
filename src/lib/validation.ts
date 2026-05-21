@@ -30,6 +30,9 @@ export const ProcessRowSchema = z.object({
 // ── /api/consensus-row ────────────────────────────────────────────────────────
 const ConsensusWorkerFields = ProviderFieldsLocal.extend({
   persona: z.string().optional(),
+  // Per-worker input override (Manager template per-card column removal).
+  // Falls back to the shared `userContent` when absent.
+  userContent: z.string().optional(),
 });
 
 export const ConsensusRowSchema = z.object({
@@ -38,6 +41,9 @@ export const ConsensusRowSchema = z.object({
   workerPrompt: z.string(),
   reconcilerPrompt: z.string(),
   userContent: z.string(),
+  // The "Original Data" the reconciler/manager sees. Falls back to
+  // `userContent` when absent (per-card column removal on the manager card).
+  reconcilerUserContent: z.string().optional(),
   rowIdx: z.number().int().optional(),
   runId: z.string().optional(),
   enableQualityScoring: z.boolean().optional(),

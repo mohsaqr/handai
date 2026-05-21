@@ -181,11 +181,13 @@ export async function dispatchConsensusRow(params: {
     apiKey: string;
     baseUrl?: string;
     persona?: string;
+    userContent?: string;
   }>;
   reconciler: { provider: string; model: string; apiKey: string; baseUrl?: string; persona?: string };
   workerPrompt: string;
   reconcilerPrompt: string;
   userContent: string;
+  reconcilerUserContent?: string;
   enableQualityScoring?: boolean;
   enableDisagreementAnalysis?: boolean;
   includeReasoning?: boolean;
