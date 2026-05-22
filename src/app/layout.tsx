@@ -36,7 +36,7 @@ export default function RootLayout({
                 <footer className="border-t px-4 sm:px-6 lg:px-8 py-6 mt-auto">
                   <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
                     <div className="text-center sm:text-left">
-                      <span className="font-semibold text-foreground">Handai</span> v2.2 &middot; Created by{" "}
+                      <span className="font-semibold text-foreground">Handai</span> v2.3 &middot; Created by{" "}
                       <a href="https://saqr.me" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground transition-colors">
                         Prof. Mohammed Saqr, PhD
                       </a>

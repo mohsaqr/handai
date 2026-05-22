@@ -14,7 +14,7 @@ interface Option {
 const OPTIONS: Option[] = [
   {
     id: "personalized",
-    title: "Personalized",
+    title: "Individual / Personalized",
     subtitle: "Custom — independent sequential lines",
     description:
       "Build one or more lines by hand. Each line is a sequential chain (up to 4 agents) and runs independently, producing its own output.",

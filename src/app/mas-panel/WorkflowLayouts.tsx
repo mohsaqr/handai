@@ -32,6 +32,9 @@ interface LayoutProps {
   onDisconnect?: (fromId: string, toId: string) => void;
   /** Page-level selected columns — drives the per-card Input DATA chips. */
   selectedCols?: string[];
+  /** Name of an uploaded unstructured file (PDF/DOCX/TXT). Lets cards show a
+   *  document chip instead of "no input" when they receive the file's text. */
+  documentInput?: string;
 }
 
 export function WorkflowLayout(props: LayoutProps) {
@@ -135,7 +138,7 @@ function SConnector({ direction, cols = 2 }: {
 
 const SEQUENTIAL_COLS = 3;
 
-function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [] }: LayoutProps) {
+function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], documentInput }: LayoutProps) {
   const rows: WorkflowStep[][] = [];
   for (let i = 0; i < steps.length; i += SEQUENTIAL_COLS)
     rows.push(steps.slice(i, i + SEQUENTIAL_COLS));
@@ -181,6 +184,7 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
                         compact
                         showInputData
                         inputCols={selectedCols}
+                        documentInput={documentInput}
                         prevStepLabel={globalIdx > 0 ? `Step ${globalIdx}` : null}
                         onUpdate={(s) => onUpdate(step.id, s)}
                         onRemove={() => onRemove(step.id)}
@@ -222,7 +226,7 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
 
 // ── Reconcilier hierarchy: top card = reconciler, workers below with lines up ─
 
-function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [] }: LayoutProps) {
+function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], documentInput }: LayoutProps) {
   const reconciler = steps[0];
   const workers = steps.slice(1);
 
@@ -243,6 +247,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
               agents={agents}
               showInputData
               inputCols={selectedCols}
+              documentInput={documentInput}
               staticSources={["Workers' outputs"]}
               onUpdate={(s) => onUpdate(reconciler.id, s)}
               onRemove={() => onRemove(reconciler.id)}
@@ -325,6 +330,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
               agents={agents}
               showInputData
               inputCols={selectedCols}
+              documentInput={documentInput}
               onUpdate={(s) => onUpdate(w.id, s)}
               onRemove={() => onRemove(w.id)}
               canRemove={steps.length > 2}
@@ -454,6 +460,7 @@ function PersonalizedLayout({
   onConnect,
   onDisconnect,
   selectedCols = [],
+  documentInput,
 }: LayoutProps) {
   // Lines are visual rows only — data flow is the explicit `inputs` edges.
   const lines = groupLines(steps);
@@ -651,6 +658,7 @@ function PersonalizedLayout({
                             agents={agents}
                             showInputData
                             inputCols={selectedCols}
+                            documentInput={documentInput}
                             connectedSources={(step.inputs ?? []).map((srcId) => ({
                               id: srcId,
                               label: stepLabels[srcId] ?? srcId,
