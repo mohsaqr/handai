@@ -49,6 +49,12 @@ export interface WorkflowStep {
    * output (the removable "Step N-1 output" chip). Default false.
    */
   ignorePrevOutput?: boolean;
+  /**
+   * Unstructured file (PDF/DOCX/TXT) input only — when true this step does NOT
+   * receive the uploaded document's extracted text (the removable document
+   * chip). Lets a card rely solely on connected/previous outputs. Default false.
+   */
+  ignoreDocument?: boolean;
 }
 
 /** Columns this card actually feeds the model = global selected minus excluded. */
@@ -85,6 +91,7 @@ export function emptyStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     inputs: [],
     excludedCols: [],
     ignorePrevOutput: false,
+    ignoreDocument: false,
     ...overrides,
   };
 }
@@ -146,10 +153,15 @@ export function composeStepSystemPrompt(
   const base = buildAgentSystemPrefix(agent);
   if (base) parts.push(base);
 
-  if (includeTask && step.taskDescription.trim()) {
+  // Skip the PRIMARY TASK block when the step task merely repeats the agent's
+  // main goal (already emitted by buildAgentSystemPrefix above) — e.g. the Main
+  // Prompt box was seeded from the agent and left unedited — so the goal isn't
+  // sent twice.
+  const taskText = step.taskDescription.trim();
+  if (includeTask && taskText && taskText !== (agent.goal ?? "").trim()) {
     parts.push("");
     parts.push("════ PRIMARY TASK — your main objective for this step ════");
-    parts.push(step.taskDescription.trim());
+    parts.push(taskText);
     parts.push(
       "Focus on completing this task above all else. The sections below are supporting context only.",
     );

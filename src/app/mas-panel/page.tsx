@@ -390,6 +390,9 @@ export default function AgentPanelPage() {
   const hasFile = fileStates.length > 0;
   const hasStructuredFile = hasFile && !!previewRows && previewRows.length > 0;
   const hasUnstructuredFile = hasFile && !hasStructuredFile;
+  // Display name for an uploaded document — used both in the per-card document
+  // input block (executors) and the document chip label (workflow layout).
+  const documentName = fileStates[0]?.file.name ?? "document";
   const previewColumns = useMemo(
     () => (previewRows && previewRows.length > 0 ? Object.keys(previewRows[0]) : []),
     [previewRows],
@@ -566,6 +569,14 @@ export default function AgentPanelPage() {
       return `[Input columns]:\n${JSON.stringify(subset)}`;
     };
 
+    // Per-card document block — the uploaded file's extracted text, included
+    // unless the card opted out (the removable document chip). This lets a
+    // connected card receive BOTH the document and its upstream output(s).
+    const cardDocumentBlock = (step: WorkflowStep): string => {
+      if (!hasUnstructuredFile || step.ignoreDocument) return "";
+      return `[Document: ${documentName}]\n${userContent}`;
+    };
+
     if (workflowMode === "sequential") {
       const outputs: Row = {};
       let totalLatencyMs = 0;
@@ -575,6 +586,8 @@ export default function AgentPanelPage() {
         const blocks: string[] = [];
         const cb = cardColumnsBlock(step);
         if (cb) blocks.push(cb);
+        const db = cardDocumentBlock(step);
+        if (db) blocks.push(db);
         if (i > 0 && !step.ignorePrevOutput && prevOutput != null) {
           blocks.push(`[From Step ${i}] Output:\n${prevOutput}`);
         }
@@ -637,6 +650,8 @@ export default function AgentPanelPage() {
         const blocks: string[] = [];
         const cb = cardColumnsBlock(step);
         if (cb) blocks.push(cb);
+        const db = cardDocumentBlock(step);
+        if (db) blocks.push(db);
         for (const src of sources) {
           const srcStep = resolvedById.get(src)?.step;
           const task = srcStep?.taskDescription?.trim();
@@ -711,6 +726,9 @@ export default function AgentPanelPage() {
       // own kept columns of the original data. Undefined → the dispatch falls
       // back to the shared `userContent` (non-structured / document input).
       const cardUserContent = (step: WorkflowStep): string | undefined => {
+        // Unstructured doc: undefined → dispatch falls back to the shared
+        // document `userContent`; "" → this card opted out of the document.
+        if (hasUnstructuredFile) return step.ignoreDocument ? "" : undefined;
         if (!colsMode) return undefined;
         const inc = includedColumns(step, selectedCols);
         const subset: Row = {};
@@ -1237,6 +1255,7 @@ export default function AgentPanelPage() {
               onConnect={connectSteps}
               onDisconnect={disconnectSteps}
               selectedCols={selectedCols}
+              documentInput={hasUnstructuredFile ? documentName : undefined}
             />
           </div>
 

@@ -14,6 +14,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import type { GenerateColumn, Row } from "@/types";
 import { dispatchGenerateRow, dispatchProcessRow, dispatchCreateRun, dispatchSaveResults } from "@/lib/llm-dispatch";
+import { detectIdPatterns, applyIdPatterns, type IdPattern } from "@/lib/generate-ids";
 import { NoModelWarning } from "@/components/tools/NoModelWarning";
 import { AIInstructionsSection } from "@/components/tools/AIInstructionsSection";
 import { useAIInstructions, AI_INSTRUCTIONS_MARKER } from "@/hooks/useAIInstructions";
@@ -252,6 +253,17 @@ async function executeGeneration(params: GenerateParams) {
   const batchCap = deriveBatchSize(params.maxTokens);
   const effectiveStructure = params.isStructured && params.columns?.some((c) => c.name.trim()) ? "define_columns" : "ai_decide";
 
+  // Detect ID columns exactly once — from already-generated rows when resuming,
+  // otherwise from the first batch below — then renumber later batches so IDs
+  // continue the sequence instead of restarting at 1 each batch.
+  let idPatterns: Record<string, IdPattern> | null = null;
+  let idDetectionDone = false;
+  if (accumulated.length > 0) {
+    const p = detectIdPatterns(accumulated.slice(0, batchCap));
+    if (Object.keys(p).length > 0) idPatterns = p;
+    idDetectionDone = true;
+  }
+
   const buildDisplayRows = () => accumulated.map((row, i) => ({
     ...row,
     status: "success" as const,
@@ -293,7 +305,17 @@ async function executeGeneration(params: GenerateParams) {
       latencies.push(batchLatency);
       const perRow = data.rows.length > 0 ? Math.round(batchLatency / data.rows.length) : batchLatency;
       for (let i = 0; i < data.rows.length; i++) rowLatencies.push(perRow);
+      const newStart = accumulated.length;
       accumulated = [...accumulated, ...(data.rows as Row[])];
+      // Detect from the first batch only (avoids a later batch retroactively
+      // renumbering earlier rows from the wrong start), then renumber just the
+      // rows added this batch — earlier rows are already in sequence.
+      if (!idDetectionDone) {
+        const p = detectIdPatterns(data.rows as Row[]);
+        if (Object.keys(p).length > 0) idPatterns = p;
+        idDetectionDone = true;
+      }
+      if (idPatterns) applyIdPatterns(accumulated, idPatterns, newStart);
       generated += data.rows.length;
     } catch {
       latencies.push(Date.now() - t0);

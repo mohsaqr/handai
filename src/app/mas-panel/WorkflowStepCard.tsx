@@ -1,5 +1,6 @@
 "use client";
 
+import { type ReactNode } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { User, X, Plus } from "lucide-react";
+import { User, X, Plus, FileText } from "lucide-react";
 import { type Agent, avatarStyle } from "@/lib/agent-library";
 import { type WorkflowStep } from "./workflow-types";
 
@@ -40,11 +41,24 @@ interface Props {
   /** Non-removable info chips for intrinsic inputs (e.g. the manager's
    *  "Workers' outputs", which it always receives and can't opt out of). */
   staticSources?: string[];
+  /** Name of an uploaded unstructured file (PDF/DOCX/TXT). When set, a card that
+   *  relies on the original input shows a document chip instead of "no input",
+   *  since the extracted file text IS what such a card receives. */
+  documentInput?: string;
 }
 
-function Chip({ text, onRemove }: { text: string; onRemove: () => void }) {
+function Chip({
+  text,
+  onRemove,
+  icon,
+}: {
+  text: string;
+  onRemove: () => void;
+  icon?: ReactNode;
+}) {
   return (
     <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+      {icon}
       <span className="font-mono truncate max-w-[120px]">{text}</span>
       <button
         type="button"
@@ -55,6 +69,21 @@ function Chip({ text, onRemove }: { text: string; onRemove: () => void }) {
         <X className="h-3 w-3" strokeWidth={2.5} />
       </button>
     </span>
+  );
+}
+
+// Dashed "+ label" pill shown when an opt-out-able input (previous-step output,
+// document) has been removed, letting the user add it back.
+function RestoreChip({ label, onClick, title }: { label: string; onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="inline-flex items-center gap-1 rounded-md border border-dashed px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+    >
+      <Plus className="h-3 w-3" /> {label}
+    </button>
   );
 }
 
@@ -76,6 +105,7 @@ export function WorkflowStepCard({
   connectedSources = [],
   prevStepLabel = null,
   staticSources = [],
+  documentInput,
 }: Props) {
   const excluded = new Set(step.excludedCols ?? []);
   const keptCols = inputCols.filter((c) => !excluded.has(c));
@@ -136,7 +166,25 @@ export function WorkflowStepCard({
         <Label className="text-[10px] text-muted-foreground">Agent</Label>
         <Select
           value={step.agentId ?? ""}
-          onValueChange={(v) => onUpdate({ ...step, agentId: v || null })}
+          onValueChange={(v) => {
+            // Picking an agent seeds the Main Prompt box with that agent's main
+            // system prompt (goal). Only seed when the box is empty or still
+            // holds the previous agent's goal (an untouched seed) — never clobber
+            // a prompt the user has edited.
+            const picked = v ? agents.find((a) => a.id === v) : null;
+            const prevGoal = (step.agentId
+              ? agents.find((a) => a.id === step.agentId)?.goal
+              : ""
+            )?.trim() ?? "";
+            const current = step.taskDescription.trim();
+            const newGoal = picked?.goal?.trim() ?? "";
+            const seed = newGoal && (current === "" || current === prevGoal);
+            onUpdate({
+              ...step,
+              agentId: v || null,
+              ...(seed ? { taskDescription: newGoal } : {}),
+            });
+          }}
         >
           <SelectTrigger className="h-8 text-xs">
             <SelectValue placeholder="Pick an agent…" />
@@ -163,6 +211,13 @@ export function WorkflowStepCard({
             {keptCols.map((c) => (
               <Chip key={`col-${c}`} text={c} onRemove={() => removeCol(c)} />
             ))}
+            {documentInput && !step.ignoreDocument && (
+              <Chip
+                text={documentInput}
+                icon={<FileText className="h-3 w-3 shrink-0" />}
+                onRemove={() => onUpdate({ ...step, ignoreDocument: true })}
+              />
+            )}
             {connectedSources.map((s) => (
               <Chip
                 key={`src-${s.id}`}
@@ -186,13 +241,17 @@ export function WorkflowStepCard({
               />
             )}
             {prevStepLabel && step.ignorePrevOutput && (
-              <button
-                type="button"
+              <RestoreChip
+                label={`${prevStepLabel} output`}
                 onClick={() => onUpdate({ ...step, ignorePrevOutput: false })}
-                className="inline-flex items-center gap-1 rounded-md border border-dashed px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
-              >
-                <Plus className="h-3 w-3" /> {prevStepLabel} output
-              </button>
+              />
+            )}
+            {documentInput && step.ignoreDocument && (
+              <RestoreChip
+                label={documentInput}
+                onClick={() => onUpdate({ ...step, ignoreDocument: false })}
+                title="Send the uploaded document's text to this card"
+              />
             )}
             {removedCols.length > 0 && (
               <details className="relative inline-block text-[10px]">
@@ -219,7 +278,8 @@ export function WorkflowStepCard({
             {keptCols.length === 0 &&
               connectedSources.length === 0 &&
               staticSources.length === 0 &&
-              !(prevStepLabel && !step.ignorePrevOutput) && (
+              !(prevStepLabel && !step.ignorePrevOutput) &&
+              !documentInput && (
                 <span className="text-[10px] text-muted-foreground italic">
                   no input — uses original input
                 </span>
@@ -230,7 +290,7 @@ export function WorkflowStepCard({
 
       <div className="space-y-1">
         <div className="flex items-center justify-between">
-          <Label className="text-[10px] text-muted-foreground">Description</Label>
+          <Label className="text-[10px] text-muted-foreground">Main Prompt</Label>
           {samplePrompts && (
             <Select
               onValueChange={(key) => {
