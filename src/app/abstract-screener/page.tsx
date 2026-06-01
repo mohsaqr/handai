@@ -85,6 +85,7 @@ interface ASSession {
   data: Row[];
   aiResults: Record<number, AIScreenResult>;
   decisions: Record<number, DecisionFlag[]>;
+  humanDecisionOrder?: number[];
   criteria: string;
   colMap: ColMap;
   wordHighlighter: WordHighlighter;
@@ -101,7 +102,10 @@ interface ASSettings {
   lightMode: boolean;
   horizontalDecisions: boolean;
   buttonsAboveText: boolean;
+  useHumanExamples: boolean;
 }
+
+const HUMAN_EXAMPLES_LIMIT = 10;
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -152,11 +156,11 @@ function deleteStoredSession(name: string) {
 }
 
 function loadSettings(): ASSettings {
+  const defaults: ASSettings = { autoAdvance: false, lightMode: true, horizontalDecisions: true, buttonsAboveText: false, useHumanExamples: false };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    const defaults: ASSettings = { autoAdvance: false, lightMode: true, horizontalDecisions: true, buttonsAboveText: false };
     return raw ? { ...defaults, ...(JSON.parse(raw) as Partial<ASSettings>) } : defaults;
-  } catch { return { autoAdvance: false, lightMode: true, horizontalDecisions: true, buttonsAboveText: false }; }
+  } catch { return defaults; }
 }
 
 function saveSettingsToStorage(s: ASSettings) {
@@ -264,6 +268,7 @@ export default function AbstractScreenerPage() {
   const [data, setData]                 = useSessionState<Row[]>("abscreen_data", []);
   const [aiResults, setAiResults]       = useSessionState<Record<number, AIScreenResult>>("abscreen_aiResults", {});
   const [decisions, setDecisions]       = useSessionState<Record<number, DecisionFlag[]>>("abscreen_decisions", {});
+  const [humanDecisionOrder, setHumanDecisionOrder] = useSessionState<number[]>("abscreen_decisionOrder", []);
   const [includeCriteria, setIncludeCriteria] = useSessionState("abscreen_includeCriteria", "");
   const [excludeCriteria, setExcludeCriteria] = useSessionState("abscreen_excludeCriteria", "");
   const [colMap, setColMap]             = useSessionState<ColMap>("abscreen_colMap", { title: "", abstract: "", keywords: "", journal: "" });
@@ -291,7 +296,7 @@ export default function AbstractScreenerPage() {
   const [showAIReasoning, setShowAIReasoning] = useState(false);
   const [sessions, setSessions]             = useState<ASSession[]>([]);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<string | null>(null);
-  const [settings, setSettings]             = useState<ASSettings>({ autoAdvance: false, lightMode: true, horizontalDecisions: true, buttonsAboveText: false });
+  const [settings, setSettings]             = useState<ASSettings>({ autoAdvance: false, lightMode: true, horizontalDecisions: true, buttonsAboveText: false, useHumanExamples: false });
   const [autosaveTime, setAutosaveTime]     = useState<Date | null>(null);
   const [autosaveDisplay, setAutosaveDisplay] = useState("");
   const [pendingLoad, setPendingLoad]       = useState<{ data: Row[]; name: string } | null>(null);
@@ -355,6 +360,42 @@ export default function AbstractScreenerPage() {
   // AI Instructions
   const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
 
+  // ── Build the same Title/Journal/Keywords/Abstract block as the LLM user content ──
+  const buildAbstractBlock = useCallback((row: Row): string => {
+    const parts = [
+      colMap.title    && row[colMap.title]    ? `Title: ${String(row[colMap.title])}` : "",
+      colMap.journal  && row[colMap.journal]  ? `Journal: ${String(row[colMap.journal])}` : "",
+      colMap.keywords && row[colMap.keywords] ? `Keywords: ${String(row[colMap.keywords])}` : "",
+      colMap.abstract && row[colMap.abstract] ? `Abstract: ${String(row[colMap.abstract])}` : "",
+    ].filter(Boolean);
+    return parts.join("\n\n");
+  }, [colMap]);
+
+  // ── PRIOR HUMAN EXAMPLES block (few-shot from recent human decisions) ─────
+  const buildHumanExamplesBlock = useCallback((excludeIdx: number | null): string => {
+    if (!settings.useHumanExamples) return "";
+    const pool = humanDecisionOrder.filter((i) => i !== excludeIdx && (decisions[i]?.length ?? 0) > 0);
+    const picked = pool.slice(-HUMAN_EXAMPLES_LIMIT);
+    if (picked.length === 0) return "";
+    const lines: string[] = [];
+    lines.push("");
+    lines.push("PRIOR HUMAN EXAMPLES (most recent last — the human reviewer's decisions):");
+    picked.forEach((rowIdx, n) => {
+      const row = data[rowIdx];
+      if (!row) return;
+      const block = buildAbstractBlock(row);
+      if (!block) return;
+      const flags = (decisions[rowIdx] ?? []).join(", ");
+      lines.push("");
+      lines.push(`Example ${n + 1}:`);
+      lines.push(block);
+      lines.push(`HUMAN DECISION: ${flags}`);
+    });
+    lines.push("");
+    lines.push("Use these as guidance for the human reviewer's judgment when scoring the current abstract.");
+    return lines.join("\n");
+  }, [settings.useHumanExamples, humanDecisionOrder, decisions, data, buildAbstractBlock]);
+
   // ── Batch processor (survives navigation) ──────────────────────────────────
   const batch = useBatchProcessor({
     toolId: "/abstract-screener",
@@ -371,19 +412,13 @@ export default function AbstractScreenerPage() {
         return "Map at least one column (title, abstract, etc.) before running AI.";
       return null;
     },
-    processRow: async (row: Row) => {
-      const parts = [
-        colMap.title    && row[colMap.title]    ? `Title: ${String(row[colMap.title])}` : "",
-        colMap.journal  && row[colMap.journal]  ? `Journal: ${String(row[colMap.journal])}` : "",
-        colMap.keywords && row[colMap.keywords] ? `Keywords: ${String(row[colMap.keywords])}` : "",
-        colMap.abstract && row[colMap.abstract] ? `Abstract: ${String(row[colMap.abstract])}` : "",
-      ].filter(Boolean);
+    processRow: async (row: Row, idx: number) => {
+      const userContent = buildAbstractBlock(row);
 
-      if (parts.length === 0) {
+      if (!userContent) {
         return { ...row, status: "skipped", latency_ms: 0 };
       }
 
-      const userContent = parts.join("\n\n");
       const start = Date.now();
 
       const { output } = await dispatchProcessRow({
@@ -391,7 +426,7 @@ export default function AbstractScreenerPage() {
         model: activeModel!.defaultModel,
         apiKey: activeModel!.apiKey || "",
         baseUrl: activeModel!.baseUrl,
-        systemPrompt: aiInstructions,
+        systemPrompt: aiInstructions + buildHumanExamplesBlock(idx),
         userContent,
         temperature: systemSettings.temperature,
         maxTokens: systemSettings.maxTokens ?? undefined,
@@ -479,6 +514,7 @@ export default function AbstractScreenerPage() {
       setData(s.data);
       setAiResults(s.aiResults || {});
       setDecisions(normalizeDecisions(s.decisions));
+      if (Array.isArray(s.humanDecisionOrder)) setHumanDecisionOrder(s.humanDecisionOrder);
       const savedCriteria = s.criteria || "";
       const includeMatch = savedCriteria.match(/Include if:\n([\s\S]*?)(?:\n\nExclude if:|$)/);
       const excludeMatch = savedCriteria.match(/Exclude if:\n([\s\S]*?)$/);
@@ -497,7 +533,7 @@ export default function AbstractScreenerPage() {
     if (data.length === 0) return;
     const payload: ASAutosave = {
       name: sessionName, savedAt: new Date().toISOString(),
-      data, aiResults, decisions, criteria, colMap, wordHighlighter,
+      data, aiResults, decisions, humanDecisionOrder, criteria, colMap, wordHighlighter,
       currentIndex, dataName, sessionName,
     };
     stateRef.current = payload;
@@ -507,14 +543,14 @@ export default function AbstractScreenerPage() {
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
       setAutosaveTime(new Date());
     } catch { /* storage full */ }
-  }, [data, aiResults, decisions, criteria, includeCriteria, excludeCriteria, colMap, wordHighlighter, currentIndex, dataName, sessionName]);
+  }, [data, aiResults, decisions, humanDecisionOrder, criteria, includeCriteria, excludeCriteria, colMap, wordHighlighter, currentIndex, dataName, sessionName]);
 
   // ── Sync stateRef every render ───────────────────────────────────────────
   useEffect(() => {
     if (data.length === 0) return;
     stateRef.current = {
       name: sessionName, savedAt: stateRef.current.savedAt,
-      data, aiResults, decisions, criteria, colMap, wordHighlighter,
+      data, aiResults, decisions, humanDecisionOrder, criteria, colMap, wordHighlighter,
       currentIndex, dataName, sessionName,
     };
   });
@@ -581,6 +617,10 @@ export default function AbstractScreenerPage() {
       else out[currentIndex] = next;
       return out;
     });
+    setHumanDecisionOrder((prev) => {
+      const without = prev.filter((i) => i !== currentIndex);
+      return next.length === 0 ? without : [...without, currentIndex];
+    });
     // Auto-advance only when transitioning from no decisions → at least one
     if (!wasActive && current.length === 0 && settings.autoAdvance) {
       setTimeout(goToNextUndecided, 200);
@@ -610,6 +650,7 @@ export default function AbstractScreenerPage() {
     setDataName(name);
     setAiResults({});
     setDecisions({});
+    setHumanDecisionOrder([]);
     setCurrentIndex(0);
     const sName = name.replace(/\.[^.]+$/, "");
     setSessionName(sName);
@@ -700,7 +741,7 @@ export default function AbstractScreenerPage() {
     const n = (name || sessionName || dataName || "Session").trim();
     const s: ASSession = {
       name: n, savedAt: new Date().toISOString(),
-      data, aiResults, decisions, criteria, colMap, wordHighlighter, currentIndex, dataName,
+      data, aiResults, decisions, humanDecisionOrder, criteria, colMap, wordHighlighter, currentIndex, dataName,
     };
     upsertSession(s);
     setSessions(listSessions());
@@ -722,6 +763,7 @@ export default function AbstractScreenerPage() {
     setData(s.data);
     setAiResults(s.aiResults || {});
     setDecisions(normalizeDecisions(s.decisions));
+    setHumanDecisionOrder(s.humanDecisionOrder ?? []);
     const loadedCriteria = s.criteria || "";
     const lInclude = loadedCriteria.match(/Include if:\n([\s\S]*?)(?:\n\nExclude if:|$)/);
     const lExclude = loadedCriteria.match(/Exclude if:\n([\s\S]*?)$/);
@@ -743,18 +785,14 @@ export default function AbstractScreenerPage() {
     if (!activeModel || !criteria.trim() || !currentRow) return;
     setAskingAI(true);
     try {
-      const parts = [
-        colMap.title    && currentRow[colMap.title]    ? `Title: ${String(currentRow[colMap.title])}` : "",
-        colMap.journal  && currentRow[colMap.journal]  ? `Journal: ${String(currentRow[colMap.journal])}` : "",
-        colMap.keywords && currentRow[colMap.keywords] ? `Keywords: ${String(currentRow[colMap.keywords])}` : "",
-        colMap.abstract && currentRow[colMap.abstract] ? `Abstract: ${String(currentRow[colMap.abstract])}` : "",
-      ].filter(Boolean);
-      if (parts.length === 0) { setAskingAI(false); return; }
+      const userContent = buildAbstractBlock(currentRow);
+      if (!userContent) { setAskingAI(false); return; }
 
       const { output } = await dispatchProcessRow({
         provider: activeModel.providerId, model: activeModel.defaultModel,
         apiKey: activeModel.apiKey || "", baseUrl: activeModel.baseUrl,
-        systemPrompt: aiInstructions, userContent: parts.join("\n\n"),
+        systemPrompt: aiInstructions + buildHumanExamplesBlock(currentIndex),
+        userContent,
         temperature: systemSettings.temperature,
         maxTokens: systemSettings.maxTokens ?? undefined,
       });
@@ -948,7 +986,7 @@ export default function AbstractScreenerPage() {
             AI-assisted systematic review screening — batch pre-screen then review
           </p>
         </div>
-        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("abscreen_"); setData([]); setDataName(""); setAiResults({}); setDecisions({}); setIncludeCriteria(""); setExcludeCriteria(""); setCurrentIndex(0); setColMap({ title: "", abstract: "", keywords: "", journal: "" }); setWordHighlighter({ include: "", exclude: "" }); setSessionName(""); setConcurrency(5); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("abscreen_"); setData([]); setDataName(""); setAiResults({}); setDecisions({}); setHumanDecisionOrder([]); setIncludeCriteria(""); setExcludeCriteria(""); setCurrentIndex(0); setColMap({ title: "", abstract: "", keywords: "", journal: "" }); setWordHighlighter({ include: "", exclude: "" }); setSessionName(""); setConcurrency(5); setAiInstructions(""); batch.clearResults(); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
       </div>
@@ -1319,6 +1357,10 @@ export default function AbstractScreenerPage() {
               <div className="flex items-center gap-2">
                 <Switch id="as-auto" checked={settings.autoAdvance} onCheckedChange={(v) => updateSettings({ autoAdvance: v })} />
                 <Label htmlFor="as-auto" className="text-xs cursor-pointer">Auto-advance</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch id="as-fewshot" checked={settings.useHumanExamples} onCheckedChange={(v) => updateSettings({ useHumanExamples: v })} />
+                <Label htmlFor="as-fewshot" className="text-xs cursor-pointer" title="Send the most recent 10 of your human-screened abstracts as few-shot examples to the LLM">Learn from my codes</Label>
               </div>
             </div>
 

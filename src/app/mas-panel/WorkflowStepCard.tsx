@@ -139,14 +139,14 @@ export function WorkflowStepCard({
       )}
 
       <div
-        className={`shrink-0 ${compact ? "w-20 h-20" : "w-24 h-24"} rounded-lg overflow-hidden flex items-center justify-center bg-muted/40 ${
+        className={`shrink-0 ${compact ? "w-28 h-28" : "w-32 h-32"} rounded-lg overflow-hidden flex items-center justify-center bg-muted/40 ${
           typeof avatar === "number" ? "border" : "border border-dashed border-muted-foreground/40"
         }`}
       >
         {typeof avatar === "number" ? (
           <div className="w-full h-full" style={avatarStyle(avatar)} aria-hidden />
         ) : (
-          <User className={compact ? "h-9 w-9 text-muted-foreground/60" : "h-10 w-10 text-muted-foreground/60"} />
+          <User className={compact ? "h-12 w-12 text-muted-foreground/60" : "h-14 w-14 text-muted-foreground/60"} />
         )}
       </div>
 
