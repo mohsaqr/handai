@@ -56,6 +56,7 @@ interface AICSettings {
   horizontalCodes: boolean;
   buttonsAboveText: boolean;
   autoAcceptThreshold: number;
+  useHumanExamples: boolean;
 }
 
 const DEFAULT_SETTINGS: AICSettings = {
@@ -65,7 +66,10 @@ const DEFAULT_SETTINGS: AICSettings = {
   horizontalCodes: true,
   buttonsAboveText: false,
   autoAcceptThreshold: 0.9,
+  useHumanExamples: false,
 };
+
+const HUMAN_EXAMPLES_LIMIT = 10;
 
 // ─── AI suggestion type ─────────────────────────────────────────────────────
 interface AISuggestion {
@@ -171,6 +175,7 @@ interface AICSession {
   dataName: string;
   systemPrompt: string;
   codingData?: Record<number, string[]>;
+  humanCodedOrder?: number[];
   aiData?: Record<number, AISuggestion>;
   currentIndex?: number;
 }
@@ -432,6 +437,7 @@ export default function AICoderPage() {
   // ── Coding state (restored) ──────────────────────────────────────────────
   const [currentIndex, setCurrentIndex] = useSessionState("aicoder_currentIndex", 0);
   const [codingData, setCodingData] = useSessionState<Record<number, string[]>>("aicoder_codingData", {});
+  const [humanCodedOrder, setHumanCodedOrder] = useSessionState<number[]>("aicoder_codedOrder", []);
   const [aiData, setAiData] = useSessionState<Record<number, AISuggestion>>("aicoder_aiData", {});
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [settings, setSettings] = useState<AICSettings>(DEFAULT_SETTINGS);
@@ -501,6 +507,7 @@ export default function AICoderPage() {
           if (s.codebook) setCodebook(s.codebook);
           if (s.selectedCols) setSelectedCols(s.selectedCols);
           if (s.codingData) setCodingData(s.codingData);
+          if (Array.isArray(s.humanCodedOrder)) setHumanCodedOrder(s.humanCodedOrder);
           if (s.aiData) setAiData(s.aiData);
           if (typeof s.currentIndex === "number") setCurrentIndex(s.currentIndex);
         }
@@ -599,37 +606,78 @@ export default function AICoderPage() {
         codebook,
         selectedCols,
         codingData,
+        humanCodedOrder,
         aiData,
         currentIndex,
         savedAt: new Date().toISOString(),
       };
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
     } catch {}
-  }, [data, dataName, sessionName, codebook, selectedCols, codingData, aiData, currentIndex]);
+  }, [data, dataName, sessionName, codebook, selectedCols, codingData, humanCodedOrder, aiData, currentIndex]);
 
   useEffect(() => {
     if (!isMounted || data.length === 0) return;
     doAutosave();
-  }, [data, codingData, aiData, currentIndex, isMounted]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data, codingData, humanCodedOrder, aiData, currentIndex, isMounted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Toggle code on current row ──────────────────────────────────────────
   const toggleCode = useCallback((code: string) => {
+    let becameEmpty = false;
     setCodingData((prev) => {
       const cur = prev[currentIndex] ?? [];
       const next = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code];
+      becameEmpty = next.length === 0;
       return { ...prev, [currentIndex]: next };
+    });
+    setHumanCodedOrder((prev) => {
+      const without = prev.filter((i) => i !== currentIndex);
+      return becameEmpty ? without : [...without, currentIndex];
     });
     if (settings.autoAdvance) {
       setTimeout(() => {
         setCurrentIndex((i) => Math.min(totalRows - 1, i + 1));
       }, 150);
     }
-  }, [currentIndex, settings.autoAdvance, totalRows]);
+  }, [currentIndex, settings.autoAdvance, totalRows, setCodingData, setHumanCodedOrder, setCurrentIndex]);
 
   // ── Navigation ──────────────────────────────────────────────────────────
   const navigate = useCallback((dir: number) => {
     setCurrentIndex((i) => Math.max(0, Math.min(totalRows - 1, i + dir)));
   }, [totalRows]);
+
+  // ── Build PRIOR HUMAN EXAMPLES block (few-shot from recent human codes) ─
+  const buildSubset = useCallback((row: Row): Row => {
+    const subset: Row = {};
+    if (selectedCols.length > 0) {
+      selectedCols.forEach((col) => (subset[col] = row[col]));
+    } else {
+      Object.assign(subset, row);
+    }
+    return subset;
+  }, [selectedCols]);
+
+  const buildHumanExamplesBlock = useCallback((excludeIdx: number | null): string => {
+    if (!settings.useHumanExamples) return "";
+    const pool = humanCodedOrder.filter((i) => i !== excludeIdx && (codingData[i]?.length ?? 0) > 0);
+    const picked = pool.slice(-HUMAN_EXAMPLES_LIMIT);
+    if (picked.length === 0) return "";
+    const lines: string[] = [];
+    lines.push("");
+    lines.push("PRIOR HUMAN EXAMPLES (most recent last — the human coder applied these labels):");
+    picked.forEach((rowIdx, n) => {
+      const row = data[rowIdx];
+      if (!row) return;
+      const subset = buildSubset(row);
+      const humanCodes = (codingData[rowIdx] ?? []).join(", ");
+      lines.push("");
+      lines.push(`Example ${n + 1}:`);
+      lines.push(`INPUT: ${JSON.stringify(subset)}`);
+      lines.push(`HUMAN CODES: ${humanCodes}`);
+    });
+    lines.push("");
+    lines.push("Use these as guidance for the human coder's style and judgment when scoring the current row.");
+    return lines.join("\n");
+  }, [settings.useHumanExamples, humanCodedOrder, codingData, data, buildSubset]);
 
   // ── Get AI suggestion for single row ────────────────────────────────────
   const getAiSuggestion = useCallback(async (rowIdx?: number) => {
@@ -640,19 +688,14 @@ export default function AICoderPage() {
     setIsAiLoading(true);
     try {
       const row = data[idx];
-      const subset: Row = {};
-      if (selectedCols.length > 0) {
-        selectedCols.forEach((col) => (subset[col] = row[col]));
-      } else {
-        Object.assign(subset, row);
-      }
+      const subset = buildSubset(row);
 
       const result = await dispatchProcessRow({
         provider: provider.providerId,
         model: provider.defaultModel,
         apiKey: provider.apiKey || "",
         baseUrl: provider.baseUrl,
-        systemPrompt: aiInstructions,
+        systemPrompt: aiInstructions + buildHumanExamplesBlock(idx),
         userContent: JSON.stringify(subset),
         temperature: systemSettings.temperature,
         maxTokens: systemSettings.maxTokens ?? undefined,
@@ -668,7 +711,7 @@ export default function AICoderPage() {
     } finally {
       setIsAiLoading(false);
     }
-  }, [currentIndex, provider, codes, data, selectedCols, aiInstructions, systemSettings.temperature]);
+  }, [currentIndex, provider, codes, data, buildSubset, aiInstructions, buildHumanExamplesBlock, systemSettings.temperature, systemSettings.maxTokens]);
 
   // ── Batch AI processing (via useBatchProcessor) ────────────────────────
   const batch = useBatchProcessor({
@@ -686,20 +729,15 @@ export default function AICoderPage() {
       if (codes.length === 0) return "Define at least one code";
       return null;
     },
-    processRow: async (row: Row) => {
-      const subset: Row = {};
-      if (selectedCols.length > 0) {
-        selectedCols.forEach((col) => (subset[col] = row[col]));
-      } else {
-        Object.assign(subset, row);
-      }
+    processRow: async (row: Row, idx: number) => {
+      const subset = buildSubset(row);
 
       const result = await dispatchProcessRow({
         provider: provider!.providerId,
         model: provider!.defaultModel,
         apiKey: provider!.apiKey || "",
         baseUrl: provider!.baseUrl,
-        systemPrompt: aiInstructions,
+        systemPrompt: aiInstructions + buildHumanExamplesBlock(idx),
         userContent: JSON.stringify(subset),
         temperature: systemSettings.temperature,
         maxTokens: systemSettings.maxTokens ?? undefined,
@@ -769,6 +807,7 @@ export default function AICoderPage() {
     setCurrentIndex(0);
     setCodebook(emptyCodebook());
     setCodingData({});
+    setHumanCodedOrder([]);
     setAiData({});
     toast.success(`Loaded ${newData.length} rows from ${name}`);
   };
@@ -945,6 +984,7 @@ export default function AICoderPage() {
       dataName,
       systemPrompt,
       codingData,
+      humanCodedOrder,
       aiData,
       currentIndex,
     };
@@ -973,6 +1013,7 @@ export default function AICoderPage() {
     setSessionName(s.name);
     setLoadedSessionName(s.name);
     setCodingData(s.codingData ?? s.overrides ?? {});
+    setHumanCodedOrder(s.humanCodedOrder ?? []);
     setAiData(s.aiData ?? {});
     setCurrentIndex(s.currentIndex ?? 0);
     setShowSessions(false);
@@ -998,7 +1039,7 @@ export default function AICoderPage() {
           <h1 className="text-4xl font-bold">AI Coder</h1>
           <p className="text-muted-foreground text-sm">AI-assisted qualitative coding with review &amp; analytics</p>
         </div>
-        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("aicoder_"); setData([]); setDataName(""); setCodebook(emptyCodebook()); setCodingData({}); setAiData({}); setCurrentIndex(0); setSystemPrompt(""); setSessionName(""); setAiInstructions(""); batch.clearResults(); }}>
+        <Button variant="destructive" className="gap-2 px-5" onClick={() => { clearSessionKeys("aicoder_"); setData([]); setDataName(""); setCodebook(emptyCodebook()); setCodingData({}); setHumanCodedOrder([]); setAiData({}); setCurrentIndex(0); setSystemPrompt(""); setSessionName(""); setAiInstructions(""); batch.clearResults(); }}>
             <RotateCcw className="h-3.5 w-3.5" /> Start Over
           </Button>
       </div>
@@ -1423,6 +1464,10 @@ export default function AICoderPage() {
               <div className="flex items-center gap-2">
                 <Switch id="aic-auto" checked={settings.autoAdvance} onCheckedChange={(v) => updateSettings({ autoAdvance: v })} />
                 <Label htmlFor="aic-auto" className="text-xs cursor-pointer">Auto-advance</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch id="aic-fewshot" checked={settings.useHumanExamples} onCheckedChange={(v) => updateSettings({ useHumanExamples: v })} />
+                <Label htmlFor="aic-fewshot" className="text-xs cursor-pointer" title="Send the most recent 10 of your human-coded rows as few-shot examples to the LLM">Learn from my codes</Label>
               </div>
               <div className="flex items-center gap-2 ml-auto">
                 <Label className="text-xs cursor-pointer">Context</Label>

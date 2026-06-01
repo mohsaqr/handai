@@ -57,7 +57,10 @@
       "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 10; Write-Output \"---LINT---\"; npx eslint src/app/mas-panel/WorkflowStepCard.tsx 2>&1 | Select-Object -First 15)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('SCRIPTS'\\); [print\\(' ',k,'=',v\\) for k,v in d['scripts'].items\\(\\)]\")",
       "Bash(node -e \"const d=require\\('./package.json'\\); console.log\\('SCRIPTS'\\); for\\(const[k,v]of Object.entries\\(d.scripts\\)\\)console.log\\(' ',k,'=',v\\)\")",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Bash(git ls-tree *)",
+      "Bash(findstr /I \"CLAUDE.md HANDOFF.md\")",
+      "Bash(Select-String -Pattern \"CLAUDE|HANDOFF\")"
     ]
   }
 }
