@@ -4,8 +4,9 @@ export type WorkflowMode = "reconcilier" | "sequential" | "deliberation" | "pers
 
 export const STEP_MINIMUMS: Record<WorkflowMode, number> = {
   reconcilier: 4,
-  sequential: 5,
-  deliberation: 6,
+  // Sequential starts with two steps; the trailing "+" card adds more on demand.
+  sequential: 2,
+  deliberation: 5,
   // Personalized starts empty — the user builds lines by hand.
   personalized: 0,
 };
@@ -185,15 +186,17 @@ export function composeStepSystemPrompt(
 // ── Personalized-mode DAG helpers ────────────────────────────────────────────
 
 /**
- * Human-readable label for a step in Personalized mode, e.g. "Line 2 · Agent 1".
- * Lines are numbered by ascending `line` value (1-based); agents by their order
- * within that line.
+ * Human-readable label for a step in Personalized mode, e.g. "Agent 4".
+ * Agents are numbered sequentially across the whole grid (MAX_AGENTS_PER_LINE per
+ * line) by their fixed line/slot position: Line 1 → Agent 1‑3, Line 2 → Agent 4‑6,
+ * and so on. Positional numbering keeps a card's label stable even when other
+ * cards or whole lines are left empty.
  */
 export function buildStepLabels(steps: WorkflowStep[]): Record<string, string> {
   const labels: Record<string, string> = {};
-  groupLines(steps).forEach(([, lineSteps], li) => {
+  groupLines(steps).forEach(([lineNo, lineSteps]) => {
     placeLineSteps(lineSteps).forEach((s, pos) => {
-      if (s) labels[s.id] = `Line ${li + 1} · Agent ${pos + 1}`;
+      if (s) labels[s.id] = `Agent ${lineNo * MAX_AGENTS_PER_LINE + pos + 1}`;
     });
   });
   return labels;

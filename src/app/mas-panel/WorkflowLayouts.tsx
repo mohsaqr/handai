@@ -10,9 +10,9 @@ import {
   groupLines,
   placeLineSteps,
   buildStepLabels,
+  MAX_AGENTS_PER_LINE,
 } from "./workflow-types";
 import { WorkflowStepCard, type StepStatus } from "./WorkflowStepCard";
-import { SAMPLE_RECONCILER_PROMPTS } from "./reconciler-samples";
 
 interface LayoutProps {
   mode: WorkflowMode;
@@ -35,6 +35,9 @@ interface LayoutProps {
   /** Name of an uploaded unstructured file (PDF/DOCX/TXT). Lets cards show a
    *  document chip instead of "no input" when they receive the file's text. */
   documentInput?: string;
+  /** Personalized mode — number of agent lines to show (lines may be empty).
+   *  "Add AI Agent line" increments this. */
+  lineCount?: number;
 }
 
 export function WorkflowLayout(props: LayoutProps) {
@@ -139,9 +142,36 @@ function SConnector({ direction, cols = 2 }: {
 const SEQUENTIAL_COLS = 3;
 
 function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], documentInput }: LayoutProps) {
-  const rows: WorkflowStep[][] = [];
-  for (let i = 0; i < steps.length; i += SEQUENTIAL_COLS)
-    rows.push(steps.slice(i, i + SEQUENTIAL_COLS));
+  // A trailing "+" card always follows the last step in the snake. It occupies
+  // the cell at index `addIndex`; clicking it appends a new step (like the empty
+  // "+" slots in personalized mode). When the current row is full the "+" wraps
+  // to a fresh row with a vertical connector.
+  const addIndex = steps.length;
+  const cellCount = steps.length + 1; // real steps + the trailing "+" card
+  const rows: number[][] = [];
+  for (let i = 0; i < cellCount; i += SEQUENTIAL_COLS) {
+    const row: number[] = [];
+    for (let j = i; j < Math.min(i + SEQUENTIAL_COLS, cellCount); j++) row.push(j);
+    rows.push(row);
+  }
+
+  // Measure a real step card so the trailing "+" card matches its height when it
+  // wraps onto a row of its own (where flex `items-stretch` has nothing taller to
+  // stretch against). Only the "+" card uses this — the step cards are untouched.
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const [cardHeight, setCardHeight] = React.useState<number | null>(null);
+  React.useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const measure = () => {
+      const h = el.getBoundingClientRect().height || null;
+      setCardHeight((prev) => (prev === h ? prev : h));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [steps.length]);
 
   // One empty "slot" mirrors a card + its connector so partial rows keep the
   // real cards the same width as full rows above.
@@ -158,7 +188,6 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
       {rows.map((row, rowIdx) => {
         const isEvenRow = rowIdx % 2 === 0;
         const orderedRow = isEvenRow ? row : [...row].reverse();
-        const globalBase = rowIdx * SEQUENTIAL_COLS;
         const missing = SEQUENTIAL_COLS - row.length;
 
         return (
@@ -167,31 +196,44 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
             <div className="flex gap-0 items-stretch">
               {/* Partial odd row: empty slots on the LEFT so cards sit on the right */}
               {missing > 0 && !isEvenRow && emptySlots(missing)}
-              {orderedRow.map((step, colIdx) => {
-                const globalIdx = isEvenRow
-                  ? globalBase + colIdx
-                  : globalBase + (row.length - 1 - colIdx);
+              {orderedRow.map((globalIdx, colIdx) => {
                 const isLastInRow = colIdx === orderedRow.length - 1;
+                const isAdd = globalIdx === addIndex;
                 return (
-                  <React.Fragment key={step.id}>
-                    <div className="flex-1 min-w-0">
-                      <WorkflowStepCard
-                        step={step}
-                        index={globalIdx}
-                        label={`Step ${globalIdx + 1}`}
-                        status={statusFor(step.id, stepStatuses)}
-                        agents={agents}
-                        compact
-                        showInputData
-                        inputCols={selectedCols}
-                        documentInput={documentInput}
-                        prevStepLabel={globalIdx > 0 ? `Step ${globalIdx}` : null}
-                        onUpdate={(s) => onUpdate(step.id, s)}
-                        onRemove={() => onRemove(step.id)}
-                        canRemove={steps.length > 2}
-                      />
+                  <React.Fragment key={isAdd ? "add" : steps[globalIdx].id}>
+                    <div
+                      ref={globalIdx === 0 ? cardRef : undefined}
+                      className={`flex-1 min-w-0 ${isAdd ? "flex" : ""}`}
+                    >
+                      {isAdd ? (
+                        <button
+                          type="button"
+                          onClick={onAdd}
+                          title="Add a step"
+                          style={cardHeight ? { minHeight: cardHeight } : undefined}
+                          className="flex-1 min-h-[7rem] rounded-md border border-dashed border-muted-foreground/40 flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-muted-foreground/70 hover:bg-muted/40 transition-colors"
+                        >
+                          <Plus className="h-5 w-5" />
+                        </button>
+                      ) : (
+                        <WorkflowStepCard
+                          step={steps[globalIdx]}
+                          index={globalIdx}
+                          label={`Step ${globalIdx + 1}`}
+                          status={statusFor(steps[globalIdx].id, stepStatuses)}
+                          agents={agents}
+                          compact
+                          showInputData
+                          inputCols={selectedCols}
+                          documentInput={documentInput}
+                          prevStepLabel={globalIdx > 0 ? `Step ${globalIdx}` : null}
+                          onUpdate={(s) => onUpdate(steps[globalIdx].id, s)}
+                          onRemove={() => onRemove(steps[globalIdx].id)}
+                          canRemove={steps.length > 2}
+                        />
+                      )}
                     </div>
-                    {!isLastInRow && row.length > 1 && (
+                    {!isLastInRow && (
                       <SConnector direction={isEvenRow ? "left-to-right" : "right-to-left"} />
                     )}
                   </React.Fragment>
@@ -214,12 +256,6 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
           </div>
         );
       })}
-
-      <div className="pt-4">
-        <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={onAdd}>
-          <Plus className="h-3.5 w-3.5" /> Add step
-        </Button>
-      </div>
     </div>
   );
 }
@@ -241,8 +277,6 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
               index={0}
               label="Manager (top of tree)"
               showIndex={false}
-              taskPlaceholder="How should the manager combine the workers' outputs into a final answer?"
-              samplePrompts={SAMPLE_RECONCILER_PROMPTS}
               status={statusFor(reconciler.id, stepStatuses)}
               agents={agents}
               showInputData
@@ -325,7 +359,6 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
               index={i + 1}
               label={`Worker ${i + 1}`}
               showIndex={false}
-              taskPlaceholder="What angle or analysis should this worker contribute?"
               status={statusFor(w.id, stepStatuses)}
               agents={agents}
               showInputData
@@ -424,7 +457,6 @@ function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRe
               index={i}
               label={`Agent ${i + 1}`}
               showIndex={false}
-              taskPlaceholder="What is this agent's role or viewpoint in the discussion?"
               status={statusFor(step.id, stepStatuses)}
               compact
               agents={agents}
@@ -461,9 +493,28 @@ function PersonalizedLayout({
   onDisconnect,
   selectedCols = [],
   documentInput,
+  lineCount = 2,
 }: LayoutProps) {
   // Lines are visual rows only — data flow is the explicit `inputs` edges.
-  const lines = groupLines(steps);
+  // Render every line from 0..maxLine (not just lines that still have a card),
+  // so a line whose last card was cleared stays visible as three empty "+" slots
+  // instead of vanishing. Line numbers come from the steps' actual `line` value.
+  const grouped = new Map(groupLines(steps));
+  const maxStepLine = steps.length > 0 ? Math.max(...steps.map((s) => s.line ?? 0)) : -1;
+  // Base line span: at least `lineCount` lines (what "Add AI Agent line" controls),
+  // always enough to cover every populated line, and floored at 2 lines total so
+  // the canvas never collapses to the "no agents yet" prompt.
+  const baseMax = Math.max(1, lineCount - 1, maxStepLine);
+  // If every slot across those lines is full, append one fresh empty line so the
+  // user always has somewhere to add the next agent — filling the last "+" reveals
+  // a new line automatically.
+  let allFull = true;
+  for (let ln = 0; ln <= baseMax; ln++) {
+    if ((grouped.get(ln)?.length ?? 0) < MAX_AGENTS_PER_LINE) { allFull = false; break; }
+  }
+  const maxLine = allFull ? baseMax + 1 : baseMax;
+  const lines: [number, WorkflowStep[]][] = [];
+  for (let ln = 0; ln <= maxLine; ln++) lines.push([ln, grouped.get(ln) ?? []]);
   const stepLabels = buildStepLabels(steps);
 
   const edges: { from: string; to: string }[] = [];
@@ -559,6 +610,15 @@ function PersonalizedLayout({
     return `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`;
   }
 
+  // Match every empty "+" slot to the height of the real agent cards (only those
+  // are measured into `rects`). Without this, a row that holds no card — e.g. the
+  // default empty second line — would shrink its "+" boxes to min-h-[7rem] instead
+  // of matching the taller card-sized "+" that sits next to actual agents.
+  const measuredCardHeights = Object.values(rects)
+    .map((r) => r.h)
+    .filter((h) => h > 0);
+  const cardHeight = measuredCardHeights.length ? Math.max(...measuredCardHeights) : null;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -636,7 +696,7 @@ function PersonalizedLayout({
             })}
           </svg>
 
-          {lines.map(([lineNo, lineSteps], li) => {
+          {lines.map(([lineNo, lineSteps]) => {
             const placed = placeLineSteps(lineSteps);
             return (
               <div key={lineNo} className="relative">
@@ -651,7 +711,7 @@ function PersonalizedLayout({
                           <WorkflowStepCard
                             step={step}
                             index={slot}
-                            label={`Line ${li + 1} · Agent ${slot + 1}`}
+                            label={`Agent ${lineNo * MAX_AGENTS_PER_LINE + slot + 1}`}
                             showIndex={false}
                             compact
                             status={statusFor(step.id, stepStatuses)}
@@ -708,6 +768,7 @@ function PersonalizedLayout({
                           type="button"
                           onClick={() => onAddToLine?.(lineNo, slot)}
                           title="Add an agent here"
+                          style={cardHeight ? { minHeight: cardHeight } : undefined}
                           className="flex-1 min-h-[7rem] rounded-md border border-dashed border-muted-foreground/40 flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-muted-foreground/70 hover:bg-muted/40 transition-colors"
                         >
                           <Plus className="h-5 w-5" />

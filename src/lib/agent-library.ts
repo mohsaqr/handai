@@ -4,6 +4,8 @@ import type { CSSProperties } from "react";
 export interface Agent {
   id: string;
   name: string;
+  /** Short role label shown alongside the name (e.g. "Agent 1 (Reviewer)"). Defaults to "Agent". */
+  role: string;
   providerId: string;
   model: string;
   category: string;
@@ -100,6 +102,7 @@ export function emptyAgent(overrides: Partial<Agent> = {}): Agent {
   return {
     id: makeAgentId(),
     name: "",
+    role: "Agent",
     providerId: "openai",
     model: "gpt-4o",
     category: AGENT_CATEGORIES[0],

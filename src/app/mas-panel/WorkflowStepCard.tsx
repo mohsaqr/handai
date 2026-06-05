@@ -17,13 +17,17 @@ import { type WorkflowStep } from "./workflow-types";
 
 export type StepStatus = "pending" | "running" | "done" | "error";
 
+function providerLabel(id: string) {
+  if (id === "lmstudio") return "LM Studio";
+  if (id === "ollama") return "Ollama";
+  return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
 interface Props {
   step: WorkflowStep;
   index: number;
   label?: string;                 // e.g. "Reconciler" / "Worker 2" / "Step 1"
   showIndex?: boolean;            // Hide the numbered circle badge (e.g. for reconcilier)
-  taskPlaceholder?: string;       // Override the Describe Task field placeholder
-  samplePrompts?: Record<string, string>;  // Optional preset picker that fills taskDescription
   status?: StepStatus;            // Coloured ring during batch processing
   compact?: boolean;              // Tighter padding + smaller avatar — used by Sequential layout
   agents: Agent[];
@@ -92,8 +96,6 @@ export function WorkflowStepCard({
   index,
   label,
   showIndex = true,
-  taskPlaceholder = "What should this agent do in this step?",
-  samplePrompts,
   status,
   compact = false,
   agents,
@@ -127,7 +129,7 @@ export function WorkflowStepCard({
   const avatar = assignedAgent?.avatar;
 
   return (
-    <div className={`border rounded-lg ${compact ? "p-2 gap-3" : "p-3 gap-5"} bg-background relative transition-shadow flex ${statusRing}`}>
+    <div className={`border rounded-lg ${compact ? "p-2 gap-3" : "p-3 gap-5"} bg-background relative transition-shadow flex h-full ${statusRing}`}>
       {canRemove && (
         <button
           onClick={onRemove}
@@ -167,10 +169,11 @@ export function WorkflowStepCard({
         <Select
           value={step.agentId ?? ""}
           onValueChange={(v) => {
-            // Picking an agent seeds the Main Prompt box with that agent's main
-            // system prompt (goal). Only seed when the box is empty or still
-            // holds the previous agent's goal (an untouched seed) — never clobber
-            // a prompt the user has edited.
+            // Picking an agent seeds the step's task with that agent's main
+            // system prompt (goal), so executors still receive a task even though
+            // the Main Prompt box is no longer shown. Only seed when the task is
+            // empty or still holds the previous agent's goal (an untouched seed)
+            // — never clobber a task carried over from a prior selection.
             const picked = v ? agents.find((a) => a.id === v) : null;
             const prevGoal = (step.agentId
               ? agents.find((a) => a.id === step.agentId)?.goal
@@ -197,11 +200,24 @@ export function WorkflowStepCard({
             )}
             {agents.map((a) => (
               <SelectItem key={a.id} value={a.id} className="text-xs">
-                {a.name || "(unnamed)"} — {a.model}
+                {a.name || "(unnamed)"}{a.role ? ` (${a.role})` : ""}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        {assignedAgent && (
+          <div className="space-y-1 pt-0.5">
+            <div className="text-[11px] text-muted-foreground font-mono truncate">
+              {providerLabel(assignedAgent.providerId)} / {assignedAgent.model || "—"}
+            </div>
+            <div className="flex flex-wrap gap-1 text-[10px]">
+              {assignedAgent.category && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Category: <strong className="font-semibold text-foreground">{assignedAgent.category}</strong></span>}
+              {assignedAgent.personalityStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Personality: <strong className="font-semibold text-foreground">{assignedAgent.personalityStyle}</strong></span>}
+              {assignedAgent.communicationStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Communication: <strong className="font-semibold text-foreground">{assignedAgent.communicationStyle}</strong></span>}
+              {assignedAgent.responseStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Response: <strong className="font-semibold text-foreground">{assignedAgent.responseStyle}</strong></span>}
+            </div>
+          </div>
+        )}
       </div>
 
       {showInputData && (
@@ -287,38 +303,6 @@ export function WorkflowStepCard({
           </div>
         </div>
       )}
-
-      <div className="space-y-1">
-        <div className="flex items-center justify-between">
-          <Label className="text-[10px] text-muted-foreground">Main Prompt</Label>
-          {samplePrompts && (
-            <Select
-              onValueChange={(key) => {
-                const preset = samplePrompts[key];
-                if (preset) onUpdate({ ...step, taskDescription: preset });
-              }}
-            >
-              <SelectTrigger className="h-6 w-[140px] text-[10px]">
-                <SelectValue placeholder="Load sample…" />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.keys(samplePrompts).map((key) => (
-                  <SelectItem key={key} value={key} className="text-xs">
-                    {key}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-        </div>
-        <Textarea
-          value={step.taskDescription}
-          onChange={(e) => onUpdate({ ...step, taskDescription: e.target.value })}
-          placeholder={taskPlaceholder}
-          rows={2}
-          className={`text-xs resize-y ${compact ? "min-h-[56px]" : "min-h-[48px]"}`}
-        />
-      </div>
 
       <details className="text-xs">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground py-0.5">
