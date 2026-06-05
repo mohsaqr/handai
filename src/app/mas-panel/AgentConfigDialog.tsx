@@ -318,13 +318,23 @@ export function AgentConfigDialog({ open, onOpenChange, agent, onSave, enabledPr
                   <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
                 </span>
               </button>
-              <div className="flex-1 space-y-1">
-                <Label className="text-xs">Agent Name</Label>
-                <Input
-                  value={draft.name}
-                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  placeholder="e.g. Senior Reviewer"
-                />
+              <div className="flex-1 space-y-2">
+                <div className="space-y-1">
+                  <Label className="text-xs">Agent Name</Label>
+                  <Input
+                    value={draft.name}
+                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                    placeholder="e.g. Senior Reviewer"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Role</Label>
+                  <Input
+                    value={draft.role}
+                    onChange={(e) => setDraft({ ...draft, role: e.target.value })}
+                    placeholder="e.g. Agent"
+                  />
+                </div>
               </div>
             </div>
 

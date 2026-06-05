@@ -139,7 +139,14 @@ function AgentCard({
       <div className="flex-1 min-w-0 flex flex-col gap-2">
         <div className="space-y-1 pr-6">
           <div className="text-sm font-semibold truncate">
-            {agent.name || <span className="text-muted-foreground italic">Unnamed agent</span>}
+            {agent.name ? (
+              <>
+                {agent.name}
+                {agent.role && <span className="text-muted-foreground font-normal"> ({agent.role})</span>}
+              </>
+            ) : (
+              <span className="text-muted-foreground italic">Unnamed agent</span>
+            )}
           </div>
           <div className="text-xs text-muted-foreground font-mono truncate">
             {providerLabel(agent.providerId)} / {agent.model || "—"}
@@ -147,10 +154,10 @@ function AgentCard({
         </div>
 
         <div className="flex flex-wrap gap-1 text-[10px]">
-          {agent.category && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{agent.category}</span>}
-          {agent.personalityStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{agent.personalityStyle}</span>}
-          {agent.communicationStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{agent.communicationStyle}</span>}
-          {agent.responseStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{agent.responseStyle}</span>}
+          {agent.category && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Category: <strong className="font-semibold text-foreground">{agent.category}</strong></span>}
+          {agent.personalityStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Personality: <strong className="font-semibold text-foreground">{agent.personalityStyle}</strong></span>}
+          {agent.communicationStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Communication: <strong className="font-semibold text-foreground">{agent.communicationStyle}</strong></span>}
+          {agent.responseStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Response: <strong className="font-semibold text-foreground">{agent.responseStyle}</strong></span>}
         </div>
 
         <div className="mt-auto pt-1">
@@ -182,6 +189,19 @@ export default function AgentPanelPage() {
     if (migrated !== workflowMode) setWorkflowMode(migrated);
   }, [workflowMode, setWorkflowMode]);
   const [workflowSteps, setWorkflowSteps] = useSessionState<WorkflowStep[]>("agentpanel_steps", []);
+  // Personalized mode: number of agent lines shown. Lines can be empty (three
+  // "+" slots), which steps alone can't represent, so the count is tracked here.
+  // "Add AI Agent line" increments it; the layout also renders enough lines to
+  // cover all steps, so a stale/restored count never hides a populated line.
+  const [personalizedLineCount, setPersonalizedLineCount] = useSessionState<number>("agentpanel_lineCount", 2);
+  // Each template (mode) keeps its own step pool: switching modes stashes the
+  // outgoing mode's steps here and restores the incoming mode's, so e.g.
+  // Deliberation's 6 agents don't bleed into Manager. A mode absent from this map
+  // has never been visited and is seeded to its own default on first switch.
+  const [savedModeSteps, setSavedModeSteps] = useSessionState<Partial<Record<WorkflowMode, WorkflowStep[]>>>(
+    "agentpanel_modeSteps",
+    {},
+  );
   const [delibSettings, setDelibSettings] = useSessionState<DeliberationSettings>(
     "agentpanel_delib",
     DEFAULT_DELIBERATION_SETTINGS,
@@ -235,8 +255,8 @@ export default function AgentPanelPage() {
   }, [hydrationDone, agents.length, makeDefaultAgents, setAgents]);
 
   // Personalized is the default mode and has no fixed step minimum, so the
-  // padding effect never seeds it. Seed the starter lines once (Line 1 with
-  // 3 agents + Line 2 with 1), AFTER hydration — doing it earlier gets
+  // padding effect never seeds it. Seed the starter line once (one line with two
+  // agents — Agent 1 and Agent 2 — the third slot shows as empty "+"), AFTER hydration — doing it earlier gets
   // clobbered when useSessionState restores a persisted empty `[]` from a
   // prior visit. The ref makes it a one-shot so the user can still delete
   // every line later without it re-seeding.
@@ -250,8 +270,6 @@ export default function AgentPanelPage() {
         ? [
             emptyStep({ line: 0, slot: 0 }),
             emptyStep({ line: 0, slot: 1 }),
-            emptyStep({ line: 0, slot: 2 }),
-            emptyStep({ line: 1, slot: 0 }),
           ]
         : prev,
     );
@@ -287,24 +305,40 @@ export default function AgentPanelPage() {
       emptyAgent({ id: makeAgentId(), name: `Agent ${prev.length + 1}`, providerId: firstId, model: firstModel }),
     ]);
   };
-  // Insert a copy right after the source card, with a fresh id and name.
+  // Insert a copy right after the source card, with a fresh id and a unique name.
+  // Naming: strip any existing "(copy)"/"(copyN)" suffix to get the base, then pick
+  // the first free slot in the sequence "(copy)", "(copy1)", "(copy2)", … so duplicating
+  // either the original or an existing copy never collides with a name already in the pool.
   const duplicateAgent = (id: string) => {
     setAgents((prev) => {
       const idx = prev.findIndex((a) => a.id === id);
       if (idx === -1) return prev;
       const src = prev[idx];
-      const copy = normalizeAgent({
-        ...src,
-        id: makeAgentId(),
-        name: src.name ? `${src.name} (copy)` : `Agent ${prev.length + 1}`,
-      });
+      const existing = new Set(prev.map((a) => a.name));
+      let name: string;
+      if (src.name) {
+        const base = src.name.replace(/ \(copy\d*\)$/, "");
+        name = `${base} (copy)`;
+        for (let n = 1; existing.has(name); n++) name = `${base} (copy${n})`;
+      } else {
+        name = `Agent ${prev.length + 1}`;
+      }
+      const copy = normalizeAgent({ ...src, id: makeAgentId(), name });
       return [...prev.slice(0, idx + 1), copy, ...prev.slice(idx + 1)];
     });
   };
   const removeAgent = (id: string) => {
     setAgents((prev) => prev.filter((a) => a.id !== id));
-    // Also clear any workflow step that references it
+    // Also clear any workflow step that references it — in the active pool and in
+    // every other mode's stashed pool, so a restored mode doesn't show a dangling agent.
     setWorkflowSteps((prev) => prev.map((s) => (s.agentId === id ? { ...s, agentId: null } : s)));
+    setSavedModeSteps((prev) => {
+      const next: Partial<Record<WorkflowMode, WorkflowStep[]>> = {};
+      for (const [mode, steps] of Object.entries(prev)) {
+        next[mode as WorkflowMode] = (steps ?? []).map((s) => (s.agentId === id ? { ...s, agentId: null } : s));
+      }
+      return next;
+    });
   };
 
   // Per-step live status during batch processing. Keyed by step.id.
@@ -329,11 +363,9 @@ export default function AgentPanelPage() {
     );
 
   // Personalized mode: lines are visual rows; data flow is explicit edges only.
-  const addAgentLine = () =>
-    setWorkflowSteps((prev) => {
-      const nextLine = prev.length > 0 ? Math.max(...prev.map((s) => s.line ?? 0)) + 1 : 0;
-      return [...prev, emptyStep({ line: nextLine, slot: 0 })];
-    });
+  // Add a fresh empty line (three "+" slots) by bumping the line count — no card
+  // is added; the user fills the slots via the "+" buttons.
+  const addAgentLine = () => setPersonalizedLineCount((c) => c + 1);
   const addStepToLine = (line: number, slot: number) =>
     setWorkflowSteps((prev) => {
       const inLine = prev.filter((s) => (s.line ?? 0) === line);
@@ -365,17 +397,35 @@ export default function AgentPanelPage() {
           : s,
       ),
     );
-  // Switching INTO personalized seeds two starter lines, each with one agent
-  // (other modes keep and reinterpret the shared step pool).
+  // Switching INTO personalized seeds one starter line with two agents (Agent 1
+  // and Agent 2) (other modes keep and reinterpret the shared step pool).
   const handleModeChange = (m: WorkflowMode) => {
-    if (m === "personalized" && workflowMode !== "personalized") {
+    if (m === workflowMode) return;
+    // Stash the outgoing mode's steps so returning to it restores its own state.
+    if (workflowMode) setSavedModeSteps((prev) => ({ ...prev, [workflowMode]: workflowSteps }));
+
+    const saved = savedModeSteps[m];
+    if (saved !== undefined) {
+      // Restore this mode's previously-edited steps exactly (skip the padding
+      // effect so a user-reduced count isn't bumped back to the minimum).
+      setWorkflowSteps(saved);
+      skipPaddingOnceRef.current = true;
+    } else if (m === "personalized") {
+      // First visit to personalized — seed its starter line (Agent 1, Agent 2).
       setWorkflowSteps([
         emptyStep({ line: 0, slot: 0 }),
         emptyStep({ line: 0, slot: 1 }),
-        emptyStep({ line: 0, slot: 2 }),
-        emptyStep({ line: 1, slot: 0 }),
       ]);
+      setPersonalizedLineCount(2);
+      skipPaddingOnceRef.current = true;
+    } else {
+      // First visit to a fixed-shape mode — seed exactly its default count.
+      setWorkflowSteps(Array.from({ length: STEP_MINIMUMS[m] }, () => emptyStep()));
+      skipPaddingOnceRef.current = true;
     }
+    // Drop the per-step run statuses so cards don't keep their green "done" ring
+    // from a previous execution after the template changes.
+    setStepStatuses({});
     setWorkflowMode(m);
   };
 
@@ -1059,6 +1109,10 @@ export default function AgentPanelPage() {
     filesRef.current.clear();
     setFileStates([]);
     setPreviewRows(null);
+    // clearSessionKeys only wipes sessionStorage; the in-memory column selection
+    // survives (and its auto-reset branch can't fire once previewColumns is empty),
+    // so clear it explicitly or the workflow cards keep showing the old data columns.
+    setSelectedCols([]);
     setAgents(makeDefaultAgents());
     setWorkflowMode("personalized");
     // Default mode is personalized — seed its starter lines so the canvas
@@ -1066,9 +1120,9 @@ export default function AgentPanelPage() {
     setWorkflowSteps([
       emptyStep({ line: 0, slot: 0 }),
       emptyStep({ line: 0, slot: 1 }),
-      emptyStep({ line: 0, slot: 2 }),
-      emptyStep({ line: 1, slot: 0 }),
     ]);
+    setPersonalizedLineCount(2);
+    setSavedModeSteps({});
     setDelibSettings(DEFAULT_DELIBERATION_SETTINGS);
     setOutputFormat("per-row");
     setConcurrency(systemSettings.maxConcurrency);
@@ -1256,6 +1310,7 @@ export default function AgentPanelPage() {
               onDisconnect={disconnectSteps}
               selectedCols={selectedCols}
               documentInput={hasUnstructuredFile ? documentName : undefined}
+              lineCount={personalizedLineCount}
             />
           </div>
 
