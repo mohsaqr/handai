@@ -1,6 +1,6 @@
 "use client";
 
-import { Wand2, GitBranch, Users, Workflow } from "lucide-react";
+import { Gavel, ArrowRight, MessagesSquare, Workflow } from "lucide-react";
 import { type WorkflowMode } from "./workflow-types";
 
 interface Option {
@@ -15,34 +15,34 @@ const OPTIONS: Option[] = [
   {
     id: "personalized",
     title: "Individual / Personalized",
-    subtitle: "Custom — independent sequential lines",
+    subtitle: "Build it yourself",
     description:
-      "Build one or more lines by hand. Each line is a sequential chain (up to 4 agents) and runs independently, producing its own output.",
+      "Place agents freely and draw your own connections. Each agent feeds the ones you link it to. Best when your process doesn't fit the other templates.",
     Icon: Workflow,
+  },
+  {
+    id: "reconcilier",
+    title: "Judge",
+    subtitle: "Workers answer in parallel, one judge decides",
+    description:
+      "Every worker tackles the same task on its own, then a single judge agent reviews all their answers and produces the final result. Best for a vetted, consensus answer.",
+    Icon: Gavel,
   },
   {
     id: "sequential",
     title: "Sequential",
-    subtitle: "Pipeline — output of step N feeds step N+1",
+    subtitle: "Assembly line, each agent builds on the last",
     description:
-      "Each step processes the previous step's output. Use when later agents build on earlier work.",
-    Icon: GitBranch,
-  },
-  {
-    id: "reconcilier",
-    title: "Manager",
-    subtitle: "Hierarchical — manager on top, workers below",
-    description:
-      "Multiple workers analyze the task in parallel. The topmost card (the manager) synthesizes their outputs into one final answer.",
-    Icon: Wand2,
+      "Agents run one after another — each receives the previous agent's output as its input. Best when every step refines or extends the work before it.",
+    Icon: ArrowRight,
   },
   {
     id: "deliberation",
     title: "Deliberation",
-    subtitle: "Peer network — all agents talk to each other",
+    subtitle: "Group discussion over several rounds",
     description:
-      "All agents deliberate over multiple rounds, seeing each other's outputs. Converges on a shared answer.",
-    Icon: Users,
+      "All agents see each other's answers and revise across multiple rounds until they converge on a shared answer. Best for hard questions that benefit from back-and-forth.",
+    Icon: MessagesSquare,
   },
 ];
 

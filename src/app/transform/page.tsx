@@ -478,7 +478,7 @@ export default function TransformPage() {
           onDataLoaded={handleDataLoaded}
           samplePickerPosition="above"
           customSamplePicker={
-            <Select onValueChange={handleLoadSample}>
+            <Select value="" onValueChange={handleLoadSample}>
               <SelectTrigger className="w-[200px] h-9 text-xs">
                 <SelectValue placeholder="-- Select a sample..." />
               </SelectTrigger>

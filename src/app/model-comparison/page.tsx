@@ -882,7 +882,7 @@ export default function ConsensusCoderPage() {
           <div className="space-y-2">
             <div className="flex items-center justify-between h-7">
               <Label className="text-sm">Judge Instructions</Label>
-              <Select onValueChange={(key) => { if (SAMPLE_JUDGE_PROMPTS[key]) setJudgePrompt(SAMPLE_JUDGE_PROMPTS[key]); }}>
+              <Select value="" onValueChange={(key) => { if (SAMPLE_JUDGE_PROMPTS[key]) setJudgePrompt(SAMPLE_JUDGE_PROMPTS[key]); }}>
                 <SelectTrigger className="w-[160px] h-7 text-xs">
                   <SelectValue placeholder="Load sample..." />
                 </SelectTrigger>

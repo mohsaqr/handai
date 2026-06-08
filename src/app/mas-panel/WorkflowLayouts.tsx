@@ -275,7 +275,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
             <WorkflowStepCard
               step={reconciler}
               index={0}
-              label="Manager (top of tree)"
+              label="Judge (top of tree)"
               showIndex={false}
               status={statusFor(reconciler.id, stepStatuses)}
               agents={agents}
@@ -319,7 +319,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
               // stacked workers there share that one arrow; in the left/right
               // columns, stacked workers are fanned apart by a small offset so
               // each gets its own distinct (still clearly side-leaning) arrow.
-              const gridCols = Math.min(workers.length, 3);
+              const gridCols = 3;
               const col = i % gridCols;
               const colCenter = ((col + 0.5) / gridCols) * 100;
               const isCenterCol = gridCols % 2 === 1 && col === (gridCols - 1) / 2;
@@ -351,7 +351,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
 
       {/* Worker cards row */}
       {workers.length > 0 && (
-        <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(workers.length, 3)}, minmax(0, 1fr))` }}>
+        <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(3, minmax(0, 1fr))` }}>
           {workers.map((w, i) => (
             <WorkflowStepCard
               key={w.id}
@@ -388,18 +388,9 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
 function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd }: LayoutProps) {
   const N = steps.length;
 
-  if (N === 0) {
-    return (
-      <div className="flex items-center justify-center py-12 border border-dashed rounded-lg">
-        <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={onAdd}>
-          <Plus className="h-3.5 w-3.5" /> Add agent
-        </Button>
-      </div>
-    );
-  }
-
-  // Up to 3 cards per row; rows fill left-to-right, top-to-bottom.
-  const cols = Math.min(N, 3);
+  // Fixed 3 columns; rows fill left-to-right, top-to-bottom. A single agent
+  // takes one third of the width (not the whole row) and leaves the rest empty.
+  const cols = 3;
   const numRows = Math.ceil(N / cols);
 
   // Card-center coordinates as percentages of the grid's bounding box.
@@ -468,7 +459,7 @@ function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRe
         </div>
       </div>
 
-      <div>
+      <div className="pt-4">
         <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={onAdd}>
           <Plus className="h-3.5 w-3.5" /> Add agent
         </Button>
@@ -622,7 +613,7 @@ function PersonalizedLayout({
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <div className="text-xs text-muted-foreground">
+        <div className="text-sm font-semibold text-foreground">
           {connectingFrom
             ? "Connecting… click a target agent (Esc to cancel)"
             : "Click an agent’s ● output dot, then click another agent to connect. Click an arrow to remove it."}
@@ -643,13 +634,13 @@ function PersonalizedLayout({
         </div>
       ) : (
         <div ref={canvasRef} className="relative space-y-6">
-          {/* Curved connection overlay. Sits ABOVE the cards (z-30) so the
-              whole arrow — and its scissors hit area — is exposed along its
-              full length, not just the gap between cards. The <svg> keeps
-              pointer-events-none; only the thin curve ribbon below is
-              clickable, so card content stays interactive everywhere else. */}
+          {/* Solid connection line. Sits BEHIND the cards (z-0) so the full-
+              strength arrow shows in the open space between cards without
+              painting over card content. Purely visual — the clickable scissors
+              ribbon lives on the faint top layer (z-20) below, so it spans the
+              line's full length, including where it runs behind a card. */}
           <svg
-            className="absolute inset-0 w-full h-full pointer-events-none z-30"
+            className="absolute inset-0 w-full h-full pointer-events-none z-0"
             style={{ overflow: "visible" }}
             aria-hidden
           >
@@ -679,18 +670,6 @@ function PersonalizedLayout({
                     fill="none"
                     markerEnd="url(#pz-arrow)"
                   />
-                  <path
-                    d={d}
-                    stroke="transparent"
-                    strokeWidth="22"
-                    fill="none"
-                    strokeLinecap="round"
-                    className="pointer-events-auto"
-                    style={{ cursor: SCISSORS_CURSOR }}
-                    onClick={() => onDisconnect?.(e.from, e.to)}
-                  >
-                    <title>Click to remove this connection</title>
-                  </path>
                 </g>
               );
             })}
@@ -699,7 +678,7 @@ function PersonalizedLayout({
           {lines.map(([lineNo, lineSteps]) => {
             const placed = placeLineSteps(lineSteps);
             return (
-              <div key={lineNo} className="relative">
+              <div key={lineNo} className="relative z-10">
                 <div className="flex items-stretch">
                   {placed.map((step, slot) => (
                     <div
@@ -754,7 +733,7 @@ function PersonalizedLayout({
                                 cur === step.id ? null : step.id,
                               );
                             }}
-                            className={`absolute -right-2 top-1/2 -translate-y-1/2 z-40 h-5 w-5 rounded-full border-2 bg-background flex items-center justify-center transition-colors ${
+                            className={`absolute -right-2 top-1/2 -translate-y-1/2 z-40 h-5 w-5 rounded-full border-2 bg-background flex items-center justify-center transition-colors cursor-pointer ${
                               connectingFrom === step.id
                                 ? "border-primary ring-2 ring-primary/30"
                                 : "border-muted-foreground/50 hover:border-primary"
@@ -780,6 +759,66 @@ function PersonalizedLayout({
               </div>
             );
           })}
+
+          {/* Faint connection echo + scissors hit area. Sits ABOVE the cards
+              (z-20) so the clickable ribbon is exposed along the arrow's full
+              length, including where it runs behind a card. The visible echo is
+              hidden by default and only fades in on hover (when the scissors
+              cursor appears) — so it never paints over card content unless you
+              are about to cut it. The <svg> itself is pointer-events-none; only
+              the thin transparent ribbon per edge is clickable, so card content
+              stays interactive everywhere else. */}
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none z-20 text-primary/30"
+            style={{ overflow: "visible" }}
+            aria-hidden
+          >
+            <defs>
+              <marker
+                id="pz-arrow-ghost"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="6"
+                markerHeight="6"
+                orient="auto"
+              >
+                <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+              </marker>
+            </defs>
+            {edges.map((e, i) => {
+              const d = edgePath(e.from, e.to);
+              if (!d) return null;
+              return (
+                <g key={`ghost-${e.from}->${e.to}-${i}`} className="group">
+                  <path
+                    d={d}
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeDasharray="6 4"
+                    fill="none"
+                    markerEnd="url(#pz-arrow-ghost)"
+                    className="opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none"
+                  />
+                  {/* Scissors hit area — disabled while making a connection so
+                      the scissors cursor doesn't show on the way and the ribbon
+                      can't steal the target click. Re-enabled once idle. */}
+                  <path
+                    d={d}
+                    stroke="transparent"
+                    strokeWidth="22"
+                    fill="none"
+                    strokeLinecap="round"
+                    className={connectingFrom ? "pointer-events-none" : "pointer-events-auto"}
+                    style={connectingFrom ? undefined : { cursor: SCISSORS_CURSOR }}
+                    onClick={() => onDisconnect?.(e.from, e.to)}
+                  >
+                    <title>Click to remove this connection</title>
+                  </path>
+                </g>
+              );
+            })}
+          </svg>
         </div>
       )}
     </div>

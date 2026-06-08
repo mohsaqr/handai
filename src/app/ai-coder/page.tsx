@@ -1113,7 +1113,7 @@ export default function AICoderPage() {
           onDataLoaded={handleDataLoaded}
           samplePickerPosition="above"
           customSamplePicker={
-            <Select onValueChange={loadSample}>
+            <Select value="" onValueChange={loadSample}>
               <SelectTrigger className="w-[200px] h-9 text-xs">
                 <SelectValue placeholder="-- Select a sample..." />
               </SelectTrigger>
@@ -1183,7 +1183,7 @@ export default function AICoderPage() {
             <Download className="h-3.5 w-3.5 mr-1.5" />
             Export Excel
           </Button>
-          <Select onValueChange={(key) => {
+          <Select value="" onValueChange={(key) => {
             const cb = SAMPLE_CODEBOOKS[key];
             if (cb) {
               setCodebook(cb.map((e) => ({ ...e, id: crypto.randomUUID() })));
