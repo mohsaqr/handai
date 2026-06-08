@@ -662,13 +662,19 @@ export default function ExtractDataPage() {
           }`}
         >
           <input {...getInputProps()} />
-          <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
-            {isDragActive ? "Drop files here..." : "Drop files here or click to browse"}
-          </p>
-          <p className="text-xs text-muted-foreground/60 mt-1">
-            PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
-          </p>
+          <div className="flex flex-col items-center justify-center space-y-4">
+            <div className="p-3 rounded-full bg-muted">
+              <Upload className="h-6 w-6 text-muted-foreground" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-medium">
+                {isDragActive ? "Drop the files here" : "Click or drag files to upload"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
+              </p>
+            </div>
+          </div>
         </div>
 
         {fileStates.length > 0 && (

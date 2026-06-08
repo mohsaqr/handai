@@ -18,7 +18,7 @@ export function SampleDatasetPicker({ onSelect, label = "Or load sample:" }: Pro
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs text-muted-foreground shrink-0">{label}</span>
-      <Select onValueChange={(v) => { onSelect(v); }}>
+      <Select value="" onValueChange={(v) => { onSelect(v); }}>
         <SelectTrigger className="h-8 text-xs w-[220px]">
           <SelectValue placeholder="Select a dataset…" />
         </SelectTrigger>

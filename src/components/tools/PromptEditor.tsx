@@ -39,6 +39,7 @@ export function PromptEditor({
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">Example:</span>
             <Select
+              value=""
               onValueChange={(v) => {
                 if (v && examplePrompts[v]) onChange(examplePrompts[v]);
               }}

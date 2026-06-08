@@ -27,7 +27,7 @@ export function SmartFileUpload({ file, status, errorMessage, previewRows, onDro
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Select onValueChange={onLoadSample}>
+        <Select value="" onValueChange={onLoadSample}>
           <SelectTrigger className="w-[200px] h-9 text-xs">
             <SelectValue placeholder="-- Load sample..." />
           </SelectTrigger>
@@ -50,16 +50,22 @@ export function SmartFileUpload({ file, status, errorMessage, previewRows, onDro
         }`}
       >
         <input {...getInputProps()} />
-        <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">
-          {isDragActive ? "Drop file here..." : "Drop a file here or click to browse"}
-        </p>
-        <p className="text-xs text-muted-foreground/60 mt-1">
-          PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
-        </p>
-        <p className="text-[11px] text-muted-foreground/60 mt-1 italic">
-          Optional — leave empty to run a single prompt from worker instructions
-        </p>
+        <div className="flex flex-col items-center justify-center space-y-4">
+          <div className="p-3 rounded-full bg-muted">
+            <Upload className="h-6 w-6 text-muted-foreground" />
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm font-medium">
+              {isDragActive ? "Drop the file here" : "Click or drag file to upload"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
+            </p>
+            <p className="text-[11px] text-muted-foreground/60 italic">
+              Optional — leave empty to run a single prompt from worker instructions
+            </p>
+          </div>
+        </div>
       </div>
 
       {file && (
@@ -107,13 +113,22 @@ export function SmartFileUpload({ file, status, errorMessage, previewRows, onDro
       )}
 
       {previewRows && previewRows.length > 0 && (
-        <div className="border rounded-lg overflow-hidden">
-          <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between flex-wrap gap-2">
-            <span>Data Preview — {previewRows.length} rows{file ? ` · ${file.name}` : ""}</span>
-            <ExportDropdown data={previewRows} filename="preview" />
+        <>
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 text-sm text-green-700 dark:text-green-300 flex-wrap">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>
+              <strong>{previewRows.length} rows</strong> loaded
+              {file ? <> from <strong>{file.name}</strong></> : null}
+            </span>
           </div>
-          <DataTable data={previewRows} />
-        </div>
+          <div className="border rounded-lg overflow-hidden">
+            <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between flex-wrap gap-2">
+              <span>Data Preview — {previewRows.length} rows{file ? ` · ${file.name}` : ""}</span>
+              <ExportDropdown data={previewRows} filename="preview" />
+            </div>
+            <DataTable data={previewRows} />
+          </div>
+        </>
       )}
     </div>
   );

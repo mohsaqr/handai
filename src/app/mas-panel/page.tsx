@@ -59,7 +59,7 @@ import {
   type WorkflowStep,
   type DeliberationSettings,
   DEFAULT_DELIBERATION_SETTINGS,
-  STEP_MINIMUMS,
+  MAX_AGENTS_PER_LINE,
   composeStepSystemPrompt,
   emptyStep,
   migrateLegacyMode,
@@ -67,6 +67,7 @@ import {
   wouldCreateCycle,
   topoOrder,
   includedColumns,
+  AGENT_ROLE_PRESETS,
 } from "./workflow-types";
 
 type Row = Record<string, unknown>;
@@ -75,6 +76,58 @@ function providerLabel(id: string) {
   if (id === "lmstudio") return "LM Studio";
   if (id === "ollama") return "Ollama";
   return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+// Judge mode (reconcilier) — which pool agent should sit in the top "judge" card.
+// Pick by role preference; fall back to the first agent if none match.
+const JUDGE_ROLE_PRIORITY = ["Judge", "Manager", "Synthesizer", "Critic", "Worker"];
+function pickJudgeIndex(agents: Agent[]): number {
+  for (const role of JUDGE_ROLE_PRIORITY) {
+    const idx = agents.findIndex((a) => a.role === role);
+    if (idx !== -1) return idx;
+  }
+  return 0;
+}
+
+// Sequential mode — best-guess pipeline order by role: plan → gather → produce →
+// combine → review → decide. Roles not in the list keep their pool order and sit
+// after the known ones (the index tiebreaker keeps the sort stable).
+const SEQUENTIAL_ROLE_ORDER = ["Manager", "Researcher", "Worker", "Synthesizer", "Critic", "Judge"];
+function sequentialRank(role: string): number {
+  const i = SEQUENTIAL_ROLE_ORDER.indexOf(role);
+  return i === -1 ? SEQUENTIAL_ROLE_ORDER.length : i;
+}
+
+// Default workflow = one card per configured agent. Personalized lays them across
+// lines of MAX_AGENTS_PER_LINE; Judge mode promotes the best-matching agent (see
+// pickJudgeIndex) to the top card; Sequential orders by the role pipeline above;
+// Deliberation keeps pool order. This is what makes the workflow mirror the
+// Configure Agents pool — 2 agents → 2 cards, etc.
+function deriveStepsFromPool(mode: WorkflowMode, agents: Agent[]): WorkflowStep[] {
+  if (mode === "reconcilier") {
+    // Always show the judge card by default, even with an empty pool (the top
+    // card is steps[0]) — equivalent to having clicked "Add worker" once.
+    if (agents.length === 0) return [emptyStep()];
+    const ji = pickJudgeIndex(agents);
+    const ordered = [agents[ji], ...agents.filter((_, i) => i !== ji)];
+    return ordered.map((a) => emptyStep({ agentId: a.id }));
+  }
+  if (mode === "sequential") {
+    const ordered = agents
+      .map((a, i) => ({ a, i }))
+      .sort((x, y) => sequentialRank(x.a.role) - sequentialRank(y.a.role) || x.i - y.i)
+      .map(({ a }) => a);
+    return ordered.map((a) => emptyStep({ agentId: a.id }));
+  }
+  return agents.map((a, i) =>
+    mode === "personalized"
+      ? emptyStep({
+          agentId: a.id,
+          line: Math.floor(i / MAX_AGENTS_PER_LINE),
+          slot: i % MAX_AGENTS_PER_LINE,
+        })
+      : emptyStep({ agentId: a.id }),
+  );
 }
 
 // "?" icon next to a step heading — hover/focus shows what that step does.
@@ -202,6 +255,13 @@ export default function AgentPanelPage() {
     "agentpanel_modeSteps",
     {},
   );
+  // Which modes the user has manually edited. While a mode is NOT here, its
+  // workflow mirrors the agent pool (see the mirror effect). Once edited, the
+  // mode's layout is frozen and respected until Start Over.
+  const [editedModes, setEditedModes] = useSessionState<Partial<Record<WorkflowMode, boolean>>>(
+    "agentpanel_editedModes",
+    {},
+  );
   const [delibSettings, setDelibSettings] = useSessionState<DeliberationSettings>(
     "agentpanel_delib",
     DEFAULT_DELIBERATION_SETTINGS,
@@ -228,82 +288,28 @@ export default function AgentPanelPage() {
   const firstId = enabledProviders[0]?.providerId ?? "openai";
   const firstModel = enabledProviders[0]?.defaultModel ?? "gpt-4o";
 
-  const makeDefaultAgents = useCallback((): Agent[] => {
-    const pool =
-      enabledProviders.length > 0
-        ? enabledProviders.map((p) => ({ providerId: p.providerId, model: p.defaultModel || "" }))
-        : [{ providerId: firstId, model: firstModel }];
-    // One default card; the user adds more as needed.
-    return Array.from({ length: 1 }, (_, i) => {
-      const s = pool[i % pool.length];
-      return emptyAgent({
-        id: makeAgentId(),
-        name: `Agent ${i + 1}`,
-        providerId: s.providerId,
-        model: s.model,
-      });
-    });
-  }, [enabledProviders, firstId, firstModel]);
-
+  // No agent is seeded by default — the pool starts empty and the user adds
+  // agents via the role buttons. The Configure Agents grid reserves a card-sized
+  // empty slot so the section keeps its height when the pool is empty.
   const [hydrationDone, setHydrationDone] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setHydrationDone(true), 0);
     return () => clearTimeout(timer);
   }, []);
-  useEffect(() => {
-    if (hydrationDone && agents.length === 0) setAgents(makeDefaultAgents());
-  }, [hydrationDone, agents.length, makeDefaultAgents, setAgents]);
 
-  // Personalized is the default mode and has no fixed step minimum, so the
-  // padding effect never seeds it. Seed the starter line once (one line with two
-  // agents — Agent 1 and Agent 2 — the third slot shows as empty "+"), AFTER hydration — doing it earlier gets
-  // clobbered when useSessionState restores a persisted empty `[]` from a
-  // prior visit. The ref makes it a one-shot so the user can still delete
-  // every line later without it re-seeding.
-  const personalizedSeededRef = React.useRef(false);
+  // Default workflow state mirrors the Configure Agents pool: one card per agent,
+  // assigned in order, so 2 agents → 2 cards and 6 → 6. It keeps re-deriving as
+  // the pool changes UNTIL the user manually edits this mode's workflow
+  // (markWorkflowEdited), after which the layout is frozen and respected. Runs
+  // after hydration so it doesn't clobber persisted/restored state on first paint.
   useEffect(() => {
-    if (!hydrationDone || personalizedSeededRef.current) return;
-    if (workflowMode !== "personalized") return;
-    personalizedSeededRef.current = true;
-    setWorkflowSteps((prev) =>
-      prev.length === 0
-        ? [
-            emptyStep({ line: 0, slot: 0 }),
-            emptyStep({ line: 0, slot: 1 }),
-          ]
-        : prev,
-    );
-  }, [hydrationDone, workflowMode, setWorkflowSteps]);
-
-  // Pad workflow steps to the mode's default minimum when the mode changes.
-  // Reconcilier = 1 reconciler + 3 workers. Only adds — never removes.
-  // Session restore sets `skipPaddingOnceRef` so the user's saved step count is
-  // honored exactly (e.g. a 3-card Reconcilier run restores to 3 cards, not 4).
-  const skipPaddingOnceRef = React.useRef(false);
-  useEffect(() => {
-    if (!workflowMode) return;
-    if (skipPaddingOnceRef.current) {
-      skipPaddingOnceRef.current = false;
-      return;
-    }
-    const min = STEP_MINIMUMS[workflowMode];
-    setWorkflowSteps((prev) => {
-      if (prev.length >= min) return prev;
-      return [
-        ...prev,
-        ...Array.from({ length: min - prev.length }, () => emptyStep()),
-      ];
-    });
-  }, [workflowMode, setWorkflowSteps]);
+    if (!hydrationDone || !workflowMode) return;
+    if (editedModes[workflowMode]) return;
+    setWorkflowSteps(() => deriveStepsFromPool(workflowMode, agents));
+  }, [hydrationDone, workflowMode, agents, editedModes, setWorkflowSteps]);
 
   const updateAgent = (id: string, updated: Agent) => {
     setAgents((prev) => prev.map((a) => (a.id === id ? updated : a)));
-  };
-  const addAgent = () => {
-    setAgents((prev) => [
-      ...prev,
-      emptyAgent({ id: makeAgentId(), name: `Agent ${prev.length + 1}`, providerId: firstId, model: firstModel }),
-    ]);
   };
   // Insert a copy right after the source card, with a fresh id and a unique name.
   // Naming: strip any existing "(copy)"/"(copyN)" suffix to get the base, then pick
@@ -346,12 +352,25 @@ export default function AgentPanelPage() {
     setStepStatuses((prev) => ({ ...prev, [id]: status }));
   };
 
+  // Mark the current mode's workflow as user-edited so the pool-mirror effect
+  // stops overwriting it — the layout is then frozen until Start Over.
+  const markWorkflowEdited = () => {
+    if (workflowMode) {
+      setEditedModes((prev) => (prev[workflowMode] ? prev : { ...prev, [workflowMode]: true }));
+    }
+  };
+
   const updateStep = (id: string, updated: WorkflowStep) => {
+    markWorkflowEdited();
     setWorkflowSteps((prev) => prev.map((s) => (s.id === id ? updated : s)));
   };
-  const addStep = () => setWorkflowSteps((prev) => [...prev, emptyStep()]);
+  const addStep = () => {
+    markWorkflowEdited();
+    setWorkflowSteps((prev) => [...prev, emptyStep()]);
+  };
   // Removing a step also drops any edges that referenced it.
-  const removeStep = (id: string) =>
+  const removeStep = (id: string) => {
+    markWorkflowEdited();
     setWorkflowSteps((prev) =>
       prev
         .filter((s) => s.id !== id)
@@ -361,21 +380,55 @@ export default function AgentPanelPage() {
             : s,
         ),
     );
+  };
 
   // Personalized mode: lines are visual rows; data flow is explicit edges only.
   // Add a fresh empty line (three "+" slots) by bumping the line count — no card
   // is added; the user fills the slots via the "+" buttons.
-  const addAgentLine = () => setPersonalizedLineCount((c) => c + 1);
-  const addStepToLine = (line: number, slot: number) =>
+  const addAgentLine = () => {
+    markWorkflowEdited();
+    setPersonalizedLineCount((c) => c + 1);
+  };
+  const addStepToLine = (line: number, slot: number) => {
+    markWorkflowEdited();
     setWorkflowSteps((prev) => {
       const inLine = prev.filter((s) => (s.line ?? 0) === line);
       if (inLine.length >= 3) return prev;
       if (inLine.some((s) => (s.slot ?? 0) === slot)) return prev; // slot taken
       return [...prev, emptyStep({ line, slot })];
     });
+  };
+  // Configure Agents — a role button adds a preset agent to the pool, pre-filled
+  // with a role-appropriate name, category, goal, styles, and avatar (all fully
+  // editable). Template only: it does not touch the workflow; the user assigns
+  // pool agents to steps below.
+  const addRoleAgent = (roleKey: string) => {
+    const preset = AGENT_ROLE_PRESETS.find((p) => p.key === roleKey);
+    if (!preset) return;
+    setAgents((prev) => {
+      const overrides: Partial<Agent> = {
+        id: makeAgentId(),
+        name: `Agent ${prev.length + 1}`,
+        role: preset.label,
+        providerId: firstId,
+        model: firstModel,
+        category: preset.category,
+        goal: preset.goal,
+      };
+      if (preset.personalityStyle) overrides.personalityStyle = preset.personalityStyle;
+      if (preset.communicationStyle) overrides.communicationStyle = preset.communicationStyle;
+      if (preset.responseStyle) overrides.responseStyle = preset.responseStyle;
+      if (preset.personalityInstruction) overrides.personalityInstruction = preset.personalityInstruction;
+      if (preset.dos) overrides.dos = [...preset.dos];
+      if (preset.donts) overrides.donts = [...preset.donts];
+      if (preset.avatar !== undefined) overrides.avatar = preset.avatar;
+      return [...prev, emptyAgent(overrides)];
+    });
+  };
   // Edge from→to is stored as to.inputs containing from. Reject self-links,
   // duplicates, and anything that would introduce a cycle.
-  const connectSteps = (fromId: string, toId: string) =>
+  const connectSteps = (fromId: string, toId: string) => {
+    markWorkflowEdited();
     setWorkflowSteps((prev) => {
       if (fromId === toId) return prev;
       const target = prev.find((s) => s.id === toId);
@@ -389,7 +442,9 @@ export default function AgentPanelPage() {
         s.id === toId ? { ...s, inputs: [...(s.inputs ?? []), fromId] } : s,
       );
     });
-  const disconnectSteps = (fromId: string, toId: string) =>
+  };
+  const disconnectSteps = (fromId: string, toId: string) => {
+    markWorkflowEdited();
     setWorkflowSteps((prev) =>
       prev.map((s) =>
         s.id === toId
@@ -397,31 +452,19 @@ export default function AgentPanelPage() {
           : s,
       ),
     );
-  // Switching INTO personalized seeds one starter line with two agents (Agent 1
-  // and Agent 2) (other modes keep and reinterpret the shared step pool).
+  };
   const handleModeChange = (m: WorkflowMode) => {
     if (m === workflowMode) return;
     // Stash the outgoing mode's steps so returning to it restores its own state.
     if (workflowMode) setSavedModeSteps((prev) => ({ ...prev, [workflowMode]: workflowSteps }));
 
-    const saved = savedModeSteps[m];
-    if (saved !== undefined) {
-      // Restore this mode's previously-edited steps exactly (skip the padding
-      // effect so a user-reduced count isn't bumped back to the minimum).
-      setWorkflowSteps(saved);
-      skipPaddingOnceRef.current = true;
-    } else if (m === "personalized") {
-      // First visit to personalized — seed its starter line (Agent 1, Agent 2).
-      setWorkflowSteps([
-        emptyStep({ line: 0, slot: 0 }),
-        emptyStep({ line: 0, slot: 1 }),
-      ]);
-      setPersonalizedLineCount(2);
-      skipPaddingOnceRef.current = true;
+    // If the user already shaped this mode's workflow, restore that exactly.
+    // Otherwise default to one card per pool agent — the mirror effect then keeps
+    // it in sync with the pool while it stays unedited.
+    if (editedModes[m] && savedModeSteps[m] !== undefined) {
+      setWorkflowSteps(savedModeSteps[m]!);
     } else {
-      // First visit to a fixed-shape mode — seed exactly its default count.
-      setWorkflowSteps(Array.from({ length: STEP_MINIMUMS[m] }, () => emptyStep()));
-      skipPaddingOnceRef.current = true;
+      setWorkflowSteps(deriveStepsFromPool(m, agents));
     }
     // Drop the per-step run statuses so cards don't keep their green "done" ring
     // from a previous execution after the template changes.
@@ -968,19 +1011,17 @@ export default function AgentPanelPage() {
         }
       }
 
-      // The padding effect would otherwise pad short saved configurations up to
-      // the mode's default — signal a one-shot skip so the restored step count
-      // is honored. Guarded on actual mode change: if the effect doesn't fire,
-      // a stuck flag would skip the next user-initiated mode change.
-      if (cfg.mode !== undefined) {
-        const mode = migrateLegacyMode(cfg.mode);
-        if (mode !== workflowMode) skipPaddingOnceRef.current = true;
-        setWorkflowMode(mode);
-      }
+      const restoredMode = cfg.mode !== undefined ? migrateLegacyMode(cfg.mode) : workflowMode;
+      if (cfg.mode !== undefined) setWorkflowMode(restoredMode);
       if (Array.isArray(cfg.agents) && cfg.agents.length > 0) {
         setAgents(cfg.agents.map((a) => normalizeAgent(a)));
       }
-      if (Array.isArray(cfg.steps)) setWorkflowSteps(cfg.steps);
+      if (Array.isArray(cfg.steps)) {
+        setWorkflowSteps(cfg.steps);
+        // Freeze the restored mode so the pool-mirror effect doesn't overwrite
+        // the saved layout with a fresh pool-derived default.
+        if (restoredMode) setEditedModes((prev) => ({ ...prev, [restoredMode]: true }));
+      }
       if (cfg.outputFormat) setOutputFormat(cfg.outputFormat);
       if (cfg.delibSettings) setDelibSettings(cfg.delibSettings);
 
@@ -1113,16 +1154,14 @@ export default function AgentPanelPage() {
     // survives (and its auto-reset branch can't fire once previewColumns is empty),
     // so clear it explicitly or the workflow cards keep showing the old data columns.
     setSelectedCols([]);
-    setAgents(makeDefaultAgents());
+    setAgents([]);
     setWorkflowMode("personalized");
-    // Default mode is personalized — seed its starter lines so the canvas
-    // isn't the empty "No agents yet" state after a reset.
-    setWorkflowSteps([
-      emptyStep({ line: 0, slot: 0 }),
-      emptyStep({ line: 0, slot: 1 }),
-    ]);
+    // Empty pool → empty workflow; the mirror effect repopulates cards as the
+    // user adds agents (until they manually edit the workflow).
+    setWorkflowSteps([]);
     setPersonalizedLineCount(2);
     setSavedModeSteps({});
+    setEditedModes({});
     setDelibSettings(DEFAULT_DELIBERATION_SETTINGS);
     setOutputFormat("per-row");
     setConcurrency(systemSettings.maxConcurrency);
@@ -1190,7 +1229,7 @@ export default function AgentPanelPage() {
       <div className="pb-6 flex items-start justify-between">
         <div className="space-y-1 max-w-3xl">
           <h1 className="text-4xl font-bold">MAS Panel</h1>
-          <p className="text-muted-foreground text-sm">Unified multi-agent workflows — Manager, Sequential, or Deliberation.</p>
+          <p className="text-muted-foreground text-sm">Unified multi-agent workflows — Judge, Sequential, or Deliberation.</p>
         </div>
         <Button variant="destructive" className="gap-2 px-5" onClick={handleStartOver}>
           <RotateCcw className="h-3.5 w-3.5" /> Start Over
@@ -1251,20 +1290,37 @@ export default function AgentPanelPage() {
         ) : (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {agents.map((a) => (
-                <AgentCard
-                  key={a.id}
-                  agent={a}
-                  onConfigure={() => setConfiguringId(a.id)}
-                  onDuplicate={() => duplicateAgent(a.id)}
-                  onRemove={() => removeAgent(a.id)}
-                  canRemove={agents.length > 1}
-                />
+              {agents.length === 0 ? (
+                // Empty pool — reserve one card's worth of height so the section
+                // doesn't collapse to just the buttons.
+                <div className="min-h-[8.5rem]" aria-hidden />
+              ) : (
+                agents.map((a) => (
+                  <AgentCard
+                    key={a.id}
+                    agent={a}
+                    onConfigure={() => setConfiguringId(a.id)}
+                    onDuplicate={() => duplicateAgent(a.id)}
+                    onRemove={() => removeAgent(a.id)}
+                    canRemove
+                  />
+                ))
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {AGENT_ROLE_PRESETS.map((preset) => (
+                <Button
+                  key={preset.key}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  title={preset.goal}
+                  onClick={() => addRoleAgent(preset.key)}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1.5" /> Add {preset.buttonLabel ?? preset.label}
+                </Button>
               ))}
             </div>
-            <Button variant="outline" size="sm" className="text-xs" onClick={addAgent}>
-              <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Agent
-            </Button>
           </>
         )}
       </div>
@@ -1275,7 +1331,7 @@ export default function AgentPanelPage() {
       <div className="space-y-4 py-8">
         <div className="flex items-center gap-2">
           <h2 className="text-2xl font-bold">{nMode}. Configure Template</h2>
-          <HelpHint text="Choose how the agents collaborate. Personalized: build your own custom lines and connections. Sequential: a pipeline where each step's output feeds the next. Manager: workers run in parallel and a manager merges their answers. Deliberation: all agents discuss over several rounds. This sets the structure used in the Agent Workflow step." />
+          <HelpHint text="Choose how the agents collaborate. Personalized: build your own custom lines and connections. Sequential: a pipeline where each step's output feeds the next. Judge: workers run in parallel and a judge merges their answers. Deliberation: all agents discuss over several rounds. This sets the structure used in the Agent Workflow step." />
         </div>
         <WorkflowModeSelector value={workflowMode} onChange={handleModeChange} />
       </div>
@@ -1292,7 +1348,7 @@ export default function AgentPanelPage() {
             </div>
             <p className="text-xs text-muted-foreground">
               {workflowMode === "sequential" && "Steps run in order — each feeds the next."}
-              {workflowMode === "reconcilier" && "Workers run in parallel; the top manager card synthesizes their outputs."}
+              {workflowMode === "reconcilier" && "Workers run in parallel; the top judge card synthesizes their outputs."}
               {workflowMode === "deliberation" && "Agents deliberate over rounds, each seeing the others' outputs."}
               {workflowMode === "personalized" && "Add agents in lines, then connect them: click an output dot, then another agent. Runs in dependency order."}
             </p>
