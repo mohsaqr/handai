@@ -399,7 +399,7 @@ export default function AgentPanelPage() {
     });
   };
   // Configure Agents — a role button adds a preset agent to the pool, pre-filled
-  // with a role-appropriate name, category, goal, styles, and avatar (all fully
+  // with a role-appropriate name, category, task, styles, and avatar (all fully
   // editable). Template only: it does not touch the workflow; the user assigns
   // pool agents to steps below.
   const addRoleAgent = (roleKey: string) => {
@@ -413,7 +413,7 @@ export default function AgentPanelPage() {
         providerId: firstId,
         model: firstModel,
         category: preset.category,
-        goal: preset.goal,
+        task: preset.task,
       };
       if (preset.personalityStyle) overrides.personalityStyle = preset.personalityStyle;
       if (preset.communicationStyle) overrides.communicationStyle = preset.communicationStyle;
@@ -1314,7 +1314,7 @@ export default function AgentPanelPage() {
                   variant="outline"
                   size="sm"
                   className="text-xs"
-                  title={preset.goal}
+                  title={preset.task}
                   onClick={() => addRoleAgent(preset.key)}
                 >
                   <Plus className="h-3.5 w-3.5 mr-1.5" /> Add {preset.buttonLabel ?? preset.label}

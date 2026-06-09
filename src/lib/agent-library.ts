@@ -9,8 +9,8 @@ export interface Agent {
   providerId: string;
   model: string;
   category: string;
-  /** Main system prompt — the agent's primary goal (e.g. "You help students with their homework…"). */
-  goal: string;
+  /** Main system prompt — the task the agent must carry out (e.g. "You help students with their homework…"). */
+  task: string;
   personalityStyle: string;
   personalityInstruction: string;
   communicationStyle: string;
@@ -106,7 +106,7 @@ export function emptyAgent(overrides: Partial<Agent> = {}): Agent {
     providerId: "openai",
     model: "gpt-4o",
     category: AGENT_CATEGORIES[0],
-    goal: "",
+    task: "",
     personalityStyle: PERSONALITY_STYLES[0],
     personalityInstruction: "",
     communicationStyle: COMMUNICATION_STYLES[0],
@@ -125,8 +125,13 @@ export function emptyAgent(overrides: Partial<Agent> = {}): Agent {
  * was introduced lack it — without this they'd drive uncontrolled inputs and
  * skip the new behavior. `emptyAgent` spreads defaults then the stored values.
  */
-export function normalizeAgent(a: Partial<Agent>): Agent {
-  return emptyAgent(a);
+export function normalizeAgent(a: Partial<Agent> & { goal?: string }): Agent {
+  // Migration: the main-prompt field was renamed `goal` → `task`. Agents saved
+  // before the rename (library entries, historical-run snapshots, exported
+  // configs) stored it as `goal` — carry it over so their main prompt survives.
+  const { goal, ...rest } = a;
+  if (rest.task === undefined && goal !== undefined) rest.task = goal;
+  return emptyAgent(rest);
 }
 
 function readStore(): Agent[] {
@@ -177,10 +182,10 @@ export function buildAgentSystemPrefix(agent: Agent): string {
   if (agent.name) parts.push(`You are an agent named "${agent.name}".`);
   if (agent.category && agent.category !== "Neutral")
     parts.push(`Your role category is: ${agent.category}.`);
-  if (agent.goal?.trim()) {
+  if (agent.task?.trim()) {
     parts.push("");
-    parts.push("Main goal:");
-    parts.push(agent.goal.trim());
+    parts.push("Task:");
+    parts.push(agent.task.trim());
     parts.push("");
   }
   if (agent.personalityStyle && agent.personalityStyle !== "Neutral")
