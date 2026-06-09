@@ -399,9 +399,9 @@ export function AgentConfigDialog({ open, onOpenChange, agent, onSave, enabledPr
             <div className="space-y-1 col-span-2">
               <Label className="text-xs">Main System Prompt</Label>
               <Textarea
-                value={draft.goal}
-                onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
-                placeholder="The agent's main goal — e.g. You will help students with their homework, explaining concepts step-by-step…"
+                value={draft.task}
+                onChange={(e) => setDraft({ ...draft, task: e.target.value })}
+                placeholder="The agent's main task — e.g. You will help students with their homework, explaining concepts step-by-step…"
                 rows={4}
                 className="min-h-[8rem]"
               />

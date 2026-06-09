@@ -114,7 +114,7 @@ export interface RolePreset {
    *  `label` (e.g. "Worker 1"), so this only affects the button caption. */
   buttonLabel?: string;
   category: string;
-  goal: string;
+  task: string;
   personalityStyle?: string;
   communicationStyle?: string;
   responseStyle?: string;
@@ -132,27 +132,17 @@ export const AGENT_ROLE_PRESETS: RolePreset[] = [
     label: "Worker",
     buttonLabel: "Worker (neutral)",
     category: "Neutral",
-    goal: "Carry out the assigned task on your input and return a direct, complete result.",
+    task: "",
     personalityStyle: "Neutral",
     communicationStyle: "Neutral",
     responseStyle: "Balanced",
-    personalityInstruction:
-      "You are a reliable generalist. You follow instructions exactly, stay focused on the task, and produce ready-to-use output without adding opinions.",
-    dos: [
-      "Follow the task instructions precisely",
-      "Return a complete, ready-to-use result",
-    ],
-    donts: [
-      "Add commentary or opinions beyond the task",
-      "Leave the task partially done",
-    ],
     avatar: 4,
   },
   {
     key: "judge",
     label: "Judge",
     category: "Critic",
-    goal: "Evaluate the inputs you receive against the task criteria, resolve disagreements, and output the best reconciled answer.",
+    task: "",
     personalityStyle: "Formal",
     communicationStyle: "Deliberative",
     responseStyle: "Detailed",
@@ -173,7 +163,7 @@ export const AGENT_ROLE_PRESETS: RolePreset[] = [
     key: "manager",
     label: "Manager",
     category: "Synthesizer",
-    goal: "Break the task into clear subtasks, set direction, and integrate the results into one final deliverable.",
+    task: "",
     personalityStyle: "Direct",
     communicationStyle: "Collaborative",
     responseStyle: "Balanced",
@@ -194,7 +184,7 @@ export const AGENT_ROLE_PRESETS: RolePreset[] = [
     key: "critic",
     label: "Critic",
     category: "Critic",
-    goal: "Find flaws, risks, and gaps in the input. Be specific and skeptical.",
+    task: "",
     personalityStyle: "Direct",
     communicationStyle: "Adversarial",
     responseStyle: "Detailed",
@@ -215,7 +205,7 @@ export const AGENT_ROLE_PRESETS: RolePreset[] = [
     key: "researcher",
     label: "Researcher",
     category: "Researcher",
-    goal: "Gather and lay out the relevant facts and context needed to answer.",
+    task: "",
     personalityStyle: "Technical",
     communicationStyle: "Neutral",
     responseStyle: "Balanced",
@@ -236,7 +226,7 @@ export const AGENT_ROLE_PRESETS: RolePreset[] = [
     key: "synthesizer",
     label: "Synthesizer",
     category: "Synthesizer",
-    goal: "Merge multiple inputs into one coherent, non-redundant output.",
+    task: "",
     personalityStyle: "Concise",
     communicationStyle: "Collaborative",
     responseStyle: "Balanced",
@@ -310,11 +300,11 @@ export function composeStepSystemPrompt(
   if (base) parts.push(base);
 
   // Skip the PRIMARY TASK block when the step task merely repeats the agent's
-  // main goal (already emitted by buildAgentSystemPrefix above) — e.g. the Main
-  // Prompt box was seeded from the agent and left unedited — so the goal isn't
+  // main task (already emitted by buildAgentSystemPrefix above) — e.g. the Main
+  // Prompt box was seeded from the agent and left unedited — so the task isn't
   // sent twice.
   const taskText = step.taskDescription.trim();
-  if (includeTask && taskText && taskText !== (agent.goal ?? "").trim()) {
+  if (includeTask && taskText && taskText !== (agent.task ?? "").trim()) {
     parts.push("");
     parts.push("════ PRIMARY TASK — your main objective for this step ════");
     parts.push(taskText);

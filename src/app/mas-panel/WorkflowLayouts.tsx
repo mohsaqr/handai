@@ -411,7 +411,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
               <WorkflowStepCard
                 step={reconciler}
                 index={0}
-                label="Judge (bottom of tree)"
+                label="Judge"
                 showIndex={false}
                 status={statusFor(reconciler.id, stepStatuses)}
                 agents={agents}
@@ -502,7 +502,7 @@ function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRe
               key={step.id}
               step={step}
               index={i}
-              label={`Agent ${i + 1}`}
+              label={`Participant ${i + 1}`}
               showIndex={false}
               status={statusFor(step.id, stepStatuses)}
               compact
@@ -517,7 +517,7 @@ function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRe
 
       <div className="pt-4">
         <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={onAdd}>
-          <Plus className="h-3.5 w-3.5" /> Add agent
+          <Plus className="h-3.5 w-3.5" /> Add participant
         </Button>
       </div>
     </div>
@@ -668,20 +668,10 @@ function PersonalizedLayout({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="text-sm font-semibold text-foreground">
-          {connectingFrom
-            ? "Connecting… click a target agent (Esc to cancel)"
-            : "Click an agent’s ● output dot, then click another agent to connect. Click an arrow to remove it."}
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-xs gap-1.5 shrink-0"
-          onClick={() => onAddLine?.()}
-        >
-          <Plus className="h-3.5 w-3.5" /> Add AI Agent line
-        </Button>
+      <div className="text-sm font-semibold text-foreground">
+        {connectingFrom
+          ? "Connecting… click a target agent (Esc to cancel)"
+          : "Click an agent’s ● output dot, then click another agent to connect. Click an arrow to remove it."}
       </div>
 
       {lines.length === 0 ? (
@@ -877,6 +867,17 @@ function PersonalizedLayout({
           </svg>
         </div>
       )}
+
+      <div className="pt-4">
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-xs gap-1.5"
+          onClick={() => onAddLine?.()}
+        >
+          <Plus className="h-3.5 w-3.5" /> Add AI Agent line
+        </Button>
+      </div>
     </div>
   );
 }

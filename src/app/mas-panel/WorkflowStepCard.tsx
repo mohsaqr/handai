@@ -170,22 +170,22 @@ export function WorkflowStepCard({
           value={step.agentId ?? ""}
           onValueChange={(v) => {
             // Picking an agent seeds the step's task with that agent's main
-            // system prompt (goal), so executors still receive a task even though
+            // system prompt (task), so executors still receive a task even though
             // the Main Prompt box is no longer shown. Only seed when the task is
-            // empty or still holds the previous agent's goal (an untouched seed)
+            // empty or still holds the previous agent's task (an untouched seed)
             // — never clobber a task carried over from a prior selection.
             const picked = v ? agents.find((a) => a.id === v) : null;
-            const prevGoal = (step.agentId
-              ? agents.find((a) => a.id === step.agentId)?.goal
+            const prevTask = (step.agentId
+              ? agents.find((a) => a.id === step.agentId)?.task
               : ""
             )?.trim() ?? "";
             const current = step.taskDescription.trim();
-            const newGoal = picked?.goal?.trim() ?? "";
-            const seed = newGoal && (current === "" || current === prevGoal);
+            const newTask = picked?.task?.trim() ?? "";
+            const seed = newTask && (current === "" || current === prevTask);
             onUpdate({
               ...step,
               agentId: v || null,
-              ...(seed ? { taskDescription: newGoal } : {}),
+              ...(seed ? { taskDescription: newTask } : {}),
             });
           }}
         >
