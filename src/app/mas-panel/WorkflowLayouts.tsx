@@ -260,84 +260,114 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
   );
 }
 
-// ── Reconcilier hierarchy: top card = reconciler, workers below with lines up ─
+// ── Reconcilier hierarchy: workers on top, reconciler below with lines down ──
 
 function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], documentInput }: LayoutProps) {
   const reconciler = steps[0];
   const workers = steps.slice(1);
 
+  // Measure the real card positions so each spoke can run from its worker's
+  // bottom edge straight to the Judge's top edge. A fixed-height band with
+  // percentage x-positions breaks once workers wrap onto a second row — the
+  // lines start floating below the cards instead of touching them. Measuring
+  // the actual DOM rects (like PersonalizedLayout) keeps the arrows anchored to
+  // the cards no matter how the grid wraps.
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const workerRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
+  const judgeRef = React.useRef<HTMLDivElement | null>(null);
+  const [rects, setRects] = React.useState<{
+    workers: Record<string, Rect>;
+    judge: Rect | null;
+  }>({ workers: {}, judge: null });
+  const [resizeTick, setResizeTick] = React.useState(0);
+
+  React.useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
+    ro.observe(el);
+    const onWin = () => setResizeTick((t) => t + 1);
+    window.addEventListener("resize", onWin);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onWin);
+    };
+  }, []);
+
+  const signature = steps.map((s) => s.id).join(",") + `#${steps.length}`;
+  React.useLayoutEffect(() => {
+    const canvas = containerRef.current;
+    if (!canvas) return;
+    const cRect = canvas.getBoundingClientRect();
+    const toRect = (el: HTMLElement): Rect => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left - cRect.left, y: r.top - cRect.top, w: r.width, h: r.height };
+    };
+    const nextWorkers: Record<string, Rect> = {};
+    workerRefs.current.forEach((el, id) => {
+      if (el) nextWorkers[id] = toRect(el);
+    });
+    const nextJudge = judgeRef.current ? toRect(judgeRef.current) : null;
+    setRects((prev) => {
+      const eq = (a: Rect, b: Rect) =>
+        a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+      const sameWorkers =
+        Object.keys(nextWorkers).length === Object.keys(prev.workers).length &&
+        Object.keys(nextWorkers).every(
+          (k) => prev.workers[k] && eq(prev.workers[k], nextWorkers[k]),
+        );
+      const sameJudge =
+        (!nextJudge && !prev.judge) ||
+        (!!nextJudge && !!prev.judge && eq(nextJudge, prev.judge));
+      return sameWorkers && sameJudge ? prev : { workers: nextWorkers, judge: nextJudge };
+    });
+  }, [signature, resizeTick]);
+
+  const setWorkerRef = (id: string) => (el: HTMLDivElement | null) => {
+    if (el) workerRefs.current.set(id, el);
+    else workerRefs.current.delete(id);
+  };
+
   return (
     <div className="space-y-0">
-      {/* Reconciler row — centered, wider than workers */}
-      {reconciler && (
-        <div className="flex justify-center">
-          <div className="w-full max-w-3xl">
-            <WorkflowStepCard
-              step={reconciler}
-              index={0}
-              label="Judge (top of tree)"
-              showIndex={false}
-              status={statusFor(reconciler.id, stepStatuses)}
-              agents={agents}
-              showInputData
-              inputCols={selectedCols}
-              documentInput={documentInput}
-              staticSources={["Workers' outputs"]}
-              onUpdate={(s) => onUpdate(reconciler.id, s)}
-              onRemove={() => onRemove(reconciler.id)}
-              canRemove={steps.length > 2}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Tree spokes — thick dashed arrows pointing UP from each worker to the reconciler */}
-      {workers.length > 0 && (
-        <div className="relative h-28" aria-hidden>
-          <svg
-            className="absolute inset-0 w-full h-full text-muted-foreground"
-            preserveAspectRatio="none"
-            style={{ overflow: "visible" }}
-          >
-            <defs>
-              <marker
-                id="reconciler-arrow"
-                viewBox="0 0 10 10"
-                refX="9"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
-              </marker>
-            </defs>
-            {workers.map((_, i) => {
-              // Workers render in a wrapping grid of `gridCols` columns (max 3),
-              // so worker i sits in column `i % gridCols`. Aim each arrow at its
-              // column. The center column points straight up to the manager and
-              // stacked workers there share that one arrow; in the left/right
-              // columns, stacked workers are fanned apart by a small offset so
-              // each gets its own distinct (still clearly side-leaning) arrow.
-              const gridCols = 3;
-              const col = i % gridCols;
-              const colCenter = ((col + 0.5) / gridCols) * 100;
-              const isCenterCol = gridCols % 2 === 1 && col === (gridCols - 1) / 2;
-              const countInCol = Math.ceil((workers.length - col) / gridCols);
-              const rowInCol = Math.floor(i / gridCols);
-              let xPct = colCenter;
-              if (!isCenterCol && countInCol > 1) {
-                const spacing = 8;
-                const offset = (rowInCol - (countInCol - 1) / 2) * spacing;
-                xPct = Math.min(96, Math.max(4, colCenter + offset));
-              }
+      <div ref={containerRef} className="relative">
+        {/* Tree spokes — dashed arrows from each worker's bottom-center down to
+            the Judge's top-center. Drawn on an overlay that spans the whole
+            container so the line coordinates are the cards' real positions. */}
+        <svg
+          className="absolute inset-0 w-full h-full pointer-events-none text-muted-foreground"
+          style={{ overflow: "visible" }}
+          aria-hidden
+        >
+          <defs>
+            <marker
+              id="reconciler-arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+          {rects.judge &&
+            workers.map((w) => {
+              const wr = rects.workers[w.id];
+              const jr = rects.judge!;
+              if (!wr) return null;
+              const x1 = wr.x + wr.w / 2;
+              const y1 = wr.y + wr.h; // bottom-center of the worker card
+              const x2 = jr.x + jr.w / 2;
+              const y2 = jr.y; // top-center of the Judge card
               return (
                 <line
-                  key={i}
-                  x1={`${xPct}%`}
-                  y1="100%"
-                  x2="50%"
-                  y2="0"
+                  key={w.id}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
                   stroke="currentColor"
                   strokeWidth="2.5"
                   strokeDasharray="6 4"
@@ -345,32 +375,58 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                 />
               );
             })}
-          </svg>
-        </div>
-      )}
+        </svg>
 
-      {/* Worker cards row */}
-      {workers.length > 0 && (
-        <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(3, minmax(0, 1fr))` }}>
-          {workers.map((w, i) => (
-            <WorkflowStepCard
-              key={w.id}
-              step={w}
-              index={i + 1}
-              label={`Worker ${i + 1}`}
-              showIndex={false}
-              status={statusFor(w.id, stepStatuses)}
-              agents={agents}
-              showInputData
-              inputCols={selectedCols}
-              documentInput={documentInput}
-              onUpdate={(s) => onUpdate(w.id, s)}
-              onRemove={() => onRemove(w.id)}
-              canRemove={steps.length > 2}
-            />
-          ))}
-        </div>
-      )}
+        {/* Worker cards row — on top */}
+        {workers.length > 0 && (
+          <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(3, minmax(0, 1fr))` }}>
+            {workers.map((w, i) => (
+              <div key={w.id} ref={setWorkerRef(w.id)}>
+                <WorkflowStepCard
+                  step={w}
+                  index={i + 1}
+                  label={`Worker ${i + 1}`}
+                  showIndex={false}
+                  status={statusFor(w.id, stepStatuses)}
+                  agents={agents}
+                  showInputData
+                  inputCols={selectedCols}
+                  documentInput={documentInput}
+                  onUpdate={(s) => onUpdate(w.id, s)}
+                  onRemove={() => onRemove(w.id)}
+                  canRemove={steps.length > 2}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Vertical gap for the spokes to travel through */}
+        {workers.length > 0 && <div className="h-28" aria-hidden />}
+
+        {/* Reconciler row — centered, wider than workers — at the bottom */}
+        {reconciler && (
+          <div className="flex justify-center">
+            <div ref={judgeRef} className="w-full max-w-3xl">
+              <WorkflowStepCard
+                step={reconciler}
+                index={0}
+                label="Judge (bottom of tree)"
+                showIndex={false}
+                status={statusFor(reconciler.id, stepStatuses)}
+                agents={agents}
+                showInputData
+                inputCols={selectedCols}
+                documentInput={documentInput}
+                staticSources={["Workers' outputs"]}
+                onUpdate={(s) => onUpdate(reconciler.id, s)}
+                onRemove={() => onRemove(reconciler.id)}
+                canRemove={steps.length > 2}
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="pt-4">
         <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={onAdd}>
