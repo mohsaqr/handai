@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { ArrowUpRight, Plus } from "lucide-react";
 import { type Agent } from "@/lib/agent-library";
 import {
   type WorkflowMode,
@@ -30,8 +30,16 @@ interface LayoutProps {
   onConnect?: (fromId: string, toId: string) => void;
   /** Personalized mode — remove edge from→to. */
   onDisconnect?: (fromId: string, toId: string) => void;
-  /** Page-level selected columns — drives the per-card Input DATA chips. */
+  /** Reconcilier mode — cut a worker→Judge spoke (scissors). */
+  onCutJudge?: (workerId: string) => void;
+  /** Reconcilier mode — restore a cut worker→Judge spoke (click worker dot → Judge). */
+  onRestoreJudge?: (workerId: string) => void;
+  /** Page-level selected columns — the per-card Input DATA chips shown by default. */
   selectedCols?: string[];
+  /** Every column in the uploaded file. Columns here that aren't in
+   *  `selectedCols` are offered in each card's "+ column" picker, so a card can
+   *  pull in any uploaded column, not only the globally-defined ones. */
+  allCols?: string[];
   /** Name of an uploaded unstructured file (PDF/DOCX/TXT). Lets cards show a
    *  document chip instead of "no input" when they receive the file's text. */
   documentInput?: string;
@@ -57,10 +65,13 @@ function statusFor(stepId: string, statuses?: Record<string, StepStatus>): StepS
 // Width of the gap between cards. The same value is used by the horizontal
 // connectors, the vertical (down) connector's gap, and the empty padding
 // slots, so the snake's columns stay aligned. CONNECTOR_PX must equal the
-// pixel value of the CONNECTOR_W Tailwind class (w-28 = 7rem = 112px) so the
-// arrows span the gap exactly and touch the cards on both ends.
-const CONNECTOR_W = "w-28";
-const CONNECTOR_PX = 112;
+// pixel value of the CONNECTOR_W Tailwind class (w-72 = 18rem = 288px) so the
+// arrows span the gap exactly and touch the cards on both ends. A wide gap keeps
+// the step cards compact and gives the connecting arrows room to read clearly.
+// (Deliberation reuses CONNECTOR_PX as its column gap, so both modes' cards stay
+// the same width.)
+const CONNECTOR_W = "w-72";
+const CONNECTOR_PX = 288;
 
 // Scissors cursor for the "click to remove this connection" hit area. A white
 // halo (drawn first, thicker) keeps it visible on any background; the black
@@ -141,7 +152,7 @@ function SConnector({ direction, cols = 2 }: {
 
 const SEQUENTIAL_COLS = 3;
 
-function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], documentInput }: LayoutProps) {
+function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
   // A trailing "+" card always follows the last step in the snake. It occupies
   // the cell at index `addIndex`; clicking it appends a new step (like the empty
   // "+" slots in personalized mode). When the current row is full the "+" wraps
@@ -225,6 +236,7 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
                           compact
                           showInputData
                           inputCols={selectedCols}
+                          allCols={allCols}
                           documentInput={documentInput}
                           prevStepLabel={globalIdx > 0 ? `Step ${globalIdx}` : null}
                           onUpdate={(s) => onUpdate(steps[globalIdx].id, s)}
@@ -262,9 +274,24 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
 
 // ── Reconcilier hierarchy: workers on top, reconciler below with lines down ──
 
-function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], documentInput }: LayoutProps) {
+function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, onConnect, onDisconnect, onCutJudge, onRestoreJudge, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
   const reconciler = steps[0];
   const workers = steps.slice(1);
+  const workerIds = new Set(workers.map((w) => w.id));
+
+  // Worker→Judge spokes the user has cut live on the Judge step as
+  // `judgeExcluded`; a worker not listed there feeds the Judge (the default).
+  const judgeExcluded = new Set(reconciler?.judgeExcluded ?? []);
+  const connectedWorkers = workers.filter((w) => !judgeExcluded.has(w.id));
+  const allConnected = connectedWorkers.length === workers.length;
+  // The Judge's Input DATA chip(s): the collective "Workers' outputs" when every
+  // worker still feeds it, otherwise one chip per still-connected worker.
+  const judgeSources =
+    workers.length === 0
+      ? []
+      : allConnected
+        ? ["Workers' outputs"]
+        : connectedWorkers.map((w) => `Worker ${workers.indexOf(w) + 1} output`);
 
   // Measure the real card positions so each spoke can run from its worker's
   // bottom edge straight to the Judge's top edge. A fixed-height band with
@@ -280,25 +307,47 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
     judge: Rect | null;
   }>({ workers: {}, judge: null });
   const [resizeTick, setResizeTick] = React.useState(0);
+  // The circular canvas is a square sized to the container's real width. We set
+  // the height explicitly (rather than relying on `aspect-ratio`) so the box can
+  // never collapse to zero height — which would pile every absolutely-positioned
+  // card on top of each other instead of spreading them around the circle.
+  const [boxSize, setBoxSize] = React.useState(560);
+
+  // Re-measure whenever the graph shape OR any card's content changes. The
+  // content matters because a card's height grows when it gains an input chip
+  // (on connect) or a longer agent name — and the spokes/arrows must follow the
+  // card's new edges, not its old ones.
+  const signature =
+    steps
+      .map((s) => `${s.id}:${s.agentId ?? ""}:${(s.inputs ?? []).join("|")}`)
+      .join(",") + `#${steps.length}`;
 
   React.useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
     const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
-    ro.observe(el);
+    if (containerRef.current) ro.observe(containerRef.current);
+    // Observe each card too. Cards are absolutely positioned, so when one grows
+    // (e.g. gains an input chip on connect) the container's size doesn't change
+    // and a container-only observer would never fire — leaving the arrows pinned
+    // to the card's stale rect. Watching the cards themselves keeps every spoke
+    // and worker→worker arrow locked onto the live card edges.
+    workerRefs.current.forEach((el) => ro.observe(el));
+    if (judgeRef.current) ro.observe(judgeRef.current);
     const onWin = () => setResizeTick((t) => t + 1);
     window.addEventListener("resize", onWin);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", onWin);
     };
-  }, []);
+  }, [signature]);
 
-  const signature = steps.map((s) => s.id).join(",") + `#${steps.length}`;
   React.useLayoutEffect(() => {
     const canvas = containerRef.current;
     if (!canvas) return;
     const cRect = canvas.getBoundingClientRect();
+    // Keep the canvas square: height tracks the real (parent-driven) width.
+    if (cRect.width > 0) {
+      setBoxSize((prev) => (Math.abs(prev - cRect.width) < 0.5 ? prev : cRect.width));
+    }
     const toRect = (el: HTMLElement): Rect => {
       const r = el.getBoundingClientRect();
       return { x: r.left - cRect.left, y: r.top - cRect.top, w: r.width, h: r.height };
@@ -328,14 +377,178 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
     else workerRefs.current.delete(id);
   };
 
+  // ── Worker ↔ worker connections (same interactive system as personalized) ──
+  // The Judge → workers link is PERMANENT (every worker always feeds the Judge),
+  // drawn automatically below. Workers can additionally be wired to each other:
+  // an edge from worker A to worker B means B receives A's output and runs after
+  // it. Those edges live on the target worker's `inputs` and use the same
+  // click-dot / arrow / scissors UI as the personalized layout.
+  const workerEdges: { from: string; to: string }[] = [];
+  for (const w of workers)
+    for (const src of w.inputs ?? [])
+      if (workerIds.has(src)) workerEdges.push({ from: src, to: w.id });
+
+  const [connectingFrom, setConnectingFrom] = React.useState<string | null>(null);
+
+  // Esc cancels an in-progress connection.
+  React.useEffect(() => {
+    if (!connectingFrom) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConnectingFrom(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [connectingFrom]);
+
+  // Drop a dangling connect if its source worker was removed mid-gesture.
+  React.useEffect(() => {
+    if (connectingFrom && !steps.some((s) => s.id === connectingFrom)) {
+      setConnectingFrom(null);
+    }
+  }, [connectingFrom, steps]);
+
+  const completeConnect = (targetId: string) => {
+    if (!connectingFrom) return;
+    if (connectingFrom !== targetId) onConnect?.(connectingFrom, targetId);
+    setConnectingFrom(null);
+  };
+
+  // ── Radial layout geometry ──────────────────────────────────────────────
+  // Workers sit at the vertices of a regular polygon around the Judge hub —
+  // triangle for 3, square for 4, pentagon for 5, and so on. Rather than a fixed
+  // radius, each worker is pushed as far toward the canvas edge as its card
+  // allows (independently per axis), so the ring fills the whole width/height and
+  // the Judge→worker spokes are as long as possible. Card widths are FIXED px.
+  const WORKER_W = 400;
+  const JUDGE_W = 410;
+  const CANVAS_MAX_W = 1700;
+  const CANVAS_MAX_H = 720;
+  const N = workers.length;
+  // Orientation: pointy-top by default (triangle/pentagon point up). Two workers
+  // flank the Judge left/right; four sit at the corners of an upright square.
+  const startDeg = N === 2 ? 180 : N === 4 ? -45 : -90;
+  const angles = Array.from(
+    { length: N },
+    (_, i) => ((startDeg + (360 / Math.max(N, 1)) * i) * Math.PI) / 180,
+  );
+
+  // Canvas = the positioning box. Width is the measured container width; height
+  // is capped so the diagram doesn't get absurdly tall on a wide panel. Two or
+  // fewer workers form a horizontal line (no vertical spread), so a short box
+  // avoids a big empty band above and below.
+  const canvasW = boxSize;
+  // A lone worker stacks vertically above the Judge and needs real vertical room
+  // for a visible spoke. Two workers flank the Judge horizontally (no vertical
+  // spread), so a short box avoids empty bands above and below.
+  const isVerticalStack = N === 1;
+  const canvasH = isVerticalStack
+    ? Math.min(boxSize, 500)
+    : Math.min(boxSize, N >= 3 ? CANVAS_MAX_H : 320);
+  // The worker with the largest |cos| (resp. |sin|) is the one closest to the
+  // left/right (resp. top/bottom) edge. Size the horizontal/vertical radius so
+  // THAT worker just clears the margin — every other worker then sits inside.
+  const MARGIN = 10;
+  const CARD_HALF_H = 95; // ≈ half a tall worker card (avatar + a few input chips)
+  const maxCos = angles.reduce((m, a) => Math.max(m, Math.abs(Math.cos(a))), 0.001);
+  const maxSin = angles.reduce((m, a) => Math.max(m, Math.abs(Math.sin(a))), 0.001);
+  const rx = Math.max(0, canvasW / 2 - WORKER_W / 2 - MARGIN) / maxCos;
+  const ry = Math.max(0, canvasH / 2 - CARD_HALF_H - MARGIN) / maxSin;
+  const workerPos = (i: number) => {
+    // Single worker: pin it near the top, centered over the Judge, so the spoke
+    // runs straight down. The radial formula would place it only ~ry above the
+    // centered Judge — too little to clear the Judge's own height, so the cards
+    // would overlap with no room for the arrow.
+    if (isVerticalStack) {
+      return { leftPx: canvasW / 2, topPx: MARGIN + CARD_HALF_H };
+    }
+    return {
+      leftPx: canvasW / 2 + rx * Math.cos(angles[i]),
+      topPx: canvasH / 2 + ry * Math.sin(angles[i]),
+    };
+  };
+  // Judge sits at the canvas center for the radial layouts; for the lone-worker
+  // vertical stack it drops to the bottom so the worker→Judge spoke spans the
+  // whole canvas instead of being squeezed into one half.
+  const judgeTopPx = isVerticalStack ? canvasH - MARGIN - CARD_HALF_H : canvasH / 2;
+
+  const rectCenter = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+  // Point on a rect's boundary in the direction of (tx, ty) — anchors each
+  // spoke/edge to the card's edge instead of its hidden center.
+  function rectEdgeToward(r: Rect, tx: number, ty: number): { x: number; y: number } {
+    const cx = r.x + r.w / 2;
+    const cy = r.y + r.h / 2;
+    const dx = tx - cx;
+    const dy = ty - cy;
+    if (dx === 0 && dy === 0) return { x: cx, y: cy };
+    const sx = dx === 0 ? Infinity : r.w / 2 / Math.abs(dx);
+    const sy = dy === 0 ? Infinity : r.h / 2 / Math.abs(dy);
+    const s = Math.min(sx, sy);
+    return { x: cx + dx * s, y: cy + dy * s };
+  }
+
+  // Worker → worker edge: source edge → target edge, bowed OUTWARD (away from
+  // the Judge hub) so it arcs around the rim instead of crossing the center.
+  function workerEdgePath(from: string, to: string): string | null {
+    const a = rects.workers[from];
+    const b = rects.workers[to];
+    if (!a || !b) return null;
+    const ac = rectCenter(a);
+    const bc = rectCenter(b);
+    const start = rectEdgeToward(a, bc.x, bc.y);
+    const end = rectEdgeToward(b, ac.x, ac.y);
+    const hub = rects.judge ? rectCenter(rects.judge) : { x: (ac.x + bc.x) / 2, y: (ac.y + bc.y) / 2 };
+    const mx = (start.x + end.x) / 2;
+    const my = (start.y + end.y) / 2;
+    let ox = mx - hub.x;
+    let oy = my - hub.y;
+    const olen = Math.hypot(ox, oy) || 1;
+    ox /= olen;
+    oy /= olen;
+    const bow = 48;
+    const cx = mx + ox * bow;
+    const cy = my + oy * bow;
+    // End exactly on the target card's edge so the arrow reaches the card. The
+    // endpoint is recomputed from the live rect each render, so it tracks the
+    // card as it moves or grows.
+    return `M ${start.x} ${start.y} Q ${cx} ${cy} ${end.x} ${end.y}`;
+  }
+
+  // Judge spoke endpoints (each connected worker's edge → the Judge's edge),
+  // computed once and shared by the visible spoke layer and the scissors layer.
+  const spokeGeoms = rects.judge
+    ? connectedWorkers.flatMap((w) => {
+        const wr = rects.workers[w.id];
+        if (!wr) return [];
+        const jr = rects.judge!;
+        const wc = rectCenter(wr);
+        const jc = rectCenter(jr);
+        return [{
+          id: w.id,
+          start: rectEdgeToward(wr, jc.x, jc.y),
+          end: rectEdgeToward(jr, wc.x, wc.y),
+        }];
+      })
+    : [];
+
   return (
     <div className="space-y-0">
-      <div ref={containerRef} className="relative">
-        {/* Tree spokes — dashed arrows from each worker's bottom-center down to
-            the Judge's top-center. Drawn on an overlay that spans the whole
-            container so the line coordinates are the cards' real positions. */}
+      {workers.length > 0 && (
+        <div className="text-sm font-semibold text-foreground pb-3">
+          {connectingFrom
+            ? "Connecting… click another worker to feed it this worker’s output, or the Judge to reconnect it (Esc to cancel)"
+            : "Click a worker’s ↗ output handle, then another worker to chain them — or the Judge to reconnect a cut link. Click any arrow to cut it (including a worker’s link to the Judge)."}
+        </div>
+      )}
+      <div
+        ref={containerRef}
+        className="relative mx-auto w-full"
+        style={{ maxWidth: CANVAS_MAX_W, height: canvasH, overflow: "visible" }}
+      >
+        {/* Judge spokes — SLATE-GREY dashed arrows from each CONNECTED worker's
+            edge inward to the Judge hub (distinct colour from the black
+            worker→worker links). Cut ones (judgeExcluded) are omitted. */}
         <svg
-          className="absolute inset-0 w-full h-full pointer-events-none text-muted-foreground"
+          className="absolute inset-0 w-full h-full pointer-events-none text-slate-500"
           style={{ overflow: "visible" }}
           aria-hidden
         >
@@ -352,77 +565,300 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
               <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
             </marker>
           </defs>
-          {rects.judge &&
-            workers.map((w) => {
-              const wr = rects.workers[w.id];
-              const jr = rects.judge!;
-              if (!wr) return null;
-              const x1 = wr.x + wr.w / 2;
-              const y1 = wr.y + wr.h; // bottom-center of the worker card
-              const x2 = jr.x + jr.w / 2;
-              const y2 = jr.y; // top-center of the Judge card
-              return (
-                <line
-                  key={w.id}
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
+          {spokeGeoms.map(({ id, start, end }) => (
+            <line
+              key={id}
+              x1={start.x}
+              y1={start.y}
+              x2={end.x}
+              y2={end.y}
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeDasharray="6 4"
+              markerEnd="url(#reconciler-arrow)"
+            />
+          ))}
+        </svg>
+
+        {/* Faint echo + scissors hit area for the Judge spokes (above cards,
+            z-20). Hovering a connected worker's spoke reveals it and shows the
+            scissors cursor; clicking cuts that worker→Judge link. Mirrors the
+            worker→worker cut layer. */}
+        <svg
+          className="absolute inset-0 w-full h-full pointer-events-none z-20 text-slate-500"
+          style={{ overflow: "visible" }}
+          aria-hidden
+        >
+          <defs>
+            <marker
+              id="reconciler-arrow-ghost"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+          {spokeGeoms.map(({ id, start, end }) => (
+            <g key={`cut-judge-${id}`} className="group">
+              <line
+                x1={start.x}
+                y1={start.y}
+                x2={end.x}
+                y2={end.y}
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeDasharray="6 4"
+                markerEnd="url(#reconciler-arrow-ghost)"
+                className="opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none"
+              />
+              <line
+                x1={start.x}
+                y1={start.y}
+                x2={end.x}
+                y2={end.y}
+                stroke="transparent"
+                strokeWidth="22"
+                strokeLinecap="round"
+                className={connectingFrom ? "pointer-events-none" : "pointer-events-auto"}
+                style={connectingFrom ? undefined : { cursor: SCISSORS_CURSOR }}
+                onClick={() => onCutJudge?.(id)}
+              >
+                <title>Click to cut this worker’s link to the Judge</title>
+              </line>
+            </g>
+          ))}
+        </svg>
+
+        {/* Worker → worker edges — BLACK dashed curves arcing around the rim
+            (distinct colour from the slate-grey Judge spokes). */}
+        <svg
+          className="absolute inset-0 w-full h-full pointer-events-none text-foreground"
+          style={{ overflow: "visible" }}
+          aria-hidden
+        >
+          <defs>
+            <marker
+              id="ww-arrow"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto"
+            >
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+          {workerEdges.map((e, i) => {
+            const d = workerEdgePath(e.from, e.to);
+            if (!d) return null;
+            return (
+              <path
+                key={`${e.from}->${e.to}-${i}`}
+                d={d}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeDasharray="6 4"
+                markerEnd="url(#ww-arrow)"
+              />
+            );
+          })}
+        </svg>
+
+        {/* Faint connection echo + scissors hit area for worker → worker edges.
+            Sits ABOVE the cards (z-20) so the clickable ribbon — and the echo it
+            reveals on hover — span the arrow's full length, including where it
+            runs behind a card. The echo is hidden until hover (when the scissors
+            cursor appears) so it never paints over card content unless you are
+            about to cut. Mirrors the personalized layout's z-0 (solid, behind
+            cards) + z-20 (hover echo + hit area) split. */}
+        <svg
+          className="absolute inset-0 w-full h-full pointer-events-none z-20 text-foreground/30"
+          style={{ overflow: "visible" }}
+          aria-hidden
+        >
+          <defs>
+            <marker
+              id="ww-arrow-ghost"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto"
+            >
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+          {workerEdges.map((e, i) => {
+            const d = workerEdgePath(e.from, e.to);
+            if (!d) return null;
+            return (
+              <g key={`cut-${e.from}->${e.to}-${i}`} className="group">
+                <path
+                  d={d}
                   stroke="currentColor"
                   strokeWidth="2.5"
                   strokeDasharray="6 4"
-                  markerEnd="url(#reconciler-arrow)"
+                  fill="none"
+                  markerEnd="url(#ww-arrow-ghost)"
+                  className="opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none"
                 />
-              );
-            })}
+                <path
+                  d={d}
+                  stroke="transparent"
+                  strokeWidth="22"
+                  fill="none"
+                  strokeLinecap="round"
+                  className={connectingFrom ? "pointer-events-none" : "pointer-events-auto"}
+                  style={connectingFrom ? undefined : { cursor: SCISSORS_CURSOR }}
+                  onClick={() => onDisconnect?.(e.from, e.to)}
+                >
+                  <title>Click to remove this connection</title>
+                </path>
+              </g>
+            );
+          })}
         </svg>
 
-        {/* Worker cards row — on top */}
-        {workers.length > 0 && (
-          <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(3, minmax(0, 1fr))` }}>
-            {workers.map((w, i) => (
-              <div key={w.id} ref={setWorkerRef(w.id)}>
+        {/* Worker cards — placed around the circle */}
+        {workers.map((w, i) => {
+          const pos = workerPos(i);
+          // Put the output dot on the OUTER side (away from the Judge): cards to
+          // the right of centre get it on their RIGHT, cards to the left on their
+          // LEFT. The inner, Judge-facing edge is where the permanent spokes and
+          // most incoming worker→worker arrowheads land, so keeping the dot on
+          // the outer side stops the dot from coinciding with an arrowhead.
+          const onRight = pos.leftPx > canvasW / 2;
+          return (
+            <div
+              key={w.id}
+              className="absolute z-10"
+              style={{
+                left: pos.leftPx,
+                top: pos.topPx,
+                width: WORKER_W,
+                transform: "translate(-50%, -50%)",
+              }}
+            >
+              <div ref={setWorkerRef(w.id)} className="relative w-full">
                 <WorkflowStepCard
                   step={w}
                   index={i + 1}
                   label={`Worker ${i + 1}`}
                   showIndex={false}
+                  compact
+                  minimal
                   status={statusFor(w.id, stepStatuses)}
                   agents={agents}
                   showInputData
                   inputCols={selectedCols}
+                  allCols={allCols}
                   documentInput={documentInput}
+                  connectedSources={(w.inputs ?? [])
+                    .filter((srcId) => workerIds.has(srcId))
+                    .map((srcId) => ({
+                      id: srcId,
+                      label: `Worker ${workers.findIndex((x) => x.id === srcId) + 1}`,
+                    }))}
                   onUpdate={(s) => onUpdate(w.id, s)}
                   onRemove={() => onRemove(w.id)}
                   canRemove={steps.length > 2}
                 />
+
+                {/* Connection target — while a connection is in progress, the
+                    WHOLE card is the click target (no separate square handle).
+                    Clicking anywhere on it completes the connection. Black to
+                    match the worker→worker links. */}
+                {connectingFrom && connectingFrom !== w.id && (
+                  <button
+                    type="button"
+                    title="Click to feed the connecting worker’s output into this worker"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      completeConnect(w.id);
+                    }}
+                    className="absolute inset-0 z-40 rounded-lg ring-2 ring-foreground bg-foreground/5 hover:bg-foreground/15 cursor-pointer transition-colors"
+                  />
+                )}
+
+                {/* Output point (outer edge) — click to start a worker → worker
+                    connection. Hidden on the other cards while connecting, since
+                    each of those is then a whole-card target. */}
+                {(!connectingFrom || connectingFrom === w.id) && (
+                  <button
+                    type="button"
+                    title="Start a connection from this worker to another worker"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      setConnectingFrom((cur) => (cur === w.id ? null : w.id));
+                    }}
+                    className={`absolute ${onRight ? "-right-3" : "-left-3"} top-1/2 -translate-y-1/2 z-40 h-7 w-7 rounded-full border-2 border-background shadow-md flex items-center justify-center transition hover:scale-110 cursor-pointer ${
+                      connectingFrom === w.id
+                        ? "bg-foreground ring-2 ring-foreground/40 scale-110"
+                        : "bg-foreground/85 hover:bg-foreground"
+                    }`}
+                  >
+                    <ArrowUpRight className="h-4 w-4 text-background" strokeWidth={2.75} />
+                  </button>
+                )}
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          );
+        })}
 
-        {/* Vertical gap for the spokes to travel through */}
-        {workers.length > 0 && <div className="h-28" aria-hidden />}
-
-        {/* Reconciler row — centered, wider than workers — at the bottom */}
+        {/* Judge — the hub at the center. No connection handles (it always
+            receives every worker). */}
         {reconciler && (
-          <div className="flex justify-center">
-            <div ref={judgeRef} className="w-full max-w-3xl">
+          <div
+            className="absolute z-10"
+            style={{
+              left: "50%",
+              top: judgeTopPx,
+              width: JUDGE_W,
+              transform: "translate(-50%, -50%)",
+            }}
+          >
+            <div ref={judgeRef} className="relative w-full">
               <WorkflowStepCard
                 step={reconciler}
                 index={0}
                 label="Judge"
                 showIndex={false}
+                compact
+                minimal
                 status={statusFor(reconciler.id, stepStatuses)}
                 agents={agents}
                 showInputData
                 inputCols={selectedCols}
+                allCols={allCols}
                 documentInput={documentInput}
-                staticSources={["Workers' outputs"]}
+                staticSources={judgeSources}
                 onUpdate={(s) => onUpdate(reconciler.id, s)}
                 onRemove={() => onRemove(reconciler.id)}
                 canRemove={steps.length > 2}
               />
+
+              {/* Reconnect target — while connecting from a worker whose Judge
+                  link was cut, the whole Judge card is a click target that
+                  restores the slate worker→Judge spoke. */}
+              {connectingFrom && judgeExcluded.has(connectingFrom) && (
+                <button
+                  type="button"
+                  title="Click to reconnect this worker’s output to the Judge"
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    onRestoreJudge?.(connectingFrom);
+                    setConnectingFrom(null);
+                  }}
+                  className="absolute inset-0 z-40 rounded-lg ring-2 ring-slate-500 bg-slate-500/5 hover:bg-slate-500/15 cursor-pointer transition-colors"
+                />
+              )}
             </div>
           </div>
         )}
@@ -441,45 +877,82 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
 //    workers), with a dashed line connecting every pair so the visual reads as
 //    "everyone talks to everyone".
 
-function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd }: LayoutProps) {
-  const N = steps.length;
-
-  // Fixed 3 columns; rows fill left-to-right, top-to-bottom. A single agent
-  // takes one third of the width (not the whole row) and leaves the rest empty.
+function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
+  // Fixed 3 columns; rows fill left-to-right. Cards fill their column (1fr) and
+  // the column gap matches the Sequential connector width (CONNECTOR_PX), so the
+  // participant cards come out the same size as the Sequential step cards.
   const cols = 3;
-  const numRows = Math.ceil(N / cols);
 
-  // Card-center coordinates as percentages of the grid's bounding box.
-  // Lines drawn between every pair create the peer-to-peer mesh.
-  const positions = Array.from({ length: N }, (_, i) => {
-    const row = Math.floor(i / cols);
-    const col = i % cols;
-    return {
-      x: ((col + 0.5) / cols) * 100,
-      y: ((row + 0.5) / numRows) * 100,
+  // The peer-to-peer mesh connects every pair of cards. Draw it from the cards'
+  // MEASURED centres rather than fixed percentages: with the wide column gaps
+  // the grid cell centres no longer sit at simple (col+0.5)/cols fractions, so a
+  // percentage mesh would float off the cards. Measuring locks every line to the
+  // real card centres as the grid wraps or a card resizes.
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const cardRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
+  const [centers, setCenters] = React.useState<Record<string, { x: number; y: number }>>({});
+  const [resizeTick, setResizeTick] = React.useState(0);
+
+  const signature = steps.map((s) => `${s.id}:${s.agentId ?? ""}`).join(",") + `#${steps.length}`;
+
+  React.useEffect(() => {
+    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
+    if (containerRef.current) ro.observe(containerRef.current);
+    cardRefs.current.forEach((el) => ro.observe(el));
+    const onWin = () => setResizeTick((t) => t + 1);
+    window.addEventListener("resize", onWin);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onWin);
     };
-  });
+  }, [signature]);
+
+  React.useLayoutEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const cr = c.getBoundingClientRect();
+    const next: Record<string, { x: number; y: number }> = {};
+    cardRefs.current.forEach((el, id) => {
+      const r = el.getBoundingClientRect();
+      next[id] = { x: r.left - cr.left + r.width / 2, y: r.top - cr.top + r.height / 2 };
+    });
+    setCenters((prev) => {
+      const keys = Object.keys(next);
+      const same =
+        keys.length === Object.keys(prev).length &&
+        keys.every((k) => prev[k] && prev[k].x === next[k].x && prev[k].y === next[k].y);
+      return same ? prev : next;
+    });
+  }, [signature, resizeTick]);
+
+  const setCardRef = (id: string) => (el: HTMLDivElement | null) => {
+    if (el) cardRefs.current.set(id, el);
+    else cardRefs.current.delete(id);
+  };
 
   return (
     <div className="space-y-3">
-      <div className="relative">
-        {/* Peer-to-peer mesh — dashed connector between every pair of agents */}
-        {N >= 2 && (
+      <div ref={containerRef} className="relative">
+        {/* Peer-to-peer mesh — dashed connector between every pair of agents,
+            anchored to the measured card centres. */}
+        {steps.length >= 2 && (
           <svg
             className="absolute inset-0 w-full h-full pointer-events-none text-primary/40"
-            preserveAspectRatio="none"
+            style={{ overflow: "visible" }}
             aria-hidden
           >
-            {positions.flatMap((p, i) =>
-              positions.slice(i + 1).map((p2, j) => {
-                const k = i + 1 + j;
+            {steps.flatMap((s, i) =>
+              steps.slice(i + 1).map((s2) => {
+                const a = centers[s.id];
+                const b = centers[s2.id];
+                if (!a || !b) return null;
                 return (
                   <line
-                    key={`${i}-${k}`}
-                    x1={`${p.x}%`}
-                    y1={`${p.y}%`}
-                    x2={`${p2.x}%`}
-                    y2={`${p2.y}%`}
+                    key={`${s.id}-${s2.id}`}
+                    x1={a.x}
+                    y1={a.y}
+                    x2={b.x}
+                    y2={b.y}
                     stroke="currentColor"
                     strokeWidth="2.75"
                     strokeDasharray="6 4"
@@ -490,27 +963,32 @@ function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRe
           </svg>
         )}
 
-        {/* Card grid — `relative` puts cards in the same stacking layer as the
-            absolutely-positioned SVG; DOM order then renders cards on top.
-            `compact` cards + wider gap give the mesh room to breathe. */}
+        {/* Card grid — `relative` keeps the cards painting on top of the absolute
+            mesh SVG. Cards fill their 1fr column; the 208px column gap matches the
+            Sequential connector width so the cards come out the same size. */}
         <div
-          className="grid gap-x-10 gap-y-20 relative px-4"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+          className="grid gap-y-24 relative"
+          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, columnGap: CONNECTOR_PX }}
         >
           {steps.map((step, i) => (
-            <WorkflowStepCard
-              key={step.id}
-              step={step}
-              index={i}
-              label={`Participant ${i + 1}`}
-              showIndex={false}
-              status={statusFor(step.id, stepStatuses)}
-              compact
-              agents={agents}
-              onUpdate={(s) => onUpdate(step.id, s)}
-              onRemove={() => onRemove(step.id)}
-              canRemove={steps.length > 2}
-            />
+            <div key={step.id} ref={setCardRef(step.id)}>
+              <WorkflowStepCard
+                step={step}
+                index={i}
+                label={`Participant ${i + 1}`}
+                showIndex={false}
+                status={statusFor(step.id, stepStatuses)}
+                compact
+                agents={agents}
+                showInputData
+                inputCols={selectedCols}
+                allCols={allCols}
+                documentInput={documentInput}
+                onUpdate={(s) => onUpdate(step.id, s)}
+                onRemove={() => onRemove(step.id)}
+                canRemove={steps.length > 2}
+              />
+            </div>
           ))}
         </div>
       </div>
@@ -539,6 +1017,7 @@ function PersonalizedLayout({
   onConnect,
   onDisconnect,
   selectedCols = [],
+  allCols = [],
   documentInput,
   lineCount = 2,
 }: LayoutProps) {
@@ -671,7 +1150,7 @@ function PersonalizedLayout({
       <div className="text-sm font-semibold text-foreground">
         {connectingFrom
           ? "Connecting… click a target agent (Esc to cancel)"
-          : "Click an agent’s ● output dot, then click another agent to connect. Click an arrow to remove it."}
+          : "Click an agent’s ↗ output handle, then click another agent to connect. Click an arrow to remove it."}
       </div>
 
       {lines.length === 0 ? (
@@ -729,7 +1208,7 @@ function PersonalizedLayout({
                   {placed.map((step, slot) => (
                     <div
                       key={step?.id ?? `slot-${slot}`}
-                      className="flex-1 min-w-0 flex px-10"
+                      className="flex-1 min-w-0 flex px-28"
                     >
                       {step ? (
                         <div ref={setCardRef(step.id)} className="relative w-full">
@@ -743,6 +1222,7 @@ function PersonalizedLayout({
                             agents={agents}
                             showInputData
                             inputCols={selectedCols}
+                            allCols={allCols}
                             documentInput={documentInput}
                             connectedSources={(step.inputs ?? []).map((srcId) => ({
                               id: srcId,
@@ -753,40 +1233,44 @@ function PersonalizedLayout({
                             canRemove
                           />
 
-                          {/* Input handle (left). Hidden until the user clicks
-                              another card's ● output dot — then it appears on
-                              every OTHER card as a connection target. */}
+                          {/* Input target — while a connection is in progress,
+                              the WHOLE card is the click target (no separate
+                              square handle), matching the Judge layout. Clicking
+                              anywhere on it completes the connection. */}
                           {connectingFrom && connectingFrom !== step.id && (
                             <button
                               type="button"
-                              title="Connect into this agent"
+                              title="Click to feed the connecting agent's output into this agent"
                               onClick={(ev) => {
                                 ev.stopPropagation();
                                 completeConnect(step.id);
                               }}
-                              className="absolute -left-2.5 top-1/2 -translate-y-1/2 z-40 h-5 w-5 rounded-[4px] border-2 bg-background transition-colors border-primary ring-2 ring-primary/30 animate-pulse cursor-pointer"
+                              className="absolute inset-0 z-40 rounded-lg ring-2 ring-primary bg-primary/5 hover:bg-primary/15 cursor-pointer transition-colors"
                             />
                           )}
 
-                          {/* Output handle (right) — click to start a
-                              connection from this card. */}
-                          <button
-                            type="button"
-                            title="Start a connection from this agent"
-                            onClick={(ev) => {
-                              ev.stopPropagation();
-                              setConnectingFrom((cur) =>
-                                cur === step.id ? null : step.id,
-                              );
-                            }}
-                            className={`absolute -right-2 top-1/2 -translate-y-1/2 z-40 h-5 w-5 rounded-full border-2 bg-background flex items-center justify-center transition-colors cursor-pointer ${
-                              connectingFrom === step.id
-                                ? "border-primary ring-2 ring-primary/30"
-                                : "border-muted-foreground/50 hover:border-primary"
-                            }`}
-                          >
-                            <span className="h-2 w-2 rounded-full bg-primary" />
-                          </button>
+                          {/* Output handle (right) — click to start a connection.
+                              Hidden on the other cards while connecting, since each
+                              of those is then a whole-card target. */}
+                          {(!connectingFrom || connectingFrom === step.id) && (
+                            <button
+                              type="button"
+                              title="Start a connection from this agent"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                setConnectingFrom((cur) =>
+                                  cur === step.id ? null : step.id,
+                                );
+                              }}
+                              className={`absolute -right-3 top-1/2 -translate-y-1/2 z-40 h-7 w-7 rounded-full border-2 border-background shadow-md flex items-center justify-center transition hover:scale-110 cursor-pointer ${
+                                connectingFrom === step.id
+                                  ? "bg-primary ring-2 ring-primary/40 scale-110"
+                                  : "bg-primary/85 hover:bg-primary"
+                              }`}
+                            >
+                              <ArrowUpRight className="h-4 w-4 text-primary-foreground" strokeWidth={2.75} />
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <button

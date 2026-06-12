@@ -45,7 +45,8 @@ export async function POST(req: NextRequest) {
       const promises = agents.map(async (agent) => {
         const model = getModel(agent.provider, agent.model, agent.apiKey || "local", agent.baseUrl);
 
-        let agentContent = userContent;
+        // Per-agent input (its own column subset) when provided, else the shared content.
+        let agentContent = agent.userContent ?? userContent;
 
         // For rounds 2+, append all other agents' previous outputs
         if (round > 1) {

@@ -1168,6 +1168,8 @@ export async function agentNetworkRowDirect(params: {
     model: string;
     apiKey: string;
     baseUrl?: string;
+    /** Per-agent input override (card column subset); falls back to userContent. */
+    userContent?: string;
   }>;
   userContent: string;
   maxRounds: number;
@@ -1196,7 +1198,8 @@ export async function agentNetworkRowDirect(params: {
     const promises = params.agents.map(async (agent) => {
       const model = getModel(agent.provider, agent.model, agent.apiKey, agent.baseUrl);
 
-      let agentContent = params.userContent;
+      // Per-agent input (its own column subset) when provided, else the shared content.
+      let agentContent = agent.userContent ?? params.userContent;
 
       if (round > 1) {
         const othersSection = Object.entries(previousOutputs)

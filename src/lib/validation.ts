@@ -60,6 +60,9 @@ const NetworkAgentSchema = z.object({
   model: z.string().min(1),
   apiKey: z.string().default(""),
   baseUrl: z.string().optional(),
+  // Per-agent input override (the card's own column subset / document opt-out).
+  // Falls back to the shared `userContent` when omitted.
+  userContent: z.string().optional(),
 });
 
 export const AgentNetworkRowSchema = z.object({
