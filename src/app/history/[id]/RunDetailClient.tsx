@@ -121,7 +121,8 @@ export default function RunDetailClient({ id }: { id: string }) {
             const merged: Record<string, unknown> = { ...input, ...meta };
             const allKeys = Object.keys(merged);
             const TRAILING = new Set(["status", "latency_ms", "error_message"]);
-            const FINAL_KEYS = new Set(["final_output", "final_consensus", "reconciler_output", "rounds_taken", "converged"]);
+            // `reconciler_output` retained for older saved runs; new runs use `judge_output`.
+            const FINAL_KEYS = new Set(["final_output", "final_consensus", "judge_output", "reconciler_output", "rounds_taken", "converged"]);
             const originalKeys = allKeys.filter((k) => !k.endsWith("_output") && !k.endsWith("_latency_ms") && !TRAILING.has(k) && !FINAL_KEYS.has(k));
             const outputKeys = allKeys.filter((k) => k.endsWith("_output") && !FINAL_KEYS.has(k));
             const finalKeys = allKeys.filter((k) => FINAL_KEYS.has(k));

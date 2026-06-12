@@ -233,12 +233,11 @@ export default function AgentPanelPage() {
   const filesRef = useFilesRef();
   const [previewRows, setPreviewRows] = useState<Row[] | null>(null);
   const [agents, setAgents] = useSessionState<Agent[]>("agentpanel_agents", []);
-  const [workflowMode, setWorkflowMode] = useSessionState<WorkflowMode | null>("agentpanel_mode", "personalized");
+  const [workflowMode, setWorkflowMode] = useSessionState<WorkflowMode | null>("agentpanel_mode", "reconcilier");
   useEffect(() => {
-    // Personalized is the default mode: a missing/legacy-null stored value
-    // (e.g. sessions saved before personalized became the default) is coerced
-    // to "personalized" so a mode is always selected.
-    const migrated = migrateLegacyMode(workflowMode) ?? "personalized";
+    // Judge (reconcilier) is the default mode: a missing/legacy-null stored value
+    // is coerced to "reconcilier" so a mode is always selected.
+    const migrated = migrateLegacyMode(workflowMode) ?? "reconcilier";
     if (migrated !== workflowMode) setWorkflowMode(migrated);
   }, [workflowMode, setWorkflowMode]);
   const [workflowSteps, setWorkflowSteps] = useSessionState<WorkflowStep[]>("agentpanel_steps", []);
@@ -453,6 +452,29 @@ export default function AgentPanelPage() {
       ),
     );
   };
+  // Reconcilier mode — cut / restore a worker→Judge spoke. The set of cut
+  // workers lives on the Judge step (steps[0]) as `judgeExcluded`; empty means
+  // every worker feeds the Judge.
+  const cutJudgeLink = (workerId: string) => {
+    markWorkflowEdited();
+    setWorkflowSteps((prev) =>
+      prev.map((s, i) =>
+        i === 0
+          ? { ...s, judgeExcluded: Array.from(new Set([...(s.judgeExcluded ?? []), workerId])) }
+          : s,
+      ),
+    );
+  };
+  const restoreJudgeLink = (workerId: string) => {
+    markWorkflowEdited();
+    setWorkflowSteps((prev) =>
+      prev.map((s, i) =>
+        i === 0
+          ? { ...s, judgeExcluded: (s.judgeExcluded ?? []).filter((x) => x !== workerId) }
+          : s,
+      ),
+    );
+  };
   const handleModeChange = (m: WorkflowMode) => {
     if (m === workflowMode) return;
     // Stash the outgoing mode's steps so returning to it restores its own state.
@@ -593,6 +615,18 @@ export default function AgentPanelPage() {
     } else if (workflowSteps.length < 2) {
       return "Add at least 2 workflow steps";
     }
+    if (workflowMode === "reconcilier") {
+      // No worker→worker edges → classic parallel consensus, which needs ≥2
+      // independent workers. With worker→worker chaining the Judge synthesizes
+      // a single ordered pipeline, so one worker is fine.
+      const workerSteps = workflowSteps.slice(1);
+      const hasWorkerEdges = workerSteps.some((s) =>
+        (s.inputs ?? []).some((id) => workerSteps.some((w) => w.id === id)),
+      );
+      if (!hasWorkerEdges && workerSteps.length < 2) {
+        return "Add at least 2 workers (or chain them) for the Judge";
+      }
+    }
     if (hasStructuredFile && selectedCols.length === 0) return "Select at least one column";
     for (let i = 0; i < workflowSteps.length; i++) {
       const s = workflowSteps[i];
@@ -655,7 +689,7 @@ export default function AgentPanelPage() {
     const colsMode = hasStructuredFile && outputFormat === "per-row";
     const cardColumnsBlock = (step: WorkflowStep): string => {
       if (!colsMode) return "";
-      const inc = includedColumns(step, selectedCols);
+      const inc = includedColumns(step, selectedCols, previewColumns);
       if (inc.length === 0) return "";
       const subset: Row = {};
       inc.forEach((c) => (subset[c] = row[c]));
@@ -668,6 +702,19 @@ export default function AgentPanelPage() {
     const cardDocumentBlock = (step: WorkflowStep): string => {
       if (!hasUnstructuredFile || step.ignoreDocument) return "";
       return `[Document: ${documentName}]\n${userContent}`;
+    };
+
+    // Per-card model input — the card's own kept column subset (per-row mode),
+    // or undefined to fall back to the shared `userContent` (non-structured /
+    // instruction-only), or "" when the card opted out of the document. Shared
+    // by the reconcilier workers/Judge and the deliberation agents.
+    const cardUserContent = (step: WorkflowStep): string | undefined => {
+      if (hasUnstructuredFile) return step.ignoreDocument ? "" : undefined;
+      if (!colsMode) return undefined;
+      const inc = includedColumns(step, selectedCols, previewColumns);
+      const subset: Row = {};
+      inc.forEach((c) => (subset[c] = row[c]));
+      return JSON.stringify(subset);
     };
 
     if (workflowMode === "sequential") {
@@ -790,9 +837,25 @@ export default function AgentPanelPage() {
 
     if (workflowMode === "reconcilier") {
       const [reconciler, ...workers] = resolved;
-      // All workers kick off in parallel inside the dispatch — mark them together.
-      workers.forEach(({ step }) => markStepStatus(step.id, "running"));
-      markStepStatus(reconciler.step.id, "pending");
+      // By default the Judge receives every worker's output, but the user can cut
+      // individual worker→Judge spokes (tracked in `judgeExcluded` below). Workers
+      // may also be wired to each other (worker→worker edges on their `inputs`): a
+      // downstream worker receives its upstream workers' outputs and runs after
+      // them. No edges + all connected → classic parallel-workers consensus;
+      // otherwise → an ordered worker run whose connected outputs the Judge synthesizes.
+      const workerStepIds = new Set(workers.map(({ step }) => step.id));
+      const hasWorkerEdges = workers.some(({ step }) =>
+        (step.inputs ?? []).some((id) => workerStepIds.has(id)),
+      );
+      // Worker→Judge spokes the user has cut (stored on the Judge step). The
+      // Judge synthesizes only the workers still connected; the rest still RUN
+      // (their output columns appear) but aren't fed to the Judge. `judgeWorkers`
+      // keeps each worker's original index for stable "Worker N" labels.
+      const judgeExcluded = new Set(reconciler.step.judgeExcluded ?? []);
+      const judgeWorkers = workers
+        .map((w, i) => ({ ...w, i }))
+        .filter((w) => !judgeExcluded.has(w.step.id));
+      const allConnected = judgeWorkers.length === workers.length;
       // Strip the auto-generated workflow metadata (STEPS list, WORKFLOW CONFIG
       // JSON, etc.) before sending to workers. Each worker must NOT see the
       // names/personas of its peers — the model will hallucinate peer outputs.
@@ -805,29 +868,128 @@ export default function AgentPanelPage() {
       // Per-worker task list — RECONCILER-ONLY context. Goes into reconcilerPrompt
       // (which workers never see); the route appends only workerPrompt to each
       // worker's system prompt, so this stays out of worker prompts.
-      const perWorkerInstructions = workers
-        .map(({ step }, i) => {
-          const task = step.taskDescription.trim();
-          return `worker_${i + 1} instruction: ${task || "(no specific instruction)"}`;
+      const perWorkerInstructions = judgeWorkers
+        .map((w) => {
+          const task = w.step.taskDescription.trim();
+          return `worker_${w.i + 1} instruction: ${task || "(no specific instruction)"}`;
         })
         .join("\n");
       const reconcilerOnlyContext = `Per-worker tasks (each worker received only its own; this is your reference for judging compliance):\n${perWorkerInstructions}`;
       const reconcilerPrompt = userExtras
         ? `${reconcilerOnlyContext}\n\n${userExtras}`
         : reconcilerOnlyContext;
-      // Per-card column removal: each worker (and the manager) gets only its
-      // own kept columns of the original data. Undefined → the dispatch falls
-      // back to the shared `userContent` (non-structured / document input).
-      const cardUserContent = (step: WorkflowStep): string | undefined => {
-        // Unstructured doc: undefined → dispatch falls back to the shared
-        // document `userContent`; "" → this card opted out of the document.
-        if (hasUnstructuredFile) return step.ignoreDocument ? "" : undefined;
-        if (!colsMode) return undefined;
-        const inc = includedColumns(step, selectedCols);
-        const subset: Row = {};
-        inc.forEach((c) => (subset[c] = row[c]));
-        return JSON.stringify(subset);
-      };
+
+      // ── Manual worker run → Judge synthesis ─────────────────────────────
+      // Used whenever the graph isn't a clean parallel consensus: worker→worker
+      // edges exist, OR some worker→Judge spokes were cut. Workers run in
+      // topological order (a worker's input is its own data plus every upstream
+      // worker's labeled output); the Judge then synthesizes the still-connected
+      // workers' outputs in one call. Not independent raters → no kappa here.
+      if (hasWorkerEdges || !allConnected) {
+        const order = topoOrder(workers.map(({ step }) => step));
+        const byId = new Map(workers.map((w) => [w.step.id, w]));
+        const indexById = new Map(workers.map((w, i) => [w.step.id, i]));
+        const outputById = new Map<string, string>();
+        const outputs: Row = {};
+        const latencyCols: Row = {};
+        const outputRule =
+          "Return only the final result — no explanation, no markdown, no code fences.";
+
+        workers.forEach(({ step }) => markStepStatus(step.id, "pending"));
+        markStepStatus(reconciler.step.id, "pending");
+
+        let totalWorkerMs = 0;
+        for (const stepId of order) {
+          const entry = byId.get(stepId);
+          if (!entry) continue;
+          const { step, agent, prov } = entry;
+          const i = indexById.get(stepId) ?? 0;
+          const own = cardUserContent(step);
+          const blocks: string[] = [];
+          if (own) blocks.push(own);
+          for (const src of step.inputs ?? []) {
+            if (!workerStepIds.has(src)) continue;
+            const si = indexById.get(src) ?? 0;
+            const srcTask = byId.get(src)?.step.taskDescription?.trim();
+            blocks.push(
+              `[From Worker ${si + 1}]\n` +
+                `Task: ${srcTask || "(no specific task)"}\n` +
+                `Output:\n${outputById.get(src) ?? ""}`,
+            );
+          }
+          const stepInput =
+            blocks.length > 0 ? blocks.join("\n\n") : own === "" ? "" : userContent;
+
+          markStepStatus(step.id, "running");
+          const systemPrompt = [outputRule, userExtras, composeStepSystemPrompt(agent, step)]
+            .filter(Boolean)
+            .join("\n\n");
+          try {
+            const r = await dispatchProcessRow({
+              provider: agent.providerId,
+              model: agent.model,
+              apiKey: prov?.apiKey ?? "",
+              baseUrl: prov?.baseUrl,
+              systemPrompt,
+              userContent: stepInput,
+              temperature: systemSettings.temperature,
+              maxTokens: agent.maxTokens ?? systemSettings.maxTokens ?? undefined,
+            });
+            outputById.set(step.id, r.output);
+            outputs[`worker_${i + 1}_output`] = r.output;
+            latencyCols[`worker_${i + 1}_latency_ms`] = r.latency;
+            totalWorkerMs += r.latency;
+            markStepStatus(step.id, "done");
+          } catch (err) {
+            markStepStatus(step.id, "error");
+            throw err;
+          }
+        }
+
+        // Judge synthesizes the still-connected workers' outputs, labeled by
+        // their original card number.
+        markStepStatus(reconciler.step.id, "running");
+        const judgeBlocks = judgeWorkers.map((w) => {
+          const task = w.step.taskDescription.trim();
+          return `[Worker ${w.i + 1}]${task ? ` (task: ${task})` : ""}\n${outputById.get(w.step.id) ?? ""}`;
+        });
+        const judgeInput = `Worker outputs to synthesize:\n\n${judgeBlocks.join("\n\n")}`;
+        const judgeSystem = [outputRule, reconcilerPrompt, composeStepSystemPrompt(reconciler.agent, reconciler.step)]
+          .filter(Boolean)
+          .join("\n\n");
+        let judgeMs = 0;
+        try {
+          const jr = await dispatchProcessRow({
+            provider: reconciler.agent.providerId,
+            model: reconciler.agent.model,
+            apiKey: reconciler.prov?.apiKey ?? "",
+            baseUrl: reconciler.prov?.baseUrl,
+            systemPrompt: judgeSystem,
+            userContent: judgeInput,
+            temperature: systemSettings.temperature,
+            maxTokens: reconciler.agent.maxTokens ?? systemSettings.maxTokens ?? undefined,
+          });
+          outputs["judge_output"] = jr.output;
+          latencyCols["judge_latency_ms"] = jr.latency;
+          judgeMs = jr.latency;
+          markStepStatus(reconciler.step.id, "done");
+        } catch (err) {
+          markStepStatus(reconciler.step.id, "error");
+          throw err;
+        }
+        return {
+          ...baseRow,
+          ...outputs,
+          ...latencyCols,
+          status: "success",
+          latency_ms: totalWorkerMs + judgeMs,
+        };
+      }
+
+      // ── No worker→worker edges: classic parallel-workers consensus ──────
+      // All workers kick off in parallel inside the dispatch — mark them together.
+      workers.forEach(({ step }) => markStepStatus(step.id, "running"));
+      markStepStatus(reconciler.step.id, "pending");
       let result;
       try {
         result = await dispatchConsensusRow({
@@ -874,9 +1036,9 @@ export default function AgentPanelPage() {
           latencyCols[`worker_${i + 1}_latency_ms`] = Math.round(w.latency * 1000);
         }
       });
-      outputs["reconciler_output"] = result.reconcilerOutput;
+      outputs["judge_output"] = result.reconcilerOutput;
       if (typeof result.reconcilerLatency === "number" && Number.isFinite(result.reconcilerLatency)) {
-        latencyCols["reconciler_latency_ms"] = Math.round(result.reconcilerLatency * 1000);
+        latencyCols["judge_latency_ms"] = Math.round(result.reconcilerLatency * 1000);
       }
       // Wall-clock per row: workers run in parallel, then reconciler runs sequentially.
       // Latencies from ConsensusResult are in seconds; convert to ms.
@@ -886,7 +1048,8 @@ export default function AgentPanelPage() {
       return { ...baseRow, ...outputs, ...latencyCols, status: "success", latency_ms: latencyMs };
     }
 
-    // deliberation
+    // deliberation — each agent's round-1 input is its own kept column subset
+    // (via the shared cardUserContent); undefined falls back to userContent.
     resolved.forEach(({ step }) => markStepStatus(step.id, "running"));
     let result;
     try {
@@ -898,6 +1061,7 @@ export default function AgentPanelPage() {
         model: agent.model,
         apiKey: prov?.apiKey ?? "",
         baseUrl: prov?.baseUrl,
+        userContent: cardUserContent(step),
       })),
       userContent,
       maxRounds: delibSettings.maxRounds,
@@ -961,7 +1125,8 @@ export default function AgentPanelPage() {
     if (batch.results.length === 0) return batch.results;
     const allKeys = Object.keys(batch.results[0]);
     const meta = new Set(["status", "latency_ms", "error_msg"]);
-    const FINAL_KEYS = new Set(["final_output", "final_consensus", "reconciler_output", "rounds_taken", "converged"]);
+    // `reconciler_output` retained for older saved runs; new runs use `judge_output`.
+    const FINAL_KEYS = new Set(["final_output", "final_consensus", "judge_output", "reconciler_output", "rounds_taken", "converged"]);
     const originalKeys = allKeys.filter((k) => !k.endsWith("_output") && !k.endsWith("_latency_ms") && !meta.has(k) && !FINAL_KEYS.has(k));
     const outputKeys = allKeys.filter((k) => k.endsWith("_output") && !FINAL_KEYS.has(k));
     const finalKeys = allKeys.filter((k) => FINAL_KEYS.has(k));
@@ -1155,7 +1320,7 @@ export default function AgentPanelPage() {
     // so clear it explicitly or the workflow cards keep showing the old data columns.
     setSelectedCols([]);
     setAgents([]);
-    setWorkflowMode("personalized");
+    setWorkflowMode("reconcilier");
     // Empty pool → empty workflow; the mirror effect repopulates cards as the
     // user adds agents (until they manually edit the workflow).
     setWorkflowSteps([]);
@@ -1364,7 +1529,10 @@ export default function AgentPanelPage() {
               onAddToLine={addStepToLine}
               onConnect={connectSteps}
               onDisconnect={disconnectSteps}
+              onCutJudge={cutJudgeLink}
+              onRestoreJudge={restoreJudgeLink}
               selectedCols={selectedCols}
+              allCols={previewColumns}
               documentInput={hasUnstructuredFile ? documentName : undefined}
               lineCount={personalizedLineCount}
             />

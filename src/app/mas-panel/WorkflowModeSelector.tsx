@@ -13,20 +13,20 @@ interface Option {
 
 const OPTIONS: Option[] = [
   {
-    id: "personalized",
-    title: "Individual / Personalized",
-    subtitle: "Build it yourself",
-    description:
-      "Place agents freely and draw your own connections. Each agent feeds the ones you link it to. Best when your process doesn't fit the other templates.",
-    Icon: Workflow,
-  },
-  {
     id: "reconcilier",
     title: "Judge",
     subtitle: "Workers answer in parallel, one judge decides",
     description:
       "Every worker tackles the same task on its own, then a single judge agent reviews all their answers and produces the final result. Best for a vetted, consensus answer.",
     Icon: Gavel,
+  },
+  {
+    id: "personalized",
+    title: "Individual / Personalized",
+    subtitle: "Build it yourself",
+    description:
+      "Place agents freely and draw your own connections. Each agent feeds the ones you link it to. Best when your process doesn't fit the other templates.",
+    Icon: Workflow,
   },
   {
     id: "sequential",

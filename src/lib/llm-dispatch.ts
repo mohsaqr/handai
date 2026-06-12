@@ -223,6 +223,8 @@ export async function dispatchAgentNetworkRow(params: {
     model: string;
     apiKey: string;
     baseUrl?: string;
+    /** Per-agent input override (card column subset); falls back to userContent. */
+    userContent?: string;
   }>;
   userContent: string;
   maxRounds: number;

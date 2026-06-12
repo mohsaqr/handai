@@ -30,14 +30,21 @@ interface Props {
   showIndex?: boolean;            // Hide the numbered circle badge (e.g. for reconcilier)
   status?: StepStatus;            // Coloured ring during batch processing
   compact?: boolean;              // Tighter padding + smaller avatar — used by Sequential layout
+  /** Stripped-down card: no persona/knowledge overrides section and no
+   *  category/personality/communication/response tags. Pairs with `compact` for
+   *  the Judge mode's small worker cards. */
+  minimal?: boolean;
   agents: Agent[];
   onUpdate: (step: WorkflowStep) => void;
   onRemove: () => void;
   canRemove: boolean;
   /** Personalized & Sequential — render the editable Input DATA chip row. */
   showInputData?: boolean;
-  /** Page-level selected columns available to this card. */
+  /** Page-level selected columns ("define columns") — shown as chips by default. */
   inputCols?: string[];
+  /** Every column in the uploaded file. Columns not in `inputCols` are offered in
+   *  the "+ column" picker so the card can pull in any uploaded column. */
+  allCols?: string[];
   /** Personalized — connected upstream sources feeding this card. */
   connectedSources?: { id: string; label: string }[];
   /** Sequential — label of the previous step (e.g. "Step 1"), or null. */
@@ -98,24 +105,48 @@ export function WorkflowStepCard({
   showIndex = true,
   status,
   compact = false,
+  minimal = false,
   agents,
   onUpdate,
   onRemove,
   canRemove,
   showInputData = false,
   inputCols = [],
+  allCols = [],
   connectedSources = [],
   prevStepLabel = null,
   staticSources = [],
   documentInput,
 }: Props) {
+  // Columns: defaults come from the global selection (`inputCols`); the picker
+  // can add ANY uploaded column (`allCols`), not just the defined ones.
+  const selected = inputCols;
+  const uploaded = allCols.length > 0 ? allCols : inputCols;
   const excluded = new Set(step.excludedCols ?? []);
-  const keptCols = inputCols.filter((c) => !excluded.has(c));
-  const removedCols = inputCols.filter((c) => excluded.has(c));
+  const extra = new Set(step.extraCols ?? []);
+  // Active on this card = an explicitly-added extra, OR a selected default not
+  // removed. Ordered by the uploaded-file column order.
+  const isActive = (c: string) => extra.has(c) || (selected.includes(c) && !excluded.has(c));
+  const keptCols = uploaded.filter(isActive);
+  // "+ column" offers every uploaded column not currently active — removed
+  // defaults AND columns outside the global selection.
+  const availableCols = uploaded.filter((c) => !isActive(c));
   const removeCol = (c: string) =>
-    onUpdate({ ...step, excludedCols: [...(step.excludedCols ?? []), c] });
-  const restoreCol = (c: string) =>
-    onUpdate({ ...step, excludedCols: (step.excludedCols ?? []).filter((x) => x !== c) });
+    onUpdate({
+      ...step,
+      extraCols: (step.extraCols ?? []).filter((x) => x !== c),
+      excludedCols: selected.includes(c)
+        ? Array.from(new Set([...(step.excludedCols ?? []), c]))
+        : (step.excludedCols ?? []),
+    });
+  const addCol = (c: string) =>
+    onUpdate({
+      ...step,
+      excludedCols: (step.excludedCols ?? []).filter((x) => x !== c),
+      extraCols: selected.includes(c)
+        ? (step.extraCols ?? [])
+        : Array.from(new Set([...(step.extraCols ?? []), c])),
+    });
   const removeSource = (srcId: string) =>
     onUpdate({ ...step, inputs: (step.inputs ?? []).filter((s) => s !== srcId) });
 
@@ -141,14 +172,14 @@ export function WorkflowStepCard({
       )}
 
       <div
-        className={`shrink-0 ${compact ? "w-28 h-28" : "w-32 h-32"} rounded-lg overflow-hidden flex items-center justify-center bg-muted/40 ${
+        className={`shrink-0 ${minimal ? "w-36 h-36" : compact ? "w-36 h-36" : "w-32 h-32"} rounded-lg overflow-hidden flex items-center justify-center bg-muted/40 ${
           typeof avatar === "number" ? "border" : "border border-dashed border-muted-foreground/40"
         }`}
       >
         {typeof avatar === "number" ? (
           <div className="w-full h-full" style={avatarStyle(avatar)} aria-hidden />
         ) : (
-          <User className={compact ? "h-12 w-12 text-muted-foreground/60" : "h-14 w-14 text-muted-foreground/60"} />
+          <User className={minimal ? "h-16 w-16 text-muted-foreground/60" : compact ? "h-16 w-16 text-muted-foreground/60" : "h-14 w-14 text-muted-foreground/60"} />
         )}
       </div>
 
@@ -164,8 +195,9 @@ export function WorkflowStepCard({
           </div>
         </div>
 
-      <div className="space-y-1">
-        <Label className="text-[10px] text-muted-foreground">Agent</Label>
+      {/* pr-7 keeps the agent dropdown clear of the top-right "X" remove button. */}
+      <div className="space-y-1 pr-7">
+        {!minimal && <Label className="text-[10px] text-muted-foreground">Agent</Label>}
         <Select
           value={step.agentId ?? ""}
           onValueChange={(v) => {
@@ -189,10 +221,16 @@ export function WorkflowStepCard({
             });
           }}
         >
-          <SelectTrigger className="h-8 text-xs">
+          {/* Force the selected value to truncate with an ellipsis so a long
+              agent name (e.g. "BarcelonaRe…") can't push the trigger outside the
+              card. The default value box is a flex row that clips without "…", so
+              we override it to a single-line block + truncate. position="popper"
+              keeps the menu anchored below the trigger — the default item-aligned
+              positioning misbehaves on a width-constrained trigger. */}
+          <SelectTrigger className="h-8 text-xs w-full min-w-0 *:data-[slot=select-value]:!block *:data-[slot=select-value]:truncate *:data-[slot=select-value]:min-w-0">
             <SelectValue placeholder="Pick an agent…" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent position="popper">
             {agents.length === 0 && (
               <SelectItem value="__none" disabled className="text-xs">
                 No agents configured
@@ -206,16 +244,8 @@ export function WorkflowStepCard({
           </SelectContent>
         </Select>
         {assignedAgent && (
-          <div className="space-y-1 pt-0.5">
-            <div className="text-[11px] text-muted-foreground font-mono truncate">
-              {providerLabel(assignedAgent.providerId)} / {assignedAgent.model || "—"}
-            </div>
-            <div className="flex flex-wrap gap-1 text-[10px]">
-              {assignedAgent.category && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Category: <strong className="font-semibold text-foreground">{assignedAgent.category}</strong></span>}
-              {assignedAgent.personalityStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Personality: <strong className="font-semibold text-foreground">{assignedAgent.personalityStyle}</strong></span>}
-              {assignedAgent.communicationStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Communication: <strong className="font-semibold text-foreground">{assignedAgent.communicationStyle}</strong></span>}
-              {assignedAgent.responseStyle && <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Response: <strong className="font-semibold text-foreground">{assignedAgent.responseStyle}</strong></span>}
-            </div>
+          <div className="text-[11px] text-muted-foreground font-mono truncate pt-0.5">
+            {providerLabel(assignedAgent.providerId)} / {assignedAgent.model || "—"}
           </div>
         )}
       </div>
@@ -269,18 +299,18 @@ export function WorkflowStepCard({
                 title="Send the uploaded document's text to this card"
               />
             )}
-            {removedCols.length > 0 && (
+            {availableCols.length > 0 && (
               <details className="relative inline-block text-[10px]">
                 <summary className="list-none cursor-pointer inline-flex items-center gap-1 rounded-md border border-dashed px-1.5 py-0.5 text-muted-foreground hover:text-foreground">
                   <Plus className="h-3 w-3" /> column
                 </summary>
                 <div className="absolute left-0 z-30 mt-1 max-h-48 min-w-[140px] overflow-y-auto rounded-md border bg-background p-1 shadow-md">
-                  {removedCols.map((c) => (
+                  {availableCols.map((c) => (
                     <button
                       key={c}
                       type="button"
                       onClick={(e) => {
-                        restoreCol(c);
+                        addCol(c);
                         e.currentTarget.closest("details")?.removeAttribute("open");
                       }}
                       className="block w-full truncate rounded px-2 py-1 text-left font-mono hover:bg-muted"
@@ -304,6 +334,7 @@ export function WorkflowStepCard({
         </div>
       )}
 
+      {!minimal && (
       <details className="text-xs">
         <summary className="cursor-pointer text-muted-foreground hover:text-foreground py-0.5">
           Persona + knowledge overrides
@@ -331,6 +362,7 @@ export function WorkflowStepCard({
           </div>
         </div>
       </details>
+      )}
       </div>
     </div>
   );

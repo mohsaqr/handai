@@ -41,10 +41,24 @@ export interface WorkflowStep {
    */
   inputs?: string[];
   /**
-   * Personalized & Sequential — selected columns the user removed from THIS
-   * card's Input DATA. Card input uses (global selected columns) minus these.
+   * Default (selected) columns the user removed from THIS card's Input DATA.
+   * Card input = (global selected columns − excludedCols) + extraCols.
    */
   excludedCols?: string[];
+  /**
+   * Uploaded columns the user added to THIS card beyond the global selection
+   * (via the "+ column" picker). These are NOT in the global selected set —
+   * they let a card pull in any column from the uploaded file, not just the
+   * globally-defined ones.
+   */
+  extraCols?: string[];
+  /**
+   * Reconcilier mode only — stored on the JUDGE step (`steps[0]`). Worker ids
+   * whose output the user has cut from the Judge (scissored that worker→Judge
+   * spoke). Absent/empty → every worker feeds the Judge (the default); new
+   * workers auto-connect since they aren't listed here.
+   */
+  judgeExcluded?: string[];
   /**
    * Sequential only — when true this step does NOT receive the previous step's
    * output (the removable "Step N-1 output" chip). Default false.
@@ -58,10 +72,20 @@ export interface WorkflowStep {
   ignoreDocument?: boolean;
 }
 
-/** Columns this card actually feeds the model = global selected minus excluded. */
-export function includedColumns(step: WorkflowStep, allCols: string[]): string[] {
-  const ex = new Set(step.excludedCols ?? []);
-  return allCols.filter((c) => !ex.has(c));
+/**
+ * Columns this card actually feeds the model: the global selected columns minus
+ * the card's excluded ones, plus any extra columns the card pulled in from the
+ * uploaded file. Ordered by the uploaded-file column order (`allCols`).
+ */
+export function includedColumns(
+  step: WorkflowStep,
+  selectedCols: string[],
+  allCols: string[],
+): string[] {
+  const excluded = new Set(step.excludedCols ?? []);
+  const extra = new Set(step.extraCols ?? []);
+  const selected = new Set(selectedCols);
+  return allCols.filter((c) => extra.has(c) || (selected.has(c) && !excluded.has(c)));
 }
 
 export interface DeliberationSettings {
@@ -91,6 +115,7 @@ export function emptyStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
     slot: 0,
     inputs: [],
     excludedCols: [],
+    extraCols: [],
     ignorePrevOutput: false,
     ignoreDocument: false,
     ...overrides,
