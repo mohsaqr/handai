@@ -45,7 +45,7 @@ export default function RootLayout({
                       Professor of Computer Science &middot; University of Eastern Finland
                     </div>
                     <div className="text-center sm:text-right whitespace-nowrap">
-                      &copy; 2026 All rights reserved &middot; Last updated Mai 2026
+                      &copy; 2026 All rights reserved &middot; Last updated June 2026
                     </div>
                   </div>
                 </footer>
