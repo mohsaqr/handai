@@ -89,20 +89,11 @@ function pickJudgeIndex(agents: Agent[]): number {
   return 0;
 }
 
-// Sequential mode — best-guess pipeline order by role: plan → gather → produce →
-// combine → review → decide. Roles not in the list keep their pool order and sit
-// after the known ones (the index tiebreaker keeps the sort stable).
-const SEQUENTIAL_ROLE_ORDER = ["Manager", "Researcher", "Worker", "Synthesizer", "Critic", "Judge"];
-function sequentialRank(role: string): number {
-  const i = SEQUENTIAL_ROLE_ORDER.indexOf(role);
-  return i === -1 ? SEQUENTIAL_ROLE_ORDER.length : i;
-}
-
 // Default workflow = one card per configured agent. Personalized lays them across
 // lines of MAX_AGENTS_PER_LINE; Judge mode promotes the best-matching agent (see
-// pickJudgeIndex) to the top card; Sequential orders by the role pipeline above;
-// Deliberation keeps pool order. This is what makes the workflow mirror the
-// Configure Agents pool — 2 agents → 2 cards, etc.
+// pickJudgeIndex) to the top card; Sequential and Deliberation keep the Configure
+// Agents pool order. This is what makes the workflow mirror the pool — 2 agents →
+// 2 cards, etc.
 function deriveStepsFromPool(mode: WorkflowMode, agents: Agent[]): WorkflowStep[] {
   if (mode === "reconcilier") {
     // Always show the judge card by default, even with an empty pool (the top
@@ -112,13 +103,8 @@ function deriveStepsFromPool(mode: WorkflowMode, agents: Agent[]): WorkflowStep[
     const ordered = [agents[ji], ...agents.filter((_, i) => i !== ji)];
     return ordered.map((a) => emptyStep({ agentId: a.id }));
   }
-  if (mode === "sequential") {
-    const ordered = agents
-      .map((a, i) => ({ a, i }))
-      .sort((x, y) => sequentialRank(x.a.role) - sequentialRank(y.a.role) || x.i - y.i)
-      .map(({ a }) => a);
-    return ordered.map((a) => emptyStep({ agentId: a.id }));
-  }
+  // Sequential, Deliberation: keep the pool order so step N == the Nth agent the
+  // user configured. (Personalized adds line/slot for its grid placement.)
   return agents.map((a, i) =>
     mode === "personalized"
       ? emptyStep({
@@ -128,6 +114,32 @@ function deriveStepsFromPool(mode: WorkflowMode, agents: Agent[]): WorkflowStep[
         })
       : emptyStep({ agentId: a.id }),
   );
+}
+
+// Judge (reconcilier), Individual (personalized) and Deliberation cards are a pure
+// live projection of the Configure Agents pool: you add/remove agents there, never
+// on the canvas (no "add" button, no per-card agent picker). This keeps the step
+// list in lockstep with the pool while PRESERVING each surviving card's edits
+// (connections via `inputs`, cut Judge spokes via `judgeExcluded`, per-card
+// columns, persona): keep every step whose agent still exists, drop steps whose
+// agent was deleted, append a fresh card for every pool agent not yet represented,
+// then clean up edges that pointed at dropped steps. All three modes lay agents
+// out radially by order, so new agents simply append (the Judge stays at index 0).
+// Runs only when the pool changes (the effect depends on `agents`), so it never
+// clobbers a connection the user just drew.
+function reconcilePoolSteps(agents: Agent[], prev: WorkflowStep[]): WorkflowStep[] {
+  const poolIds = new Set(agents.map((a) => a.id));
+  const kept = prev.filter((s) => s.agentId && poolIds.has(s.agentId));
+  const represented = new Set(kept.map((s) => s.agentId));
+  const missing = agents.filter((a) => !represented.has(a.id));
+  const next = [...kept, ...missing.map((a) => emptyStep({ agentId: a.id }))];
+
+  const stepIds = new Set(next.map((s) => s.id));
+  return next.map((s) => ({
+    ...s,
+    inputs: (s.inputs ?? []).filter((id) => stepIds.has(id)),
+    judgeExcluded: (s.judgeExcluded ?? []).filter((id) => stepIds.has(id)),
+  }));
 }
 
 // "?" icon next to a step heading — hover/focus shows what that step does.
@@ -178,14 +190,14 @@ function AgentCard({
       )}
 
       <div
-        className={`shrink-0 w-24 h-24 rounded-lg overflow-hidden bg-muted/40 flex items-center justify-center ${
+        className={`shrink-0 w-32 h-32 rounded-lg overflow-hidden bg-muted/40 flex items-center justify-center ${
           typeof agent.avatar === "number" ? "border" : "border border-dashed border-muted-foreground/40"
         }`}
       >
         {typeof agent.avatar === "number" ? (
           <div className="w-full h-full" style={avatarStyle(agent.avatar)} aria-hidden />
         ) : (
-          <User className="h-10 w-10 text-muted-foreground/60" />
+          <User className="h-14 w-14 text-muted-foreground/60" />
         )}
       </div>
 
@@ -193,10 +205,7 @@ function AgentCard({
         <div className="space-y-1 pr-6">
           <div className="text-sm font-semibold truncate">
             {agent.name ? (
-              <>
-                {agent.name}
-                {agent.role && <span className="text-muted-foreground font-normal"> ({agent.role})</span>}
-              </>
+              agent.name
             ) : (
               <span className="text-muted-foreground italic">Unnamed agent</span>
             )}
@@ -303,6 +312,18 @@ export default function AgentPanelPage() {
   // after hydration so it doesn't clobber persisted/restored state on first paint.
   useEffect(() => {
     if (!hydrationDone || !workflowMode) return;
+    // Judge / Individual / Deliberation: cards always mirror the Configure Agents
+    // pool (add there, not on the canvas), so reconcile on every pool change while
+    // keeping each surviving card's edits — even after the workflow has been edited.
+    if (
+      workflowMode === "reconcilier" ||
+      workflowMode === "personalized" ||
+      workflowMode === "deliberation"
+    ) {
+      setWorkflowSteps((prev) => reconcilePoolSteps(agents, prev));
+      return;
+    }
+    // Other modes keep the freeze-on-edit behavior.
     if (editedModes[workflowMode]) return;
     setWorkflowSteps(() => deriveStepsFromPool(workflowMode, agents));
   }, [hydrationDone, workflowMode, agents, editedModes, setWorkflowSteps]);
@@ -311,24 +332,23 @@ export default function AgentPanelPage() {
     setAgents((prev) => prev.map((a) => (a.id === id ? updated : a)));
   };
 
-  // Judge (reconcilier) mode freezes its layout once edited, so a newly added
-  // pool agent would otherwise never show up as a worker. Append a worker card
-  // for the new agent to the EDITED reconcilier workflow — active or stashed —
-  // without touching any existing card, so prior edits (cut Judge links, worker
-  // chains, the chosen Judge, per-card columns) are preserved. An UNedited
-  // reconcilier workflow is left to the pool-mirror effect, which already
-  // re-derives to include the new agent (so we never double-add).
-  const addWorkerForNewAgent = (agentId: string) => {
-    if (workflowMode === "reconcilier" && editedModes.reconcilier) {
+  // Sequential is a manual pipeline (freeze-on-edit, repeats allowed), so it's NOT
+  // pool-mirrored like the radial modes. To still surface a newly added pool agent,
+  // append a step for it at the END of an EDITED sequential workflow — active or
+  // stashed — leaving the manually-ordered steps untouched. An UNedited sequential
+  // workflow is left to the pool-mirror effect, which re-derives in pool order and
+  // already includes the new agent (so we never double-add).
+  const appendSequentialStep = (agentId: string) => {
+    if (workflowMode === "sequential") {
+      if (!editedModes.sequential) return; // mirror effect handles it
       setWorkflowSteps((prev) =>
         prev.some((s) => s.agentId === agentId) ? prev : [...prev, emptyStep({ agentId })],
       );
-    } else if (editedModes.reconcilier) {
-      // Reconcilier isn't the active mode but has been edited — patch its stashed steps.
+    } else if (editedModes.sequential) {
       setSavedModeSteps((prev) => {
-        const steps = prev.reconcilier;
+        const steps = prev.sequential;
         if (steps === undefined || steps.some((s) => s.agentId === agentId)) return prev;
-        return { ...prev, reconcilier: [...steps, emptyStep({ agentId })] };
+        return { ...prev, sequential: [...steps, emptyStep({ agentId })] };
       });
     }
   };
@@ -355,7 +375,7 @@ export default function AgentPanelPage() {
       const copy = normalizeAgent({ ...src, id: newId, name });
       return [...prev.slice(0, idx + 1), copy, ...prev.slice(idx + 1)];
     });
-    addWorkerForNewAgent(newId);
+    appendSequentialStep(newId);
   };
   const removeAgent = (id: string) => {
     setAgents((prev) => prev.filter((a) => a.id !== id));
@@ -424,17 +444,29 @@ export default function AgentPanelPage() {
   };
   // Configure Agents — a role button adds a preset agent to the pool, pre-filled
   // with a role-appropriate name, category, task, styles, and avatar (all fully
-  // editable). In most modes the user then assigns pool agents to steps below;
-  // the one exception is an already-edited Judge workflow, where the new agent is
-  // auto-appended as a worker (addWorkerForNewAgent) so it still appears.
+  // editable). Judge / Individual / Deliberation cards mirror the pool
+  // automatically (the reconcile effect); Sequential appends the new agent at the
+  // end of its pipeline (appendSequentialStep) — so the new agent surfaces in
+  // every mode with no further action.
   const addRoleAgent = (roleKey: string) => {
     const preset = AGENT_ROLE_PRESETS.find((p) => p.key === roleKey);
     if (!preset) return;
     const newId = makeAgentId();
     setAgents((prev) => {
+      // Name agents after their role with a per-role counter — "Worker 1",
+      // "Worker 2", … The number is one past the highest existing "<role> N" so
+      // it never collides even after middle agents are removed. (role itself is
+      // kept as an internal ordering hint for Judge/Sequential defaults; it's no
+      // longer separately shown or edited.)
+      const prefix = `${preset.label} `;
+      const maxN = prev.reduce((m, a) => {
+        if (!a.name.startsWith(prefix)) return m;
+        const n = parseInt(a.name.slice(prefix.length), 10);
+        return Number.isInteger(n) && n > m ? n : m;
+      }, 0);
       const overrides: Partial<Agent> = {
         id: newId,
-        name: `Agent ${prev.length + 1}`,
+        name: `${preset.label} ${maxN + 1}`,
         role: preset.label,
         providerId: firstId,
         model: firstModel,
@@ -450,7 +482,7 @@ export default function AgentPanelPage() {
       if (preset.avatar !== undefined) overrides.avatar = preset.avatar;
       return [...prev, emptyAgent(overrides)];
     });
-    addWorkerForNewAgent(newId);
+    appendSequentialStep(newId);
   };
   // Edge from→to is stored as to.inputs containing from. Reject self-links,
   // duplicates, and anything that would introduce a cycle.
@@ -1456,7 +1488,7 @@ export default function AgentPanelPage() {
     <div className="space-y-0 pb-16">
       <div className="pb-6 flex items-start justify-between">
         <div className="space-y-1 max-w-3xl">
-          <h1 className="text-4xl font-bold">MAS Panel</h1>
+          <h1 className="text-4xl font-bold">Multi-Agent Workflows</h1>
           <p className="text-muted-foreground text-sm">Unified multi-agent workflows — Judge, Sequential, or Deliberation.</p>
         </div>
         <Button variant="destructive" className="gap-2 px-5" onClick={handleStartOver}>
@@ -1578,7 +1610,7 @@ export default function AgentPanelPage() {
               {workflowMode === "sequential" && "Steps run in order — each feeds the next."}
               {workflowMode === "reconcilier" && "Workers run in parallel; the top judge card synthesizes their outputs."}
               {workflowMode === "deliberation" && "Agents deliberate over rounds, each seeing the others' outputs."}
-              {workflowMode === "personalized" && "Add agents in lines, then connect them: click an output dot, then another agent. Runs in dependency order."}
+              {workflowMode === "personalized" && "Agents come from Configure Agents. Connect them: click a card’s “Connect” button, then another agent. Runs in dependency order."}
             </p>
             <WorkflowLayout
               mode={workflowMode}
@@ -1650,6 +1682,7 @@ export default function AgentPanelPage() {
           agent={configuringAgent}
           onSave={(updated) => updateAgent(configuringAgent.id, updated)}
           enabledProviders={enabledProviders}
+          existingNames={agents.filter((a) => a.id !== configuringAgent.id).map((a) => a.name)}
         />
       )}
     </div>

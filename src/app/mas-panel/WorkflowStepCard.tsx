@@ -56,19 +56,32 @@ interface Props {
    *  relies on the original input shows a document chip instead of "no input",
    *  since the extracted file text IS what such a card receives. */
   documentInput?: string;
+  /** Judge / Personalized modes — the card is a fixed projection of a
+   *  Configure-Agents agent, so the agent picker is replaced by static text
+   *  (you change agents in Configure Agents, not here). */
+  lockAgent?: boolean;
+  /** Judge mode — drop the positional "Worker N" / "Judge" heading and show the
+   *  agent's name in a prominent box instead (the name IS the visual label). */
+  boxedName?: boolean;
+  /** Tint the card so it stands apart from its peers (used for the Judge card). */
+  accent?: boolean;
 }
 
 function Chip({
   text,
   onRemove,
   icon,
+  bg = "bg-muted",
 }: {
   text: string;
   onRemove: () => void;
   icon?: ReactNode;
+  /** Chip background classes. Overridden to a white/bordered look on the
+   *  accented Judge card, where bg-muted would blend into the tinted card. */
+  bg?: string;
 }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+    <span className={`inline-flex items-center gap-1 rounded-md ${bg} px-1.5 py-0.5 text-[10px] text-muted-foreground`}>
       {icon}
       <span className="font-mono truncate max-w-[120px]">{text}</span>
       <button
@@ -117,6 +130,9 @@ export function WorkflowStepCard({
   prevStepLabel = null,
   staticSources = [],
   documentInput,
+  lockAgent = false,
+  boxedName = false,
+  accent = false,
 }: Props) {
   // Columns: defaults come from the global selection (`inputCols`); the picker
   // can add ANY uploaded column (`allCols`), not just the defined ones.
@@ -158,9 +174,12 @@ export function WorkflowStepCard({
 
   const assignedAgent = agents.find((a) => a.id === step.agentId);
   const avatar = assignedAgent?.avatar;
+  // On the accented (Judge) card, bg-muted chips blend into the tint — give the
+  // Input DATA chips a white, bordered look so they stay legible.
+  const chipBg = accent ? "bg-background border border-border" : "bg-muted";
 
   return (
-    <div className={`border rounded-lg ${compact ? "p-2 gap-3" : "p-3 gap-5"} bg-background relative transition-shadow flex h-full ${statusRing}`}>
+    <div className={`border rounded-lg ${compact ? "p-2 gap-3" : "p-3 gap-5"} ${accent ? "bg-primary/5 border-primary/30" : "bg-background"} relative transition-shadow flex h-full ${statusRing}`}>
       {canRemove && (
         <button
           onClick={onRemove}
@@ -184,20 +203,43 @@ export function WorkflowStepCard({
       </div>
 
       <div className={`flex-1 min-w-0 ${compact ? "space-y-1" : "space-y-2"}`}>
-        <div className="flex items-center gap-2 pr-6">
-          {showIndex && (
-            <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center shrink-0">
-              {index + 1}
+        {/* Positional heading ("Worker N" / "Judge"). Hidden in boxedName mode —
+            there the agent's own name in the box below is the only label. */}
+        {!boxedName && (
+          <div className="flex items-center gap-2 pr-6">
+            {showIndex && (
+              <div className="h-6 w-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center shrink-0">
+                {index + 1}
+              </div>
+            )}
+            <div className="text-sm font-semibold truncate">
+              {label ?? `Step ${index + 1}`}
             </div>
-          )}
-          <div className="text-sm font-semibold truncate">
-            {label ?? `Step ${index + 1}`}
           </div>
-        </div>
+        )}
 
       {/* pr-7 keeps the agent dropdown clear of the top-right "X" remove button. */}
       <div className="space-y-1 pr-7">
         {!minimal && <Label className="text-[10px] text-muted-foreground">Agent</Label>}
+        {lockAgent ? (
+          // Fixed projection of a Configure-Agents agent — no picker. Shows the
+          // agent's name (or an "unassigned" hint if its agent was deleted, which
+          // the pool-reconcile should normally prevent). boxedName wraps it in a
+          // prominent box so the name reads as the card's visual label.
+          boxedName ? (
+            <div className="rounded-md border bg-background/70 px-2 py-1.5 text-sm font-semibold truncate text-center">
+              {assignedAgent?.name || (
+                <span className="text-muted-foreground italic font-normal">unassigned</span>
+              )}
+            </div>
+          ) : (
+            <div className="h-8 flex items-center text-sm font-medium truncate">
+              {assignedAgent?.name || (
+                <span className="text-muted-foreground italic font-normal">unassigned</span>
+              )}
+            </div>
+          )
+        ) : (
         <Select
           value={step.agentId ?? ""}
           onValueChange={(v) => {
@@ -238,11 +280,12 @@ export function WorkflowStepCard({
             )}
             {agents.map((a) => (
               <SelectItem key={a.id} value={a.id} className="text-xs">
-                {a.name || "(unnamed)"}{a.role ? ` (${a.role})` : ""}
+                {a.name || "(unnamed)"}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        )}
         {assignedAgent && (
           <div className="text-[11px] text-muted-foreground font-mono truncate pt-0.5">
             {providerLabel(assignedAgent.providerId)} / {assignedAgent.model || "—"}
@@ -255,11 +298,12 @@ export function WorkflowStepCard({
           <Label className="text-[10px] text-muted-foreground">Input DATA</Label>
           <div className="flex flex-wrap gap-1 items-center">
             {keptCols.map((c) => (
-              <Chip key={`col-${c}`} text={c} onRemove={() => removeCol(c)} />
+              <Chip key={`col-${c}`} text={c} bg={chipBg} onRemove={() => removeCol(c)} />
             ))}
             {documentInput && !step.ignoreDocument && (
               <Chip
                 text={documentInput}
+                bg={chipBg}
                 icon={<FileText className="h-3 w-3 shrink-0" />}
                 onRemove={() => onUpdate({ ...step, ignoreDocument: true })}
               />
@@ -268,13 +312,14 @@ export function WorkflowStepCard({
               <Chip
                 key={`src-${s.id}`}
                 text={`${s.label} output`}
+                bg={chipBg}
                 onRemove={() => removeSource(s.id)}
               />
             ))}
             {staticSources.map((label) => (
               <span
                 key={`static-${label}`}
-                className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                className={`inline-flex items-center rounded-md ${chipBg} px-1.5 py-0.5 text-[10px] text-muted-foreground`}
                 title="Always provided to this card"
               >
                 <span className="font-mono truncate max-w-[140px]">{label}</span>
@@ -283,6 +328,7 @@ export function WorkflowStepCard({
             {prevStepLabel && !step.ignorePrevOutput && (
               <Chip
                 text={`${prevStepLabel} output`}
+                bg={chipBg}
                 onRemove={() => onUpdate({ ...step, ignorePrevOutput: true })}
               />
             )}

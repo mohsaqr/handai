@@ -1,5 +1,5 @@
 // Sample reconciler prompts — mirrors SAMPLE_RECONCILER_PROMPTS in /model-comparison.
-// Used by the Reconcilier-mode reconciler card in MAS Panel.
+// Used by the Reconcilier-mode reconciler card in Multi-Agent Workflows.
 
 export const SAMPLE_RECONCILER_PROMPTS: Record<string, string> = {
   "Majority vote": `Pick the answer that the majority of workers agree on. If there is a tie, pick the answer from the highest-ranked worker.\n\nRULES:\n- Output the majority answer directly\n- If tied, prefer Worker 1's answer\n- No explanations, no reasoning, no commentary`,

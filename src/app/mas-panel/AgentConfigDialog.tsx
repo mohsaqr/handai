@@ -56,6 +56,9 @@ interface Props {
   agent: Agent;
   onSave: (agent: Agent) => void;
   enabledProviders: { providerId: string; defaultModel: string }[];
+  /** Names of the OTHER agents already in the pool (excluding this one). Applying
+   *  a name that collides with one of these is blocked with an error. */
+  existingNames?: string[];
 }
 
 const LIBRARY_COLLAPSED_COUNT = 12;
@@ -88,7 +91,7 @@ function providerLabel(id: string) {
   return id.charAt(0).toUpperCase() + id.slice(1);
 }
 
-export function AgentConfigDialog({ open, onOpenChange, agent, onSave, enabledProviders }: Props) {
+export function AgentConfigDialog({ open, onOpenChange, agent, onSave, enabledProviders, existingNames = [] }: Props) {
   const [draft, setDraft] = useState<Agent>(agent);
   const [library, setLibrary] = useState<Agent[]>([]);
   const [systemPromptOpen, setSystemPromptOpen] = useState(false);
@@ -120,7 +123,18 @@ export function AgentConfigDialog({ open, onOpenChange, agent, onSave, enabledPr
     return () => window.removeEventListener("handai-agent-library-changed", refresh);
   }, []);
 
+  // Reject a name already taken by another card in the pool (trimmed, case-
+  // insensitive). Empty names are allowed (the card shows "Unnamed agent").
+  const trimmedName = draft.name.trim();
+  const isDuplicateName =
+    trimmedName.length > 0 &&
+    existingNames.some((n) => n.trim().toLowerCase() === trimmedName.toLowerCase());
+
   const handleSaveAndClose = () => {
+    if (isDuplicateName) {
+      toast.error(`An agent named “${trimmedName}” already exists — choose a different name.`);
+      return;
+    }
     onSave(draft);
     onOpenChange(false);
   };
@@ -324,16 +338,15 @@ export function AgentConfigDialog({ open, onOpenChange, agent, onSave, enabledPr
                   <Input
                     value={draft.name}
                     onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                    placeholder="e.g. Senior Reviewer"
+                    placeholder="e.g. Worker 1"
+                    aria-invalid={isDuplicateName}
+                    className={isDuplicateName ? "border-destructive focus-visible:ring-destructive" : undefined}
                   />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Role</Label>
-                  <Input
-                    value={draft.role}
-                    onChange={(e) => setDraft({ ...draft, role: e.target.value })}
-                    placeholder="e.g. Agent"
-                  />
+                  {isDuplicateName && (
+                    <p className="text-[11px] text-destructive">
+                      An agent named “{trimmedName}” already exists — choose a different name.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

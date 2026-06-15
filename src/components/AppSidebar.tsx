@@ -102,7 +102,7 @@ const data = {
                     icon: Columns,
                 },
                 {
-                    title: "MAS Panel",
+                    title: "Multi-Agent Workflows",
                     url: "/mas-panel",
                     icon: LayoutDashboard,
                 },

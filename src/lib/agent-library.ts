@@ -4,7 +4,9 @@ import type { CSSProperties } from "react";
 export interface Agent {
   id: string;
   name: string;
-  /** Short role label shown alongside the name (e.g. "Agent 1 (Reviewer)"). Defaults to "Agent". */
+  /** Internal role hint set from the role preset (e.g. "Worker", "Judge"). Drives
+   *  the Judge/Sequential default ordering; baked into the agent's name ("Worker 1")
+   *  rather than shown or edited separately. Defaults to "Agent". */
   role: string;
   providerId: string;
   model: string;
