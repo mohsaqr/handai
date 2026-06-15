@@ -327,7 +327,9 @@ export function WorkflowStepCard({
               !(prevStepLabel && !step.ignorePrevOutput) &&
               !documentInput && (
                 <span className="text-[10px] text-muted-foreground italic">
-                  no input — uses original input
+                  {uploaded.length > 0
+                    ? "no columns selected — none sent"
+                    : "no input — uses original input"}
                 </span>
               )}
           </div>
