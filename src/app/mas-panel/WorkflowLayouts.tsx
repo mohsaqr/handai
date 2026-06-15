@@ -530,13 +530,38 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
       })
     : [];
 
+  // Cut worker→Judge spokes (workers the user removed from the Judge). These are
+  // NOT erased from the canvas — they stay as a faint dashed "ghost" arrow with a
+  // "+" badge at its midpoint, so the relationship reads as "--+-->". Clicking
+  // the + restores the link. Same endpoint math as the live spokes; we also keep
+  // the midpoint so the + badge can sit on the arrow.
+  const cutSpokeGeoms = rects.judge
+    ? workers
+        .filter((w) => judgeExcluded.has(w.id))
+        .flatMap((w) => {
+          const wr = rects.workers[w.id];
+          if (!wr) return [];
+          const jr = rects.judge!;
+          const wc = rectCenter(wr);
+          const jc = rectCenter(jr);
+          const start = rectEdgeToward(wr, jc.x, jc.y);
+          const end = rectEdgeToward(jr, wc.x, wc.y);
+          return [{
+            id: w.id,
+            start,
+            end,
+            mid: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+          }];
+        })
+    : [];
+
   return (
     <div className="space-y-0">
       {workers.length > 0 && (
         <div className="text-sm font-semibold text-foreground pb-3">
           {connectingFrom
-            ? "Connecting… click another worker to feed it this worker’s output, or the Judge to reconnect it (Esc to cancel)"
-            : "Click a worker’s ↗ output handle, then another worker to chain them — or the Judge to reconnect a cut link. Click any arrow to cut it (including a worker’s link to the Judge)."}
+            ? "Connecting… click another worker to feed it this worker’s output (Esc to cancel)"
+            : "Click a worker’s ↗ output handle, then another worker to chain them. Click any arrow to cut it; a cut worker→Judge link stays as a faint arrow with a + — click the + to reconnect it."}
         </div>
       )}
       <div
@@ -630,6 +655,44 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                 <title>Click to cut this worker’s link to the Judge</title>
               </line>
             </g>
+          ))}
+        </svg>
+
+        {/* Cut worker→Judge spokes — kept on the canvas as a faint slate ghost
+            arrow (low opacity) instead of being deleted. The "+" restore badge is
+            drawn as HTML below, sitting at the arrow's midpoint so the whole reads
+            as "--+-->". Group opacity on the <svg> fades the line AND its
+            arrowhead together. */}
+        <svg
+          className="absolute inset-0 w-full h-full pointer-events-none text-slate-500 opacity-30"
+          style={{ overflow: "visible" }}
+          aria-hidden
+        >
+          <defs>
+            <marker
+              id="reconciler-arrow-cut"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto"
+            >
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+            </marker>
+          </defs>
+          {cutSpokeGeoms.map(({ id, start, end }) => (
+            <line
+              key={`cut-ghost-${id}`}
+              x1={start.x}
+              y1={start.y}
+              x2={end.x}
+              y2={end.y}
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeDasharray="6 4"
+              markerEnd="url(#reconciler-arrow-cut)"
+            />
           ))}
         </svg>
 
@@ -768,7 +831,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                     }))}
                   onUpdate={(s) => onUpdate(w.id, s)}
                   onRemove={() => onRemove(w.id)}
-                  canRemove={steps.length > 2}
+                  canRemove={steps.length > 1}
                 />
 
                 {/* Connection target — while a connection is in progress, the
@@ -841,27 +904,31 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                 staticSources={judgeSources}
                 onUpdate={(s) => onUpdate(reconciler.id, s)}
                 onRemove={() => onRemove(reconciler.id)}
-                canRemove={steps.length > 2}
+                canRemove={steps.length > 1}
               />
-
-              {/* Reconnect target — while connecting from a worker whose Judge
-                  link was cut, the whole Judge card is a click target that
-                  restores the slate worker→Judge spoke. */}
-              {connectingFrom && judgeExcluded.has(connectingFrom) && (
-                <button
-                  type="button"
-                  title="Click to reconnect this worker’s output to the Judge"
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    onRestoreJudge?.(connectingFrom);
-                    setConnectingFrom(null);
-                  }}
-                  className="absolute inset-0 z-40 rounded-lg ring-2 ring-slate-500 bg-slate-500/5 hover:bg-slate-500/15 cursor-pointer transition-colors"
-                />
-              )}
             </div>
           </div>
         )}
+
+        {/* "+" restore badges — one at each cut spoke's midpoint, sitting on the
+            faint ghost arrow so it reads as "--+-->". Clicking it re-feeds this
+            worker's output to the Judge. Independent of the worker→worker connect
+            gesture (the Judge is no longer a click-to-connect target). */}
+        {cutSpokeGeoms.map(({ id, mid }) => (
+          <button
+            key={`restore-judge-${id}`}
+            type="button"
+            title="Click to reconnect this worker’s output to the Judge"
+            onClick={(ev) => {
+              ev.stopPropagation();
+              onRestoreJudge?.(id);
+            }}
+            style={{ left: mid.x, top: mid.y, transform: "translate(-50%, -50%)" }}
+            className="absolute z-30 h-6 w-6 rounded-full border-2 border-slate-400 bg-background text-slate-500 shadow-sm flex items-center justify-center opacity-60 hover:opacity-100 hover:scale-110 transition cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5" strokeWidth={2.75} />
+          </button>
+        ))}
       </div>
 
       <div className="pt-4">

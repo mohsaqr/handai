@@ -310,11 +310,35 @@ export default function AgentPanelPage() {
   const updateAgent = (id: string, updated: Agent) => {
     setAgents((prev) => prev.map((a) => (a.id === id ? updated : a)));
   };
+
+  // Judge (reconcilier) mode freezes its layout once edited, so a newly added
+  // pool agent would otherwise never show up as a worker. Append a worker card
+  // for the new agent to the EDITED reconcilier workflow — active or stashed —
+  // without touching any existing card, so prior edits (cut Judge links, worker
+  // chains, the chosen Judge, per-card columns) are preserved. An UNedited
+  // reconcilier workflow is left to the pool-mirror effect, which already
+  // re-derives to include the new agent (so we never double-add).
+  const addWorkerForNewAgent = (agentId: string) => {
+    if (workflowMode === "reconcilier" && editedModes.reconcilier) {
+      setWorkflowSteps((prev) =>
+        prev.some((s) => s.agentId === agentId) ? prev : [...prev, emptyStep({ agentId })],
+      );
+    } else if (editedModes.reconcilier) {
+      // Reconcilier isn't the active mode but has been edited — patch its stashed steps.
+      setSavedModeSteps((prev) => {
+        const steps = prev.reconcilier;
+        if (steps === undefined || steps.some((s) => s.agentId === agentId)) return prev;
+        return { ...prev, reconcilier: [...steps, emptyStep({ agentId })] };
+      });
+    }
+  };
+
   // Insert a copy right after the source card, with a fresh id and a unique name.
   // Naming: strip any existing "(copy)"/"(copyN)" suffix to get the base, then pick
   // the first free slot in the sequence "(copy)", "(copy1)", "(copy2)", … so duplicating
   // either the original or an existing copy never collides with a name already in the pool.
   const duplicateAgent = (id: string) => {
+    const newId = makeAgentId();
     setAgents((prev) => {
       const idx = prev.findIndex((a) => a.id === id);
       if (idx === -1) return prev;
@@ -328,9 +352,10 @@ export default function AgentPanelPage() {
       } else {
         name = `Agent ${prev.length + 1}`;
       }
-      const copy = normalizeAgent({ ...src, id: makeAgentId(), name });
+      const copy = normalizeAgent({ ...src, id: newId, name });
       return [...prev.slice(0, idx + 1), copy, ...prev.slice(idx + 1)];
     });
+    addWorkerForNewAgent(newId);
   };
   const removeAgent = (id: string) => {
     setAgents((prev) => prev.filter((a) => a.id !== id));
@@ -399,14 +424,16 @@ export default function AgentPanelPage() {
   };
   // Configure Agents — a role button adds a preset agent to the pool, pre-filled
   // with a role-appropriate name, category, task, styles, and avatar (all fully
-  // editable). Template only: it does not touch the workflow; the user assigns
-  // pool agents to steps below.
+  // editable). In most modes the user then assigns pool agents to steps below;
+  // the one exception is an already-edited Judge workflow, where the new agent is
+  // auto-appended as a worker (addWorkerForNewAgent) so it still appears.
   const addRoleAgent = (roleKey: string) => {
     const preset = AGENT_ROLE_PRESETS.find((p) => p.key === roleKey);
     if (!preset) return;
+    const newId = makeAgentId();
     setAgents((prev) => {
       const overrides: Partial<Agent> = {
-        id: makeAgentId(),
+        id: newId,
         name: `Agent ${prev.length + 1}`,
         role: preset.label,
         providerId: firstId,
@@ -423,6 +450,7 @@ export default function AgentPanelPage() {
       if (preset.avatar !== undefined) overrides.avatar = preset.avatar;
       return [...prev, emptyAgent(overrides)];
     });
+    addWorkerForNewAgent(newId);
   };
   // Edge from→to is stored as to.inputs containing from. Reject self-links,
   // duplicates, and anything that would introduce a cycle.
@@ -519,6 +547,7 @@ export default function AgentPanelPage() {
     false,
   );
 
+
   const data: Row[] = useMemo(() => {
     if (hasStructuredFile && outputFormat === "per-row" && previewRows) return previewRows;
     if (hasStructuredFile && outputFormat === "document") return [{ document_name: fileStates[0].file.name }];
@@ -610,24 +639,17 @@ export default function AgentPanelPage() {
   // Validate the run
   const validate = (): string | null => {
     if (!workflowMode) return "Pick a workflow mode";
-    if (workflowMode === "personalized") {
+    // Judge (reconcilier) and Personalized run with a single card. A lone Judge
+    // makes a direct single-agent pass over the data; one worker + Judge runs the
+    // worker then has the Judge synthesize it (both via the manual path in the
+    // executor — no kappa, which is the only thing that needs ≥2 raters).
+    if (workflowMode === "personalized" || workflowMode === "reconcilier") {
       if (workflowSteps.length < 1) return "Add at least one AI agent";
     } else if (workflowSteps.length < 2) {
       return "Add at least 2 workflow steps";
     }
-    if (workflowMode === "reconcilier") {
-      // No worker→worker edges → classic parallel consensus, which needs ≥2
-      // independent workers. With worker→worker chaining the Judge synthesizes
-      // a single ordered pipeline, so one worker is fine.
-      const workerSteps = workflowSteps.slice(1);
-      const hasWorkerEdges = workerSteps.some((s) =>
-        (s.inputs ?? []).some((id) => workerSteps.some((w) => w.id === id)),
-      );
-      if (!hasWorkerEdges && workerSteps.length < 2) {
-        return "Add at least 2 workers (or chain them) for the Judge";
-      }
-    }
-    if (hasStructuredFile && selectedCols.length === 0) return "Select at least one column";
+    // Columns are optional: no selection → no columns are sent (only any per-card
+    // extras). So we do NOT block the run on an empty selection.
     for (let i = 0; i < workflowSteps.length; i++) {
       const s = workflowSteps[i];
       if (!s.agentId) return `Step ${i + 1} has no agent selected`;
@@ -646,6 +668,9 @@ export default function AgentPanelPage() {
   //   document:  JSON array of every row with selected columns — entire file is one document
   //   unstructured: extracted text from the file
   //   no file:   the full AI Instructions text
+  // No columns selected → nothing is sent (an empty `{}` / `[{}]`); columns are
+  // never auto-filled. Per-card extras (the "+ column" picker) still flow through
+  // the per-card content helpers below.
   const buildUserContent = async (row: Row): Promise<string> => {
     if (hasStructuredFile && outputFormat === "per-row") {
       const subset: Row = {};
@@ -711,6 +736,9 @@ export default function AgentPanelPage() {
     const cardUserContent = (step: WorkflowStep): string | undefined => {
       if (hasUnstructuredFile) return step.ignoreDocument ? "" : undefined;
       if (!colsMode) return undefined;
+      // Exactly the columns shown on the card — `includedColumns` mirrors the
+      // card's chip logic. Empty selection + no per-card extras → "{}" (no
+      // columns), never the whole row.
       const inc = includedColumns(step, selectedCols, previewColumns);
       const subset: Row = {};
       inc.forEach((c) => (subset[c] = row[c]));
@@ -878,22 +906,57 @@ export default function AgentPanelPage() {
       const reconcilerPrompt = userExtras
         ? `${reconcilerOnlyContext}\n\n${userExtras}`
         : reconcilerOnlyContext;
+      const outputRule =
+        "Return only the final result — no explanation, no markdown, no code fences.";
+
+      // ── Judge-only (no workers) ─────────────────────────────────────────
+      // A lone Judge card has nothing to synthesize, so it just runs directly on
+      // the row data — a single-agent pass. Produces only judge_output. (No
+      // per-worker context here: there are no workers.)
+      if (workers.length === 0) {
+        markStepStatus(reconciler.step.id, "running");
+        const judgeSystem = [outputRule, userExtras, composeStepSystemPrompt(reconciler.agent, reconciler.step)]
+          .filter(Boolean)
+          .join("\n\n");
+        try {
+          const jr = await dispatchProcessRow({
+            provider: reconciler.agent.providerId,
+            model: reconciler.agent.model,
+            apiKey: reconciler.prov?.apiKey ?? "",
+            baseUrl: reconciler.prov?.baseUrl,
+            systemPrompt: judgeSystem,
+            userContent: cardUserContent(reconciler.step) ?? userContent,
+            temperature: systemSettings.temperature,
+            maxTokens: reconciler.agent.maxTokens ?? systemSettings.maxTokens ?? undefined,
+          });
+          markStepStatus(reconciler.step.id, "done");
+          return {
+            ...baseRow,
+            judge_output: jr.output,
+            judge_latency_ms: jr.latency,
+            status: "success",
+            latency_ms: jr.latency,
+          };
+        } catch (err) {
+          markStepStatus(reconciler.step.id, "error");
+          throw err;
+        }
+      }
 
       // ── Manual worker run → Judge synthesis ─────────────────────────────
-      // Used whenever the graph isn't a clean parallel consensus: worker→worker
-      // edges exist, OR some worker→Judge spokes were cut. Workers run in
-      // topological order (a worker's input is its own data plus every upstream
-      // worker's labeled output); the Judge then synthesizes the still-connected
-      // workers' outputs in one call. Not independent raters → no kappa here.
-      if (hasWorkerEdges || !allConnected) {
+      // Used whenever the graph isn't a clean parallel consensus: a single worker
+      // (consensus/kappa needs ≥2 raters), worker→worker edges exist, OR some
+      // worker→Judge spokes were cut. Workers run in topological order (a worker's
+      // input is its own data plus every upstream worker's labeled output); the
+      // Judge then synthesizes the still-connected workers' outputs in one call.
+      // Not independent raters → no kappa here.
+      if (hasWorkerEdges || !allConnected || workers.length < 2) {
         const order = topoOrder(workers.map(({ step }) => step));
         const byId = new Map(workers.map((w) => [w.step.id, w]));
         const indexById = new Map(workers.map((w, i) => [w.step.id, i]));
         const outputById = new Map<string, string>();
         const outputs: Row = {};
         const latencyCols: Row = {};
-        const outputRule =
-          "Return only the final result — no explanation, no markdown, no code fences.";
 
         workers.forEach(({ step }) => markStepStatus(step.id, "pending"));
         markStepStatus(reconciler.step.id, "pending");
@@ -1427,7 +1490,7 @@ export default function AgentPanelPage() {
               selectedCols={selectedCols}
               onToggleCol={toggleCol}
               onToggleAll={toggleAll}
-              description="Choose which columns to send into the workflow for each row."
+              description="Choose which columns to send into the workflow for each row. Optional — if none are selected, no columns are sent (a card can still pull in specific columns via its own “+ column”)."
             />
           </div>
         </>
