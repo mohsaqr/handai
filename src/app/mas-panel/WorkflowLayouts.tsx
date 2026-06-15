@@ -1,16 +1,11 @@
 "use client";
 
 import React from "react";
-import { Button } from "@/components/ui/button";
-import { ArrowUpRight, Plus } from "lucide-react";
+import { Link2, Plus } from "lucide-react";
 import { type Agent } from "@/lib/agent-library";
 import {
   type WorkflowMode,
   type WorkflowStep,
-  groupLines,
-  placeLineSteps,
-  buildStepLabels,
-  MAX_AGENTS_PER_LINE,
 } from "./workflow-types";
 import { WorkflowStepCard, type StepStatus } from "./WorkflowStepCard";
 
@@ -50,9 +45,10 @@ interface LayoutProps {
 
 export function WorkflowLayout(props: LayoutProps) {
   if (props.mode === "sequential") return <SequentialSLayout {...props} />;
-  if (props.mode === "reconcilier") return <ReconcilierHierarchyLayout {...props} />;
-  if (props.mode === "personalized") return <PersonalizedLayout {...props} />;
-  return <DeliberationNetworkLayout {...props} />;
+  // Judge, Individual and Deliberation all use one radial ring of agents. They
+  // differ only in: a center hub (Judge), editable directional edges (Individual),
+  // or a read-only all-to-all mesh with no Connect (Deliberation).
+  return <RadialWorkflowLayout {...props} />;
 }
 
 function statusFor(stepId: string, statuses?: Record<string, StepStatus>): StepStatus | undefined {
@@ -166,21 +162,32 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
     rows.push(row);
   }
 
-  // Measure a real step card so the trailing "+" card matches its height when it
-  // wraps onto a row of its own (where flex `items-stretch` has nothing taller to
-  // stretch against). Only the "+" card uses this — the step cards are untouched.
-  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  // Size the trailing "+" card to the TALLEST real step card so it never looks
+  // smaller than the cards around it — especially when it wraps onto a row of its
+  // own (where flex `items-stretch` has nothing to stretch against). Measuring the
+  // max across ALL cards (not one) matters because step heights vary — later steps
+  // carry a "Step N output" chip step 1 lacks, and any card can be the tallest —
+  // and the "+" can land below a row that's taller than the last one. A
+  // ResizeObserver on every card keeps the max current as agents/content load.
+  const cardRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
   const [cardHeight, setCardHeight] = React.useState<number | null>(null);
+  const setCardRef = (id: string) => (el: HTMLDivElement | null) => {
+    if (el) cardRefs.current.set(id, el);
+    else cardRefs.current.delete(id);
+  };
   React.useLayoutEffect(() => {
-    const el = cardRef.current;
-    if (!el) return;
     const measure = () => {
-      const h = el.getBoundingClientRect().height || null;
-      setCardHeight((prev) => (prev === h ? prev : h));
+      let max = 0;
+      cardRefs.current.forEach((el) => {
+        const h = el.getBoundingClientRect().height;
+        if (h > max) max = h;
+      });
+      const next = max || null;
+      setCardHeight((prev) => (prev === next ? prev : next));
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
+    cardRefs.current.forEach((el) => ro.observe(el));
     return () => ro.disconnect();
   }, [steps.length]);
 
@@ -213,7 +220,7 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
                 return (
                   <React.Fragment key={isAdd ? "add" : steps[globalIdx].id}>
                     <div
-                      ref={globalIdx === 0 ? cardRef : undefined}
+                      ref={isAdd ? undefined : setCardRef(steps[globalIdx].id)}
                       className={`flex-1 min-w-0 ${isAdd ? "flex" : ""}`}
                     >
                       {isAdd ? (
@@ -272,12 +279,28 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
   );
 }
 
-// ── Reconcilier hierarchy: workers on top, reconciler below with lines down ──
+// ── Radial layout: agents arranged in a ring. Judge mode adds a center hub the
+//    workers feed; Individual mode uses the same ring with no hub. ─────────────
 
-function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, onConnect, onDisconnect, onCutJudge, onRestoreJudge, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
-  const reconciler = steps[0];
-  const workers = steps.slice(1);
+interface Rect { x: number; y: number; w: number; h: number; }
+
+function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onRemove, onConnect, onDisconnect, onCutJudge, onRestoreJudge, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
+  // Three modes share this radial ring:
+  //  • Judge (reconcilier): a center hub (steps[0]) every worker feeds.
+  //  • Individual (personalized): no hub; nodes wired by explicit agent→agent edges.
+  //  • Deliberation: no hub; NOT user-wired — every agent implicitly talks to every
+  //    other, drawn as a full mesh of plain lines, with no "Connect" UI.
+  // `hasHub` gates the Judge-only pieces; `meshMode` swaps the editable directional
+  // edges for the read-only all-to-all mesh and hides the connection controls.
+  const hasHub = mode === "reconcilier";
+  const meshMode = mode === "deliberation";
+  const allowConnect = !meshMode;
+  const reconciler = hasHub ? steps[0] : null;
+  const workers = hasHub ? steps.slice(1) : steps;
   const workerIds = new Set(workers.map((w) => w.id));
+  const nodeNoun = hasHub ? "worker" : "agent";
+  const nodeName = (i: number) =>
+    hasHub ? `Worker ${i + 1}` : meshMode ? `Participant ${i + 1}` : `Agent ${i + 1}`;
 
   // Worker→Judge spokes the user has cut live on the Judge step as
   // `judgeExcluded`; a worker not listed there feeds the Judge (the default).
@@ -297,7 +320,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
   // bottom edge straight to the Judge's top edge. A fixed-height band with
   // percentage x-positions breaks once workers wrap onto a second row — the
   // lines start floating below the cards instead of touching them. Measuring
-  // the actual DOM rects (like PersonalizedLayout) keeps the arrows anchored to
+  // the actual DOM rects keeps the arrows anchored to
   // the cards no matter how the grid wraps.
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const workerRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
@@ -421,9 +444,15 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
   // the Judge→worker spokes are as long as possible. Card widths are FIXED px.
   const WORKER_W = 400;
   const JUDGE_W = 410;
-  const CANVAS_MAX_W = 1700;
-  const CANVAS_MAX_H = 720;
   const N = workers.length;
+  // Spread the ring wider as workers multiply. With 7+ workers a 1700-wide canvas
+  // crowds the cards into the middle (so the Judge→worker spokes shrink to almost
+  // nothing) while empty space sits on the left/right of the page. Raising the
+  // canvas cap lets the cards push out into that space — the cards already hug the
+  // canvas margins, so a wider canvas == cards further apart == longer arrows.
+  // Few workers stay compact so they don't drift absurdly far apart.
+  const CANVAS_MAX_W = N >= 9 ? 2800 : N >= 7 ? 2400 : N >= 5 ? 2000 : 1700;
+  const CANVAS_MAX_H = N >= 7 ? 860 : 720;
   // Orientation: pointy-top by default (triangle/pentagon point up). Two workers
   // flank the Judge left/right; four sit at the corners of an upright square.
   const startDeg = N === 2 ? 180 : N === 4 ? -45 : -90;
@@ -440,7 +469,9 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
   // A lone worker stacks vertically above the Judge and needs real vertical room
   // for a visible spoke. Two workers flank the Judge horizontally (no vertical
   // spread), so a short box avoids empty bands above and below.
-  const isVerticalStack = N === 1;
+  // Only the Judge mode's lone worker stacks above the hub; with no hub a single
+  // agent just centers in the ring like any other node.
+  const isVerticalStack = hasHub && N === 1;
   const canvasH = isVerticalStack
     ? Math.min(boxSize, 500)
     : Math.min(boxSize, N >= 3 ? CANVAS_MAX_H : 320);
@@ -496,7 +527,10 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
     const bc = rectCenter(b);
     const start = rectEdgeToward(a, bc.x, bc.y);
     const end = rectEdgeToward(b, ac.x, ac.y);
-    const hub = rects.judge ? rectCenter(rects.judge) : { x: (ac.x + bc.x) / 2, y: (ac.y + bc.y) / 2 };
+    // Bow the edge away from the hub (Judge) so it arcs around the rim. With no
+    // hub (Individual), bow away from the canvas centre instead, for the same
+    // rim-hugging arcs rather than straight lines through the middle.
+    const hub = rects.judge ? rectCenter(rects.judge) : { x: canvasW / 2, y: canvasH / 2 };
     const mx = (start.x + end.x) / 2;
     const my = (start.y + end.y) / 2;
     let ox = mx - hub.x;
@@ -555,13 +589,29 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
         })
     : [];
 
+  // Cards mirror the Configure Agents pool — with an empty pool there's nothing
+  // to show, and there's no on-canvas "add" anymore, so point the user upstream.
+  if (steps.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-12 border border-dashed rounded-lg text-sm text-muted-foreground text-center px-6">
+        Add agents in “Configure Agents” above — they appear here automatically.
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-0">
       {workers.length > 0 && (
         <div className="text-sm font-semibold text-foreground pb-3">
-          {connectingFrom
-            ? "Connecting… click another worker to feed it this worker’s output (Esc to cancel)"
-            : "Click a worker’s ↗ output handle, then another worker to chain them. Click any arrow to cut it; a cut worker→Judge link stays as a faint arrow with a + — click the + to reconnect it."}
+          {meshMode
+            ? "Every agent sees every other agent’s output and revises over the configured rounds — the lines show the all-to-all discussion."
+            : hasHub
+              ? connectingFrom
+                ? "Connecting… click another worker to feed it this worker’s output (Esc to cancel)"
+                : "Click a worker’s “Connect” button, then another worker to chain them. Click any arrow to cut it; a cut worker→Judge link stays as a faint arrow with a + — click the + to reconnect it."
+              : connectingFrom
+                ? "Connecting… click another agent to feed it this agent’s output (Esc to cancel)"
+                : "Click an agent’s “Connect” button, then another agent to connect them. Click any arrow to remove a connection."}
         </div>
       )}
       <div
@@ -789,15 +839,42 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
           })}
         </svg>
 
+        {/* Deliberation mesh — a plain dashed line between EVERY pair of cards
+            (centre to centre), so the ring reads as "everyone talks to everyone".
+            Read-only: there are no directional arrows, no scissors, no Connect. */}
+        {meshMode && (
+          <svg
+            className="absolute inset-0 w-full h-full pointer-events-none text-primary/40"
+            style={{ overflow: "visible" }}
+            aria-hidden
+          >
+            {workers.flatMap((a, i) =>
+              workers.slice(i + 1).map((b) => {
+                const ra = rects.workers[a.id];
+                const rb = rects.workers[b.id];
+                if (!ra || !rb) return null;
+                const ca = rectCenter(ra);
+                const cb = rectCenter(rb);
+                return (
+                  <line
+                    key={`mesh-${a.id}-${b.id}`}
+                    x1={ca.x}
+                    y1={ca.y}
+                    x2={cb.x}
+                    y2={cb.y}
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeDasharray="6 4"
+                  />
+                );
+              }),
+            )}
+          </svg>
+        )}
+
         {/* Worker cards — placed around the circle */}
         {workers.map((w, i) => {
           const pos = workerPos(i);
-          // Put the output dot on the OUTER side (away from the Judge): cards to
-          // the right of centre get it on their RIGHT, cards to the left on their
-          // LEFT. The inner, Judge-facing edge is where the permanent spokes and
-          // most incoming worker→worker arrowheads land, so keeping the dot on
-          // the outer side stops the dot from coinciding with an arrowhead.
-          const onRight = pos.leftPx > canvasW / 2;
           return (
             <div
               key={w.id}
@@ -813,7 +890,7 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                 <WorkflowStepCard
                   step={w}
                   index={i + 1}
-                  label={`Worker ${i + 1}`}
+                  label={nodeName(i)}
                   showIndex={false}
                   compact
                   minimal
@@ -827,21 +904,23 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                     .filter((srcId) => workerIds.has(srcId))
                     .map((srcId) => ({
                       id: srcId,
-                      label: `Worker ${workers.findIndex((x) => x.id === srcId) + 1}`,
+                      label: nodeName(workers.findIndex((x) => x.id === srcId)),
                     }))}
+                  lockAgent
+                  boxedName
                   onUpdate={(s) => onUpdate(w.id, s)}
                   onRemove={() => onRemove(w.id)}
-                  canRemove={steps.length > 1}
+                  canRemove={false}
                 />
 
                 {/* Connection target — while a connection is in progress, the
                     WHOLE card is the click target (no separate square handle).
                     Clicking anywhere on it completes the connection. Black to
-                    match the worker→worker links. */}
-                {connectingFrom && connectingFrom !== w.id && (
+                    match the worker→worker links. (Deliberation has no connecting.) */}
+                {allowConnect && connectingFrom && connectingFrom !== w.id && (
                   <button
                     type="button"
-                    title="Click to feed the connecting worker’s output into this worker"
+                    title={`Click to feed the connecting ${nodeNoun}’s output into this ${nodeNoun}`}
                     onClick={(ev) => {
                       ev.stopPropagation();
                       completeConnect(w.id);
@@ -850,24 +929,26 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                   />
                 )}
 
-                {/* Output point (outer edge) — click to start a worker → worker
-                    connection. Hidden on the other cards while connecting, since
-                    each of those is then a whole-card target. */}
-                {(!connectingFrom || connectingFrom === w.id) && (
+                {/* "Connect" button on top of the card — click to start a
+                    worker → worker connection. Hidden on the other cards while
+                    connecting, since each of those is then a whole-card target.
+                    Deliberation is all-to-all by nature, so it has no Connect. */}
+                {allowConnect && (!connectingFrom || connectingFrom === w.id) && (
                   <button
                     type="button"
-                    title="Start a connection from this worker to another worker"
+                    title={`Start a connection from this ${nodeNoun} to another ${nodeNoun}`}
                     onClick={(ev) => {
                       ev.stopPropagation();
                       setConnectingFrom((cur) => (cur === w.id ? null : w.id));
                     }}
-                    className={`absolute ${onRight ? "-right-3" : "-left-3"} top-1/2 -translate-y-1/2 z-40 h-7 w-7 rounded-full border-2 border-background shadow-md flex items-center justify-center transition hover:scale-110 cursor-pointer ${
+                    className={`absolute -top-3 left-1/2 -translate-x-1/2 z-40 inline-flex items-center gap-1 rounded-full border-2 border-background px-2.5 py-1 text-[11px] font-semibold shadow-md transition hover:scale-105 cursor-pointer ${
                       connectingFrom === w.id
-                        ? "bg-foreground ring-2 ring-foreground/40 scale-110"
-                        : "bg-foreground/85 hover:bg-foreground"
+                        ? "bg-foreground text-background ring-2 ring-foreground/40 scale-105"
+                        : "bg-foreground/85 text-background hover:bg-foreground"
                     }`}
                   >
-                    <ArrowUpRight className="h-4 w-4 text-background" strokeWidth={2.75} />
+                    <Link2 className="h-3.5 w-3.5" strokeWidth={2.75} />
+                    {connectingFrom === w.id ? "Connecting…" : "Connect"}
                   </button>
                 )}
               </div>
@@ -902,9 +983,12 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
                 allCols={allCols}
                 documentInput={documentInput}
                 staticSources={judgeSources}
+                lockAgent
+                boxedName
+                accent
                 onUpdate={(s) => onUpdate(reconciler.id, s)}
                 onRemove={() => onRemove(reconciler.id)}
-                canRemove={steps.length > 1}
+                canRemove={false}
               />
             </div>
           </div>
@@ -929,505 +1013,6 @@ function ReconcilierHierarchyLayout({ steps, agents, stepStatuses, onUpdate, onR
             <Plus className="h-3.5 w-3.5" strokeWidth={2.75} />
           </button>
         ))}
-      </div>
-
-      <div className="pt-4">
-        <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={onAdd}>
-          <Plus className="h-3.5 w-3.5" /> Add worker
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ── Deliberation mesh: a 3-column grid of equal-peer cards (same size as reconcilier
-//    workers), with a dashed line connecting every pair so the visual reads as
-//    "everyone talks to everyone".
-
-function DeliberationNetworkLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
-  // Fixed 3 columns; rows fill left-to-right. Cards fill their column (1fr) and
-  // the column gap matches the Sequential connector width (CONNECTOR_PX), so the
-  // participant cards come out the same size as the Sequential step cards.
-  const cols = 3;
-
-  // The peer-to-peer mesh connects every pair of cards. Draw it from the cards'
-  // MEASURED centres rather than fixed percentages: with the wide column gaps
-  // the grid cell centres no longer sit at simple (col+0.5)/cols fractions, so a
-  // percentage mesh would float off the cards. Measuring locks every line to the
-  // real card centres as the grid wraps or a card resizes.
-  const containerRef = React.useRef<HTMLDivElement | null>(null);
-  const cardRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
-  const [centers, setCenters] = React.useState<Record<string, { x: number; y: number }>>({});
-  const [resizeTick, setResizeTick] = React.useState(0);
-
-  const signature = steps.map((s) => `${s.id}:${s.agentId ?? ""}`).join(",") + `#${steps.length}`;
-
-  React.useEffect(() => {
-    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
-    if (containerRef.current) ro.observe(containerRef.current);
-    cardRefs.current.forEach((el) => ro.observe(el));
-    const onWin = () => setResizeTick((t) => t + 1);
-    window.addEventListener("resize", onWin);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", onWin);
-    };
-  }, [signature]);
-
-  React.useLayoutEffect(() => {
-    const c = containerRef.current;
-    if (!c) return;
-    const cr = c.getBoundingClientRect();
-    const next: Record<string, { x: number; y: number }> = {};
-    cardRefs.current.forEach((el, id) => {
-      const r = el.getBoundingClientRect();
-      next[id] = { x: r.left - cr.left + r.width / 2, y: r.top - cr.top + r.height / 2 };
-    });
-    setCenters((prev) => {
-      const keys = Object.keys(next);
-      const same =
-        keys.length === Object.keys(prev).length &&
-        keys.every((k) => prev[k] && prev[k].x === next[k].x && prev[k].y === next[k].y);
-      return same ? prev : next;
-    });
-  }, [signature, resizeTick]);
-
-  const setCardRef = (id: string) => (el: HTMLDivElement | null) => {
-    if (el) cardRefs.current.set(id, el);
-    else cardRefs.current.delete(id);
-  };
-
-  return (
-    <div className="space-y-3">
-      <div ref={containerRef} className="relative">
-        {/* Peer-to-peer mesh — dashed connector between every pair of agents,
-            anchored to the measured card centres. */}
-        {steps.length >= 2 && (
-          <svg
-            className="absolute inset-0 w-full h-full pointer-events-none text-primary/40"
-            style={{ overflow: "visible" }}
-            aria-hidden
-          >
-            {steps.flatMap((s, i) =>
-              steps.slice(i + 1).map((s2) => {
-                const a = centers[s.id];
-                const b = centers[s2.id];
-                if (!a || !b) return null;
-                return (
-                  <line
-                    key={`${s.id}-${s2.id}`}
-                    x1={a.x}
-                    y1={a.y}
-                    x2={b.x}
-                    y2={b.y}
-                    stroke="currentColor"
-                    strokeWidth="2.75"
-                    strokeDasharray="6 4"
-                  />
-                );
-              })
-            )}
-          </svg>
-        )}
-
-        {/* Card grid — `relative` keeps the cards painting on top of the absolute
-            mesh SVG. Cards fill their 1fr column; the 208px column gap matches the
-            Sequential connector width so the cards come out the same size. */}
-        <div
-          className="grid gap-y-24 relative"
-          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, columnGap: CONNECTOR_PX }}
-        >
-          {steps.map((step, i) => (
-            <div key={step.id} ref={setCardRef(step.id)}>
-              <WorkflowStepCard
-                step={step}
-                index={i}
-                label={`Participant ${i + 1}`}
-                showIndex={false}
-                status={statusFor(step.id, stepStatuses)}
-                compact
-                agents={agents}
-                showInputData
-                inputCols={selectedCols}
-                allCols={allCols}
-                documentInput={documentInput}
-                onUpdate={(s) => onUpdate(step.id, s)}
-                onRemove={() => onRemove(step.id)}
-                canRemove={steps.length > 2}
-              />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="pt-4">
-        <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={onAdd}>
-          <Plus className="h-3.5 w-3.5" /> Add participant
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ── Personalized: free-form DAG of agents grouped into visual lines ──────────
-
-interface Rect { x: number; y: number; w: number; h: number; }
-
-function PersonalizedLayout({
-  steps,
-  agents,
-  stepStatuses,
-  onUpdate,
-  onRemove,
-  onAddLine,
-  onAddToLine,
-  onConnect,
-  onDisconnect,
-  selectedCols = [],
-  allCols = [],
-  documentInput,
-  lineCount = 2,
-}: LayoutProps) {
-  // Lines are visual rows only — data flow is the explicit `inputs` edges.
-  // Render every line from 0..maxLine (not just lines that still have a card),
-  // so a line whose last card was cleared stays visible as three empty "+" slots
-  // instead of vanishing. Line numbers come from the steps' actual `line` value.
-  const grouped = new Map(groupLines(steps));
-  const maxStepLine = steps.length > 0 ? Math.max(...steps.map((s) => s.line ?? 0)) : -1;
-  // Base line span: at least `lineCount` lines (what "Add AI Agent line" controls),
-  // always enough to cover every populated line, and floored at 2 lines total so
-  // the canvas never collapses to the "no agents yet" prompt.
-  const baseMax = Math.max(1, lineCount - 1, maxStepLine);
-  // If every slot across those lines is full, append one fresh empty line so the
-  // user always has somewhere to add the next agent — filling the last "+" reveals
-  // a new line automatically.
-  let allFull = true;
-  for (let ln = 0; ln <= baseMax; ln++) {
-    if ((grouped.get(ln)?.length ?? 0) < MAX_AGENTS_PER_LINE) { allFull = false; break; }
-  }
-  const maxLine = allFull ? baseMax + 1 : baseMax;
-  const lines: [number, WorkflowStep[]][] = [];
-  for (let ln = 0; ln <= maxLine; ln++) lines.push([ln, grouped.get(ln) ?? []]);
-  const stepLabels = buildStepLabels(steps);
-
-  const edges: { from: string; to: string }[] = [];
-  for (const s of steps) for (const src of s.inputs ?? []) edges.push({ from: src, to: s.id });
-
-  const [connectingFrom, setConnectingFrom] = React.useState<string | null>(null);
-  const canvasRef = React.useRef<HTMLDivElement | null>(null);
-  const cardRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
-  const [rects, setRects] = React.useState<Record<string, Rect>>({});
-  const [resizeTick, setResizeTick] = React.useState(0);
-
-  // Esc cancels an in-progress connection.
-  React.useEffect(() => {
-    if (!connectingFrom) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setConnectingFrom(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [connectingFrom]);
-
-  // Drop a dangling connect if its source step was removed mid-gesture.
-  React.useEffect(() => {
-    if (connectingFrom && !steps.some((s) => s.id === connectingFrom)) {
-      setConnectingFrom(null);
-    }
-  }, [steps, connectingFrom]);
-
-  React.useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
-    ro.observe(canvas);
-    const onWin = () => setResizeTick((t) => t + 1);
-    window.addEventListener("resize", onWin);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", onWin);
-    };
-  }, []);
-  // Re-measure when the graph shape changes (signature) or the container is
-  // resized (resizeTick — also fires when a card grows from typing, via the
-  // ResizeObserver). The equality guard avoids redundant state churn.
-  const signature =
-    steps
-      .map((s) => `${s.id}:${s.line ?? 0}:${(s.inputs ?? []).join("|")}`)
-      .join(",") + `#${steps.length}`;
-  React.useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const cRect = canvas.getBoundingClientRect();
-    const next: Record<string, Rect> = {};
-    cardRefs.current.forEach((el, id) => {
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      next[id] = { x: r.left - cRect.left, y: r.top - cRect.top, w: r.width, h: r.height };
-    });
-    setRects((prev) => {
-      const same =
-        Object.keys(next).length === Object.keys(prev).length &&
-        Object.keys(next).every(
-          (k) =>
-            prev[k] &&
-            prev[k].x === next[k].x &&
-            prev[k].y === next[k].y &&
-            prev[k].w === next[k].w &&
-            prev[k].h === next[k].h,
-        );
-      return same ? prev : next;
-    });
-  }, [signature, resizeTick]);
-
-  const setCardRef = (id: string) => (el: HTMLDivElement | null) => {
-    if (el) cardRefs.current.set(id, el);
-    else cardRefs.current.delete(id);
-  };
-
-  const completeConnect = (targetId: string) => {
-    if (!connectingFrom) return;
-    if (connectingFrom !== targetId) onConnect?.(connectingFrom, targetId);
-    setConnectingFrom(null);
-  };
-
-  function edgePath(from: string, to: string): string | null {
-    const a = rects[from];
-    const b = rects[to];
-    if (!a || !b) return null;
-    const sx = a.x + a.w;
-    const sy = a.y + a.h / 2;
-    const tx = b.x;
-    const ty = b.y + b.h / 2;
-    const dx = Math.max(40, Math.abs(tx - sx) * 0.5);
-    return `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`;
-  }
-
-  // Match every empty "+" slot to the height of the real agent cards (only those
-  // are measured into `rects`). Without this, a row that holds no card — e.g. the
-  // default empty second line — would shrink its "+" boxes to min-h-[7rem] instead
-  // of matching the taller card-sized "+" that sits next to actual agents.
-  const measuredCardHeights = Object.values(rects)
-    .map((r) => r.h)
-    .filter((h) => h > 0);
-  const cardHeight = measuredCardHeights.length ? Math.max(...measuredCardHeights) : null;
-
-  return (
-    <div className="space-y-6">
-      <div className="text-sm font-semibold text-foreground">
-        {connectingFrom
-          ? "Connecting… click a target agent (Esc to cancel)"
-          : "Click an agent’s ↗ output handle, then click another agent to connect. Click an arrow to remove it."}
-      </div>
-
-      {lines.length === 0 ? (
-        <div className="flex items-center justify-center py-12 border border-dashed rounded-lg text-sm text-muted-foreground">
-          No agents yet — click “+ Add AI Agent line” to start a line.
-        </div>
-      ) : (
-        <div ref={canvasRef} className="relative space-y-6">
-          {/* Solid connection line. Sits BEHIND the cards (z-0) so the full-
-              strength arrow shows in the open space between cards without
-              painting over card content. Purely visual — the clickable scissors
-              ribbon lives on the faint top layer (z-20) below, so it spans the
-              line's full length, including where it runs behind a card. */}
-          <svg
-            className="absolute inset-0 w-full h-full pointer-events-none z-0"
-            style={{ overflow: "visible" }}
-            aria-hidden
-          >
-            <defs>
-              <marker
-                id="pz-arrow"
-                viewBox="0 0 10 10"
-                refX="9"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
-              </marker>
-            </defs>
-            {edges.map((e, i) => {
-              const d = edgePath(e.from, e.to);
-              if (!d) return null;
-              return (
-                <g key={`${e.from}->${e.to}-${i}`} className="text-primary">
-                  <path
-                    d={d}
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeDasharray="6 4"
-                    fill="none"
-                    markerEnd="url(#pz-arrow)"
-                  />
-                </g>
-              );
-            })}
-          </svg>
-
-          {lines.map(([lineNo, lineSteps]) => {
-            const placed = placeLineSteps(lineSteps);
-            return (
-              <div key={lineNo} className="relative z-10">
-                <div className="flex items-stretch">
-                  {placed.map((step, slot) => (
-                    <div
-                      key={step?.id ?? `slot-${slot}`}
-                      className="flex-1 min-w-0 flex px-28"
-                    >
-                      {step ? (
-                        <div ref={setCardRef(step.id)} className="relative w-full">
-                          <WorkflowStepCard
-                            step={step}
-                            index={slot}
-                            label={`Agent ${lineNo * MAX_AGENTS_PER_LINE + slot + 1}`}
-                            showIndex={false}
-                            compact
-                            status={statusFor(step.id, stepStatuses)}
-                            agents={agents}
-                            showInputData
-                            inputCols={selectedCols}
-                            allCols={allCols}
-                            documentInput={documentInput}
-                            connectedSources={(step.inputs ?? []).map((srcId) => ({
-                              id: srcId,
-                              label: stepLabels[srcId] ?? srcId,
-                            }))}
-                            onUpdate={(s) => onUpdate(step.id, s)}
-                            onRemove={() => onRemove(step.id)}
-                            canRemove
-                          />
-
-                          {/* Input target — while a connection is in progress,
-                              the WHOLE card is the click target (no separate
-                              square handle), matching the Judge layout. Clicking
-                              anywhere on it completes the connection. */}
-                          {connectingFrom && connectingFrom !== step.id && (
-                            <button
-                              type="button"
-                              title="Click to feed the connecting agent's output into this agent"
-                              onClick={(ev) => {
-                                ev.stopPropagation();
-                                completeConnect(step.id);
-                              }}
-                              className="absolute inset-0 z-40 rounded-lg ring-2 ring-primary bg-primary/5 hover:bg-primary/15 cursor-pointer transition-colors"
-                            />
-                          )}
-
-                          {/* Output handle (right) — click to start a connection.
-                              Hidden on the other cards while connecting, since each
-                              of those is then a whole-card target. */}
-                          {(!connectingFrom || connectingFrom === step.id) && (
-                            <button
-                              type="button"
-                              title="Start a connection from this agent"
-                              onClick={(ev) => {
-                                ev.stopPropagation();
-                                setConnectingFrom((cur) =>
-                                  cur === step.id ? null : step.id,
-                                );
-                              }}
-                              className={`absolute -right-3 top-1/2 -translate-y-1/2 z-40 h-7 w-7 rounded-full border-2 border-background shadow-md flex items-center justify-center transition hover:scale-110 cursor-pointer ${
-                                connectingFrom === step.id
-                                  ? "bg-primary ring-2 ring-primary/40 scale-110"
-                                  : "bg-primary/85 hover:bg-primary"
-                              }`}
-                            >
-                              <ArrowUpRight className="h-4 w-4 text-primary-foreground" strokeWidth={2.75} />
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onAddToLine?.(lineNo, slot)}
-                          title="Add an agent here"
-                          style={cardHeight ? { minHeight: cardHeight } : undefined}
-                          className="flex-1 min-h-[7rem] rounded-md border border-dashed border-muted-foreground/40 flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-muted-foreground/70 hover:bg-muted/40 transition-colors"
-                        >
-                          <Plus className="h-5 w-5" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Faint connection echo + scissors hit area. Sits ABOVE the cards
-              (z-20) so the clickable ribbon is exposed along the arrow's full
-              length, including where it runs behind a card. The visible echo is
-              hidden by default and only fades in on hover (when the scissors
-              cursor appears) — so it never paints over card content unless you
-              are about to cut it. The <svg> itself is pointer-events-none; only
-              the thin transparent ribbon per edge is clickable, so card content
-              stays interactive everywhere else. */}
-          <svg
-            className="absolute inset-0 w-full h-full pointer-events-none z-20 text-primary/30"
-            style={{ overflow: "visible" }}
-            aria-hidden
-          >
-            <defs>
-              <marker
-                id="pz-arrow-ghost"
-                viewBox="0 0 10 10"
-                refX="9"
-                refY="5"
-                markerWidth="6"
-                markerHeight="6"
-                orient="auto"
-              >
-                <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
-              </marker>
-            </defs>
-            {edges.map((e, i) => {
-              const d = edgePath(e.from, e.to);
-              if (!d) return null;
-              return (
-                <g key={`ghost-${e.from}->${e.to}-${i}`} className="group">
-                  <path
-                    d={d}
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeDasharray="6 4"
-                    fill="none"
-                    markerEnd="url(#pz-arrow-ghost)"
-                    className="opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none"
-                  />
-                  {/* Scissors hit area — disabled while making a connection so
-                      the scissors cursor doesn't show on the way and the ribbon
-                      can't steal the target click. Re-enabled once idle. */}
-                  <path
-                    d={d}
-                    stroke="transparent"
-                    strokeWidth="22"
-                    fill="none"
-                    strokeLinecap="round"
-                    className={connectingFrom ? "pointer-events-none" : "pointer-events-auto"}
-                    style={connectingFrom ? undefined : { cursor: SCISSORS_CURSOR }}
-                    onClick={() => onDisconnect?.(e.from, e.to)}
-                  >
-                    <title>Click to remove this connection</title>
-                  </path>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-      )}
-
-      <div className="pt-4">
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-xs gap-1.5"
-          onClick={() => onAddLine?.()}
-        >
-          <Plus className="h-3.5 w-3.5" /> Add AI Agent line
-        </Button>
       </div>
     </div>
   );

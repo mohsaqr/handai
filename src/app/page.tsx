@@ -76,7 +76,7 @@ const CATEGORIES = [
         border: "hover:border-blue-200 dark:hover:border-blue-800",
       },
       {
-        title: "MAS Panel",
+        title: "Multi-Agent Workflows",
         description: "Orchestrate multi-agent workflows — sequential pipelines, parallel deliberation rounds, or reconciler-with-workers.",
         icon: LayoutDashboard,
         href: "/mas-panel",

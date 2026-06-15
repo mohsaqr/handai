@@ -58,7 +58,7 @@ const TOOL_LABELS: Record<string, string> = {
   "qualitative-coder": "Qualitative Coder",
   "model-comparison": "Model Comparison",
   "ai-coder": "AI Coder",
-  "agent-panel": "MAS Panel",
+  "agent-panel": "Multi-Agent Workflows",
   "codebook-generator": "Codebook Generator",
   "abstract-screener": "Abstract Screener",
   // Legacy run types — internal slug rename ("consensus-coder" → "model-comparison")
