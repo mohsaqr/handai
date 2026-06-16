@@ -151,7 +151,7 @@ For unstructured files, two paths turn PDF/DOCX → text:
 - **Adding a tool page:** mirror an existing tool (e.g. `src/app/transform/`). Use `useBatchProcessor` for row-by-row batching, and add corresponding `dispatch*` functions in `llm-dispatch.ts` covering both the browser-direct path (in `llm-browser.ts`) and, if needed, the server-side path (an API route under `src/app/api/`).
 - **Never add `localStorage` reads to render or `useState` initializers** — always `useEffect` (hydration safety).
 - **Never call `fetch('/api/...')` directly from a page** — go through `llm-dispatch.ts`, otherwise the static build silently breaks.
-- **App version** is a hardcoded literal in the footer of `src/app/layout.tsx` (currently `Handai v2.4`, split across a `<span>` so a bare `Handai v` grep misses it). Release commits are messaged `vX.Y — Last updated <Month Year>`; bump the literal in `layout.tsx` in the same commit so the UI matches the tag.
+- **App version** is a hardcoded literal in the footer of `src/app/layout.tsx` (currently `Handai v2.6` — rendered as `<span>Handai</span> v2.6`, so a bare `Handai v` grep misses it). Release commits are messaged `vX.Y — Last updated <Month Year>`; bump the literal in `layout.tsx` in the same commit so the UI matches the tag.
 
 ## Notes on docs in the repo
 

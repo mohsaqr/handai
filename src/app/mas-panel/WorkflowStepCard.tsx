@@ -60,6 +60,11 @@ interface Props {
    *  Configure-Agents agent, so the agent picker is replaced by static text
    *  (you change agents in Configure Agents, not here). */
   lockAgent?: boolean;
+  /** Judge mode — when set, the locked agent box becomes a dropdown. Picking a
+   *  different agent permutes it into this card (swapping with the picked agent's
+   *  current slot) rather than editing the agent here. Without it a locked card is
+   *  static text. */
+  onSwapAgent?: (agentId: string) => void;
   /** Judge mode — drop the positional "Worker N" / "Judge" heading and show the
    *  agent's name in a prominent box instead (the name IS the visual label). */
   boxedName?: boolean;
@@ -111,6 +116,25 @@ function RestoreChip({ label, onClick, title }: { label: string; onClick: () => 
   );
 }
 
+// The agent option list — shared by the locked-swap dropdown and the unlocked
+// agent picker, which differ only in their trigger and onValueChange.
+function AgentSelectContent({ agents }: { agents: Agent[] }) {
+  return (
+    <SelectContent position="popper">
+      {agents.length === 0 && (
+        <SelectItem value="__none" disabled className="text-xs">
+          No agents configured
+        </SelectItem>
+      )}
+      {agents.map((a) => (
+        <SelectItem key={a.id} value={a.id} className="text-xs">
+          {a.name || "(unnamed)"}
+        </SelectItem>
+      ))}
+    </SelectContent>
+  );
+}
+
 export function WorkflowStepCard({
   step,
   index,
@@ -131,6 +155,7 @@ export function WorkflowStepCard({
   staticSources = [],
   documentInput,
   lockAgent = false,
+  onSwapAgent,
   boxedName = false,
   accent = false,
 }: Props) {
@@ -222,11 +247,32 @@ export function WorkflowStepCard({
       <div className="space-y-1 pr-7">
         {!minimal && <Label className="text-[10px] text-muted-foreground">Agent</Label>}
         {lockAgent ? (
-          // Fixed projection of a Configure-Agents agent — no picker. Shows the
-          // agent's name (or an "unassigned" hint if its agent was deleted, which
-          // the pool-reconcile should normally prevent). boxedName wraps it in a
-          // prominent box so the name reads as the card's visual label.
-          boxedName ? (
+          // Locked projection of a Configure-Agents agent. When onSwapAgent is set
+          // the box becomes a dropdown that PERMUTES this card's agent with the
+          // picked one (the page swaps their slots) — used by the Judge card and
+          // the Sequential steps to re-order without changing the agent set.
+          // Without it, it's static text. boxedName wraps the value in a prominent
+          // centered box (the Judge); otherwise it reads as a normal compact picker.
+          onSwapAgent ? (
+            <Select
+              value={step.agentId ?? ""}
+              onValueChange={(v) => {
+                if (v) onSwapAgent(v);
+              }}
+            >
+              <SelectTrigger
+                title="Change this card's agent — swaps it with the picked agent"
+                className={
+                  boxedName
+                    ? "h-auto w-full justify-center gap-1 rounded-md border bg-background/70 px-2 py-1.5 text-sm font-semibold *:data-[slot=select-value]:!block *:data-[slot=select-value]:truncate *:data-[slot=select-value]:min-w-0"
+                    : "h-8 text-xs w-full min-w-0 *:data-[slot=select-value]:!block *:data-[slot=select-value]:truncate *:data-[slot=select-value]:min-w-0"
+                }
+              >
+                <SelectValue placeholder="Pick an agent…" />
+              </SelectTrigger>
+              <AgentSelectContent agents={agents} />
+            </Select>
+          ) : boxedName ? (
             <div className="rounded-md border bg-background/70 px-2 py-1.5 text-sm font-semibold truncate text-center">
               {assignedAgent?.name || (
                 <span className="text-muted-foreground italic font-normal">unassigned</span>
@@ -272,18 +318,7 @@ export function WorkflowStepCard({
           <SelectTrigger className="h-8 text-xs w-full min-w-0 *:data-[slot=select-value]:!block *:data-[slot=select-value]:truncate *:data-[slot=select-value]:min-w-0">
             <SelectValue placeholder="Pick an agent…" />
           </SelectTrigger>
-          <SelectContent position="popper">
-            {agents.length === 0 && (
-              <SelectItem value="__none" disabled className="text-xs">
-                No agents configured
-              </SelectItem>
-            )}
-            {agents.map((a) => (
-              <SelectItem key={a.id} value={a.id} className="text-xs">
-                {a.name || "(unnamed)"}
-              </SelectItem>
-            ))}
-          </SelectContent>
+          <AgentSelectContent agents={agents} />
         </Select>
         )}
         {assignedAgent && (
@@ -311,7 +346,7 @@ export function WorkflowStepCard({
             {connectedSources.map((s) => (
               <Chip
                 key={`src-${s.id}`}
-                text={`${s.label} output`}
+                text={`${s.label}'s output`}
                 bg={chipBg}
                 onRemove={() => removeSource(s.id)}
               />

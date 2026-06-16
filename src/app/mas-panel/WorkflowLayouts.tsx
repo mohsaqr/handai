@@ -16,7 +16,6 @@ interface LayoutProps {
   stepStatuses?: Record<string, StepStatus>;
   onUpdate: (id: string, step: WorkflowStep) => void;
   onRemove: (id: string) => void;
-  onAdd: () => void;
   /** Personalized mode — start a new independent line with one agent. */
   onAddLine?: () => void;
   /** Personalized mode — add an agent to a line at a specific column. */
@@ -29,6 +28,10 @@ interface LayoutProps {
   onCutJudge?: (workerId: string) => void;
   /** Reconcilier mode — restore a cut worker→Judge spoke (click worker dot → Judge). */
   onRestoreJudge?: (workerId: string) => void;
+  /** Change a step's agent; permutes it with the picked agent's step so nothing is
+   *  duplicated or lost. Used by Sequential steps and the Judge card (which passes
+   *  its own step id). */
+  onSwapStepAgent?: (stepId: string, agentId: string) => void;
   /** Page-level selected columns — the per-card Input DATA chips shown by default. */
   selectedCols?: string[];
   /** Every column in the uploaded file. Columns here that aren't in
@@ -119,10 +122,10 @@ function SConnector({ direction, cols = 2 }: {
   const alignRight = direction === "down-right";
   const arrow = (
     <div className="flex-1 min-w-0 flex flex-col items-center">
-      <svg width="28" height="56" viewBox="0 0 28 56" fill="none" className={color}>
+      <svg width="28" height="72" viewBox="0 0 28 72" fill="none" className={color}>
         <circle cx="14" cy="4" r="4" fill="currentColor" />
-        <path d="M14 8 V44" stroke="currentColor" strokeWidth="3.5" strokeDasharray="6 4" />
-        <polygon points="6,44 14,56 22,44" fill="currentColor" />
+        <path d="M14 8 V60" stroke="currentColor" strokeWidth="3.5" strokeDasharray="6 4" />
+        <polygon points="6,60 14,72 22,60" fill="currentColor" />
       </svg>
     </div>
   );
@@ -148,48 +151,19 @@ function SConnector({ direction, cols = 2 }: {
 
 const SEQUENTIAL_COLS = 3;
 
-function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onAdd, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
-  // A trailing "+" card always follows the last step in the snake. It occupies
-  // the cell at index `addIndex`; clicking it appends a new step (like the empty
-  // "+" slots in personalized mode). When the current row is full the "+" wraps
-  // to a fresh row with a vertical connector.
-  const addIndex = steps.length;
-  const cellCount = steps.length + 1; // real steps + the trailing "+" card
+function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, onSwapStepAgent, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
+  // Sequential cards are a pure projection of the Configure Agents pool — one card
+  // per agent, in pool order — so there's no on-canvas add/remove (manage agents
+  // in Configure Agents). Picking a different agent in a card's dropdown SWAPS the
+  // two agents' positions (onSwapStepAgent), letting the user re-order the pipeline
+  // without changing the agent set.
+  const cellCount = steps.length;
   const rows: number[][] = [];
   for (let i = 0; i < cellCount; i += SEQUENTIAL_COLS) {
     const row: number[] = [];
     for (let j = i; j < Math.min(i + SEQUENTIAL_COLS, cellCount); j++) row.push(j);
     rows.push(row);
   }
-
-  // Size the trailing "+" card to the TALLEST real step card so it never looks
-  // smaller than the cards around it — especially when it wraps onto a row of its
-  // own (where flex `items-stretch` has nothing to stretch against). Measuring the
-  // max across ALL cards (not one) matters because step heights vary — later steps
-  // carry a "Step N output" chip step 1 lacks, and any card can be the tallest —
-  // and the "+" can land below a row that's taller than the last one. A
-  // ResizeObserver on every card keeps the max current as agents/content load.
-  const cardRefs = React.useRef<Map<string, HTMLDivElement>>(new Map());
-  const [cardHeight, setCardHeight] = React.useState<number | null>(null);
-  const setCardRef = (id: string) => (el: HTMLDivElement | null) => {
-    if (el) cardRefs.current.set(id, el);
-    else cardRefs.current.delete(id);
-  };
-  React.useLayoutEffect(() => {
-    const measure = () => {
-      let max = 0;
-      cardRefs.current.forEach((el) => {
-        const h = el.getBoundingClientRect().height;
-        if (h > max) max = h;
-      });
-      const next = max || null;
-      setCardHeight((prev) => (prev === next ? prev : next));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    cardRefs.current.forEach((el) => ro.observe(el));
-    return () => ro.disconnect();
-  }, [steps.length]);
 
   // One empty "slot" mirrors a card + its connector so partial rows keep the
   // real cards the same width as full rows above.
@@ -200,6 +174,16 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
         <div className={`${CONNECTOR_W} shrink-0`} />
       </React.Fragment>
     ));
+
+  // Mirror the radial modes' empty state: with no agents there are no cards and no
+  // on-canvas add, so point the user to Configure Agents.
+  if (steps.length === 0) {
+    return (
+      <div className="flex items-center justify-center py-12 border border-dashed rounded-lg text-sm text-muted-foreground text-center px-6">
+        Add agents in “Configure Agents” above — they appear here automatically.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-0">
@@ -216,41 +200,27 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
               {missing > 0 && !isEvenRow && emptySlots(missing)}
               {orderedRow.map((globalIdx, colIdx) => {
                 const isLastInRow = colIdx === orderedRow.length - 1;
-                const isAdd = globalIdx === addIndex;
                 return (
-                  <React.Fragment key={isAdd ? "add" : steps[globalIdx].id}>
-                    <div
-                      ref={isAdd ? undefined : setCardRef(steps[globalIdx].id)}
-                      className={`flex-1 min-w-0 ${isAdd ? "flex" : ""}`}
-                    >
-                      {isAdd ? (
-                        <button
-                          type="button"
-                          onClick={onAdd}
-                          title="Add a step"
-                          style={cardHeight ? { minHeight: cardHeight } : undefined}
-                          className="flex-1 min-h-[7rem] rounded-md border border-dashed border-muted-foreground/40 flex items-center justify-center text-muted-foreground hover:text-foreground hover:border-muted-foreground/70 hover:bg-muted/40 transition-colors"
-                        >
-                          <Plus className="h-5 w-5" />
-                        </button>
-                      ) : (
-                        <WorkflowStepCard
-                          step={steps[globalIdx]}
-                          index={globalIdx}
-                          label={`Step ${globalIdx + 1}`}
-                          status={statusFor(steps[globalIdx].id, stepStatuses)}
-                          agents={agents}
-                          compact
-                          showInputData
-                          inputCols={selectedCols}
-                          allCols={allCols}
-                          documentInput={documentInput}
-                          prevStepLabel={globalIdx > 0 ? `Step ${globalIdx}` : null}
-                          onUpdate={(s) => onUpdate(steps[globalIdx].id, s)}
-                          onRemove={() => onRemove(steps[globalIdx].id)}
-                          canRemove={steps.length > 2}
-                        />
-                      )}
+                  <React.Fragment key={steps[globalIdx].id}>
+                    <div className="flex-1 min-w-0">
+                      <WorkflowStepCard
+                        step={steps[globalIdx]}
+                        index={globalIdx}
+                        label={`Step ${globalIdx + 1}`}
+                        status={statusFor(steps[globalIdx].id, stepStatuses)}
+                        agents={agents}
+                        compact
+                        showInputData
+                        inputCols={selectedCols}
+                        allCols={allCols}
+                        documentInput={documentInput}
+                        prevStepLabel={globalIdx > 0 ? `Step ${globalIdx}` : null}
+                        lockAgent
+                        onSwapAgent={(agentId) => onSwapStepAgent?.(steps[globalIdx].id, agentId)}
+                        onUpdate={(s) => onUpdate(steps[globalIdx].id, s)}
+                        onRemove={() => onRemove(steps[globalIdx].id)}
+                        canRemove={false}
+                      />
                     </div>
                     {!isLastInRow && (
                       <SConnector direction={isEvenRow ? "left-to-right" : "right-to-left"} />
@@ -284,7 +254,7 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
 
 interface Rect { x: number; y: number; w: number; h: number; }
 
-function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onRemove, onConnect, onDisconnect, onCutJudge, onRestoreJudge, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
+function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onRemove, onConnect, onDisconnect, onCutJudge, onRestoreJudge, onSwapStepAgent, selectedCols = [], allCols = [], documentInput }: LayoutProps) {
   // Three modes share this radial ring:
   //  • Judge (reconcilier): a center hub (steps[0]) every worker feeds.
   //  • Individual (personalized): no hub; nodes wired by explicit agent→agent edges.
@@ -301,6 +271,13 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
   const nodeNoun = hasHub ? "worker" : "agent";
   const nodeName = (i: number) =>
     hasHub ? `Worker ${i + 1}` : meshMode ? `Participant ${i + 1}` : `Agent ${i + 1}`;
+  // Label for a node's "<source>'s output" Input DATA chip: prefer the assigned
+  // agent's real name (e.g. "Manager 1"), falling back to the positional label
+  // ("Worker N" / "Agent N") when the agent is unnamed or unassigned.
+  const displayName = (step: WorkflowStep, i: number) => {
+    const a = step.agentId ? agents.find((x) => x.id === step.agentId) : null;
+    return a?.name?.trim() || nodeName(i);
+  };
 
   // Worker→Judge spokes the user has cut live on the Judge step as
   // `judgeExcluded`; a worker not listed there feeds the Judge (the default).
@@ -314,7 +291,7 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
       ? []
       : allConnected
         ? ["Workers' outputs"]
-        : connectedWorkers.map((w) => `Worker ${workers.indexOf(w) + 1} output`);
+        : connectedWorkers.map((w) => `${displayName(w, workers.indexOf(w))}'s output`);
 
   // Measure the real card positions so each spoke can run from its worker's
   // bottom edge straight to the Judge's top edge. A fixed-height band with
@@ -517,8 +494,9 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
     return { x: cx + dx * s, y: cy + dy * s };
   }
 
-  // Worker → worker edge: source edge → target edge, bowed OUTWARD (away from
-  // the Judge hub) so it arcs around the rim instead of crossing the center.
+  // Worker → worker edge: a quadratic from the source card's edge to the target's,
+  // bowed perpendicular to the chord and away from the Judge hub so it arcs around
+  // the card instead of across it.
   function workerEdgePath(from: string, to: string): string | null {
     const a = rects.workers[from];
     const b = rects.workers[to];
@@ -527,25 +505,57 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
     const bc = rectCenter(b);
     const start = rectEdgeToward(a, bc.x, bc.y);
     const end = rectEdgeToward(b, ac.x, ac.y);
-    // Bow the edge away from the hub (Judge) so it arcs around the rim. With no
-    // hub (Individual), bow away from the canvas centre instead, for the same
-    // rim-hugging arcs rather than straight lines through the middle.
+    // Route the edge AROUND the Judge: bow it perpendicular to the chord, to the
+    // side AWAY from the Judge hub. That single rule does everything — a connection
+    // always curves around whichever side of the Judge it already leans toward (so a
+    // bottom-left→top worker swings up the left, never across the card), and it can
+    // never bow toward the card because the bow points away from where the card is.
+    // With no hub (Individual) it bows away from the canvas centre for the same look.
     const hub = rects.judge ? rectCenter(rects.judge) : { x: canvasW / 2, y: canvasH / 2 };
     const mx = (start.x + end.x) / 2;
     const my = (start.y + end.y) / 2;
-    let ox = mx - hub.x;
-    let oy = my - hub.y;
-    const olen = Math.hypot(ox, oy) || 1;
-    ox /= olen;
-    oy /= olen;
-    const bow = 48;
-    const cx = mx + ox * bow;
-    const cy = my + oy * bow;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // Unit normal to the chord, flipped so it points away from the hub.
+    let nx = -dy / len;
+    let ny = dx / len;
+    const offset = (hub.x - mx) * nx + (hub.y - my) * ny; // hub's signed offset along it
+    if (offset > 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const dist = Math.abs(offset); // perpendicular distance hub → chord
+    // Degenerate case (workers exactly opposite, hub sitting on the chord): "away"
+    // is undefined, so bow downward rather than risk riding over the top.
+    if (dist < 2 && ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    // Gentle by default; widen only as much as the Judge box pokes past the chord on
+    // this side, so distant edges curve lightly and close ones swing wide enough to
+    // clear. A quadratic's apex reaches half its control offset, hence the ×2. The
+    // box reach is measured live, so the arc adapts as the Judge card resizes.
+    let bow = 36;
+    if (rects.judge) {
+      const reach = Math.abs(nx) * (rects.judge.w / 2) + Math.abs(ny) * (rects.judge.h / 2);
+      bow = Math.max(36, 2 * (reach - dist + 28));
+    }
+    const cx = mx + nx * bow;
+    const cy = my + ny * bow;
     // End exactly on the target card's edge so the arrow reaches the card. The
     // endpoint is recomputed from the live rect each render, so it tracks the
     // card as it moves or grows.
     return `M ${start.x} ${start.y} Q ${cx} ${cy} ${end.x} ${end.y}`;
   }
+
+  // Each worker→worker edge's path, computed once and shared by the solid edge
+  // layer and the hover/scissors hit layer below (mirrors spokeGeoms).
+  const workerEdgeGeoms = workerEdges.map((e) => ({
+    from: e.from,
+    to: e.to,
+    d: workerEdgePath(e.from, e.to),
+  }));
 
   // Judge spoke endpoints (each connected worker's edge → the Judge's edge),
   // computed once and shared by the visible spoke layer and the scissors layer.
@@ -766,13 +776,12 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
               <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
             </marker>
           </defs>
-          {workerEdges.map((e, i) => {
-            const d = workerEdgePath(e.from, e.to);
-            if (!d) return null;
+          {workerEdgeGeoms.map((e, i) => {
+            if (!e.d) return null;
             return (
               <path
                 key={`${e.from}->${e.to}-${i}`}
-                d={d}
+                d={e.d}
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2.5"
@@ -808,13 +817,12 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
               <path d="M0 0 L10 5 L0 10 z" fill="currentColor" />
             </marker>
           </defs>
-          {workerEdges.map((e, i) => {
-            const d = workerEdgePath(e.from, e.to);
-            if (!d) return null;
+          {workerEdgeGeoms.map((e, i) => {
+            if (!e.d) return null;
             return (
               <g key={`cut-${e.from}->${e.to}-${i}`} className="group">
                 <path
-                  d={d}
+                  d={e.d}
                   stroke="currentColor"
                   strokeWidth="2.5"
                   strokeDasharray="6 4"
@@ -823,7 +831,7 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
                   className="opacity-0 transition-opacity group-hover:opacity-100 pointer-events-none"
                 />
                 <path
-                  d={d}
+                  d={e.d}
                   stroke="transparent"
                   strokeWidth="22"
                   fill="none"
@@ -902,10 +910,10 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
                   documentInput={documentInput}
                   connectedSources={(w.inputs ?? [])
                     .filter((srcId) => workerIds.has(srcId))
-                    .map((srcId) => ({
-                      id: srcId,
-                      label: nodeName(workers.findIndex((x) => x.id === srcId)),
-                    }))}
+                    .map((srcId) => {
+                      const si = workers.findIndex((x) => x.id === srcId);
+                      return { id: srcId, label: displayName(workers[si], si) };
+                    })}
                   lockAgent
                   boxedName
                   onUpdate={(s) => onUpdate(w.id, s)}
@@ -941,7 +949,11 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
                       ev.stopPropagation();
                       setConnectingFrom((cur) => (cur === w.id ? null : w.id));
                     }}
-                    className={`absolute -top-3 left-1/2 -translate-x-1/2 z-40 inline-flex items-center gap-1 rounded-full border-2 border-background px-2.5 py-1 text-[11px] font-semibold shadow-md transition hover:scale-105 cursor-pointer ${
+                    // The `before:` block extends the click target well above and to
+                    // the sides of the visible pill (still z-40, above the z-20
+                    // scissors ribbons), so a near-miss click reserves the Connect
+                    // zone instead of landing on the arrow's cut hit-area underneath.
+                    className={`absolute -top-3 left-1/2 -translate-x-1/2 z-40 inline-flex items-center gap-1 rounded-full border-2 border-background px-2.5 py-1 text-[11px] font-semibold shadow-md transition hover:scale-105 cursor-pointer before:absolute before:content-[''] before:-top-10 before:-inset-x-12 before:-bottom-2 ${
                       connectingFrom === w.id
                         ? "bg-foreground text-background ring-2 ring-foreground/40 scale-105"
                         : "bg-foreground/85 text-background hover:bg-foreground"
@@ -984,6 +996,7 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
                 documentInput={documentInput}
                 staticSources={judgeSources}
                 lockAgent
+                onSwapAgent={(agentId) => onSwapStepAgent?.(reconciler.id, agentId)}
                 boxedName
                 accent
                 onUpdate={(s) => onUpdate(reconciler.id, s)}
