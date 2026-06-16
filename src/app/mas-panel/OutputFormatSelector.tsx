@@ -15,18 +15,18 @@ interface Option {
 const OPTIONS: Option[] = [
   {
     id: "per-row",
-    title: "One output per row",
-    subtitle: "Workflow runs once per row",
+    title: "Process each row separately",
+    subtitle: "The agents run once per row",
     description:
-      "Each row of the uploaded file is processed independently. The result table has one row per input row.",
+      "The agents handle every row of your file on its own. You get a results table with one answer per input row — same number of rows you uploaded. Best for coding, screening, classifying, or scoring each item.",
     Icon: Rows3,
   },
   {
     id: "document",
-    title: "One output for the whole file",
-    subtitle: "Workflow sees every row at once",
+    title: "Process the whole file at once",
+    subtitle: "The agents read all rows together",
     description:
-      "The entire file is sent as a single document (JSON of all rows). Produces a single result row — useful for tasks like picking the best candidate from a catalogue.",
+      "All your rows are sent to the agents together, so they can compare across the entire file. You get a single combined result. Best when the task needs the full picture — ranking items, choosing the best one, or summarising the file.",
     Icon: FileText,
   },
 ];

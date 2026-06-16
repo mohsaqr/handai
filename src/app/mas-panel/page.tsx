@@ -305,52 +305,18 @@ export default function AgentPanelPage() {
     return () => clearTimeout(timer);
   }, []);
 
-  // Default workflow state mirrors the Configure Agents pool: one card per agent,
-  // assigned in order, so 2 agents → 2 cards and 6 → 6. It keeps re-deriving as
-  // the pool changes UNTIL the user manually edits this mode's workflow
-  // (markWorkflowEdited), after which the layout is frozen and respected. Runs
-  // after hydration so it doesn't clobber persisted/restored state on first paint.
+  // Every mode's cards are a live projection of the Configure Agents pool — one
+  // card per agent (add/remove agents there, not on the canvas). Reconcile on each
+  // pool change while preserving each surviving card's edits (step order, worker
+  // connections, cut Judge links, per-card columns, persona). Runs after hydration
+  // so it doesn't clobber persisted/restored state on first paint.
   useEffect(() => {
     if (!hydrationDone || !workflowMode) return;
-    // Judge / Individual / Deliberation: cards always mirror the Configure Agents
-    // pool (add there, not on the canvas), so reconcile on every pool change while
-    // keeping each surviving card's edits — even after the workflow has been edited.
-    if (
-      workflowMode === "reconcilier" ||
-      workflowMode === "personalized" ||
-      workflowMode === "deliberation"
-    ) {
-      setWorkflowSteps((prev) => reconcilePoolSteps(agents, prev));
-      return;
-    }
-    // Other modes keep the freeze-on-edit behavior.
-    if (editedModes[workflowMode]) return;
-    setWorkflowSteps(() => deriveStepsFromPool(workflowMode, agents));
-  }, [hydrationDone, workflowMode, agents, editedModes, setWorkflowSteps]);
+    setWorkflowSteps((prev) => reconcilePoolSteps(agents, prev));
+  }, [hydrationDone, workflowMode, agents, setWorkflowSteps]);
 
   const updateAgent = (id: string, updated: Agent) => {
     setAgents((prev) => prev.map((a) => (a.id === id ? updated : a)));
-  };
-
-  // Sequential is a manual pipeline (freeze-on-edit, repeats allowed), so it's NOT
-  // pool-mirrored like the radial modes. To still surface a newly added pool agent,
-  // append a step for it at the END of an EDITED sequential workflow — active or
-  // stashed — leaving the manually-ordered steps untouched. An UNedited sequential
-  // workflow is left to the pool-mirror effect, which re-derives in pool order and
-  // already includes the new agent (so we never double-add).
-  const appendSequentialStep = (agentId: string) => {
-    if (workflowMode === "sequential") {
-      if (!editedModes.sequential) return; // mirror effect handles it
-      setWorkflowSteps((prev) =>
-        prev.some((s) => s.agentId === agentId) ? prev : [...prev, emptyStep({ agentId })],
-      );
-    } else if (editedModes.sequential) {
-      setSavedModeSteps((prev) => {
-        const steps = prev.sequential;
-        if (steps === undefined || steps.some((s) => s.agentId === agentId)) return prev;
-        return { ...prev, sequential: [...steps, emptyStep({ agentId })] };
-      });
-    }
   };
 
   // Insert a copy right after the source card, with a fresh id and a unique name.
@@ -375,7 +341,6 @@ export default function AgentPanelPage() {
       const copy = normalizeAgent({ ...src, id: newId, name });
       return [...prev.slice(0, idx + 1), copy, ...prev.slice(idx + 1)];
     });
-    appendSequentialStep(newId);
   };
   const removeAgent = (id: string) => {
     setAgents((prev) => prev.filter((a) => a.id !== id));
@@ -407,10 +372,6 @@ export default function AgentPanelPage() {
   const updateStep = (id: string, updated: WorkflowStep) => {
     markWorkflowEdited();
     setWorkflowSteps((prev) => prev.map((s) => (s.id === id ? updated : s)));
-  };
-  const addStep = () => {
-    markWorkflowEdited();
-    setWorkflowSteps((prev) => [...prev, emptyStep()]);
   };
   // Removing a step also drops any edges that referenced it.
   const removeStep = (id: string) => {
@@ -444,10 +405,8 @@ export default function AgentPanelPage() {
   };
   // Configure Agents — a role button adds a preset agent to the pool, pre-filled
   // with a role-appropriate name, category, task, styles, and avatar (all fully
-  // editable). Judge / Individual / Deliberation cards mirror the pool
-  // automatically (the reconcile effect); Sequential appends the new agent at the
-  // end of its pipeline (appendSequentialStep) — so the new agent surfaces in
-  // every mode with no further action.
+  // editable). Every mode's cards mirror the pool automatically (the reconcile
+  // effect appends the new agent), so it surfaces with no further action.
   const addRoleAgent = (roleKey: string) => {
     const preset = AGENT_ROLE_PRESETS.find((p) => p.key === roleKey);
     if (!preset) return;
@@ -482,7 +441,6 @@ export default function AgentPanelPage() {
       if (preset.avatar !== undefined) overrides.avatar = preset.avatar;
       return [...prev, emptyAgent(overrides)];
     });
-    appendSequentialStep(newId);
   };
   // Edge from→to is stored as to.inputs containing from. Reject self-links,
   // duplicates, and anything that would introduce a cycle.
@@ -534,6 +492,25 @@ export default function AgentPanelPage() {
           : s,
       ),
     );
+  };
+  // Picking a different agent in a card's dropdown swaps that step's agent with the
+  // step currently holding the picked agent, re-ordering without changing the agent
+  // set. Used by both the Sequential steps and the Judge card (the Judge is just the
+  // step at index 0, so it passes its own id). Only the agentId moves; each step
+  // keeps its position-bound config (per-card columns, persona, prev-output toggle,
+  // the Judge's judgeExcluded, worker→worker inputs).
+  const swapStepAgents = (stepId: string, agentId: string) => {
+    markWorkflowEdited();
+    setWorkflowSteps((prev) => {
+      const from = prev.find((s) => s.id === stepId);
+      if (!from || from.agentId === agentId) return prev;
+      const displaced = from.agentId;
+      return prev.map((s) => {
+        if (s.id === stepId) return { ...s, agentId };
+        if (s.agentId === agentId) return { ...s, agentId: displaced };
+        return s;
+      });
+    });
   };
   const handleModeChange = (m: WorkflowMode) => {
     if (m === workflowMode) return;
@@ -1619,13 +1596,13 @@ export default function AgentPanelPage() {
               stepStatuses={stepStatuses}
               onUpdate={updateStep}
               onRemove={removeStep}
-              onAdd={addStep}
               onAddLine={addAgentLine}
               onAddToLine={addStepToLine}
               onConnect={connectSteps}
               onDisconnect={disconnectSteps}
               onCutJudge={cutJudgeLink}
               onRestoreJudge={restoreJudgeLink}
+              onSwapStepAgent={swapStepAgents}
               selectedCols={selectedCols}
               allCols={previewColumns}
               documentInput={hasUnstructuredFile ? documentName : undefined}
@@ -1639,6 +1616,9 @@ export default function AgentPanelPage() {
             <>
               <div className="space-y-4 py-8">
                 <h2 className="text-2xl font-bold">{nOutputFormat}. Output Format</h2>
+                <p className="text-xs text-muted-foreground">
+                  How should the agents handle your file — row by row, or all rows at once?
+                </p>
                 <OutputFormatSelector value={outputFormat} onChange={setOutputFormat} />
               </div>
               <div className="border-t" />
