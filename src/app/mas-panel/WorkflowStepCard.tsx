@@ -34,6 +34,8 @@ interface Props {
    *  category/personality/communication/response tags. Pairs with `compact` for
    *  the Judge mode's small worker cards. */
   minimal?: boolean;
+  /** Sequential — hide the small "Agent" caption above the agent dropdown. */
+  hideAgentLabel?: boolean;
   agents: Agent[];
   onUpdate: (step: WorkflowStep) => void;
   onRemove: () => void;
@@ -143,6 +145,7 @@ export function WorkflowStepCard({
   status,
   compact = false,
   minimal = false,
+  hideAgentLabel = false,
   agents,
   onUpdate,
   onRemove,
@@ -245,7 +248,7 @@ export function WorkflowStepCard({
 
       {/* pr-7 keeps the agent dropdown clear of the top-right "X" remove button. */}
       <div className="space-y-1 pr-7">
-        {!minimal && <Label className="text-[10px] text-muted-foreground">Agent</Label>}
+        {!minimal && !hideAgentLabel && <Label className="text-[10px] text-muted-foreground">Agent</Label>}
         {lockAgent ? (
           // Locked projection of a Configure-Agents agent. When onSwapAgent is set
           // the box becomes a dropdown that PERMUTES this card's agent with the
