@@ -29,7 +29,7 @@ import { useSessionState, clearSessionKeys } from "@/hooks/useSessionState";
 import { ExecutionPanel } from "@/components/tools/ExecutionPanel";
 import { SingleRunButton } from "@/components/tools/SingleRunButton";
 import { ResultsPanel } from "@/components/tools/ResultsPanel";
-import { OutputFormatSelector, type OutputFormat } from "@/app/mas-panel/OutputFormatSelector";
+import { OutputFormatSelector, type OutputFormat } from "@/app/multi-agent-workflows/OutputFormatSelector";
 
 type Row = Record<string, unknown>;
 

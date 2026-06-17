@@ -103,7 +103,7 @@ const data = {
                 },
                 {
                     title: "Multi-Agent Workflows",
-                    url: "/mas-panel",
+                    url: "/multi-agent-workflows",
                     icon: LayoutDashboard,
                 },
             ],

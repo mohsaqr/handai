@@ -61,15 +61,12 @@ function statusFor(stepId: string, statuses?: Record<string, StepStatus>): StepS
 // ── Shared connector components (dashed lines) ───────────────────────────────
 // Structure mirrors ai-agents/page.tsx:172 so arrows line up with card columns.
 
-// Width of the gap between cards. The same value is used by the horizontal
-// connectors, the vertical (down) connector's gap, and the empty padding
-// slots, so the snake's columns stay aligned. CONNECTOR_PX must equal the
-// pixel value of the CONNECTOR_W Tailwind class (w-96 = 24rem = 384px) so the
-// arrows span the gap exactly and touch the cards on both ends. A wide gap keeps
-// the step cards compact and gives the connecting arrows room to read clearly.
-// (Deliberation reuses CONNECTOR_PX as its column gap, so both modes' cards stay
-// the same width.)
-const CONNECTOR_W = "w-96";
+// Maximum gap between cards, in px. The Sequential layout measures its container
+// and reserves this same width (or less, on a narrow panel) for the horizontal
+// connectors, the vertical (down) connector's gap, and the empty padding slots,
+// so the snake's columns stay aligned and the arrows span the gap exactly. A wide
+// gap keeps the step cards compact and gives the connecting arrows room to read;
+// on a narrow screen the gap shrinks so the cards don't get crushed.
 const CONNECTOR_PX = 384;
 
 // Scissors cursor for the "click to remove this connection" hit area. A white
@@ -87,31 +84,34 @@ const SCISSORS_SVG =
   `<line x1="8.12" y1="8.12" x2="12" y2="12"/></g></svg>`;
 const SCISSORS_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(SCISSORS_SVG)}") 10 12, pointer`;
 
-function SConnector({ direction, cols = 2 }: {
+function SConnector({ direction, cols = 2, widthPx = CONNECTOR_PX }: {
   direction: "left-to-right" | "right-to-left" | "down-left" | "down-right";
   /** Number of card columns in the row above, so the vertical arrow lands
    *  centered under the correct card (down-left → first, down-right → last). */
   cols?: number;
+  /** Measured gap width in px — the same value the row reserves between cards, so
+   *  the arrow spans the gap exactly. Shrinks on narrow screens (responsive). */
+  widthPx?: number;
 }) {
   const color = "text-muted-foreground";
 
   if (direction === "left-to-right") {
     return (
-      <div className={`flex flex-col items-center justify-center ${CONNECTOR_W} self-center`}>
-        <svg width={CONNECTOR_PX} height="28" viewBox={`0 0 ${CONNECTOR_PX} 28`} fill="none" className={color}>
+      <div className="flex flex-col items-center justify-center self-center shrink-0" style={{ width: widthPx }}>
+        <svg width={widthPx} height="28" viewBox={`0 0 ${widthPx} 28`} fill="none" className={color}>
           <circle cx="4" cy="14" r="4" fill="currentColor" />
-          <path d={`M8 14 H${CONNECTOR_PX - 20}`} stroke="currentColor" strokeWidth="3.5" strokeDasharray="6 4" />
-          <polygon points={`${CONNECTOR_PX - 20},5 ${CONNECTOR_PX - 2},14 ${CONNECTOR_PX - 20},23`} fill="currentColor" />
+          <path d={`M8 14 H${widthPx - 20}`} stroke="currentColor" strokeWidth="3.5" strokeDasharray="6 4" />
+          <polygon points={`${widthPx - 20},5 ${widthPx - 2},14 ${widthPx - 20},23`} fill="currentColor" />
         </svg>
       </div>
     );
   }
   if (direction === "right-to-left") {
     return (
-      <div className={`flex flex-col items-center justify-center ${CONNECTOR_W} self-center`}>
-        <svg width={CONNECTOR_PX} height="28" viewBox={`0 0 ${CONNECTOR_PX} 28`} fill="none" className={color}>
-          <circle cx={CONNECTOR_PX - 4} cy="14" r="4" fill="currentColor" />
-          <path d={`M${CONNECTOR_PX - 8} 14 H20`} stroke="currentColor" strokeWidth="3.5" strokeDasharray="6 4" />
+      <div className="flex flex-col items-center justify-center self-center shrink-0" style={{ width: widthPx }}>
+        <svg width={widthPx} height="28" viewBox={`0 0 ${widthPx} 28`} fill="none" className={color}>
+          <circle cx={widthPx - 4} cy="14" r="4" fill="currentColor" />
+          <path d={`M${widthPx - 8} 14 H20`} stroke="currentColor" strokeWidth="3.5" strokeDasharray="6 4" />
           <polygon points="20,5 2,14 20,23" fill="currentColor" />
         </svg>
       </div>
@@ -139,7 +139,7 @@ function SConnector({ direction, cols = 2 }: {
     <div className="flex gap-0">
       {Array.from({ length: cols }, (_, i) => (
         <React.Fragment key={i}>
-          {i > 0 && <div className={`${CONNECTOR_W} shrink-0`} />}
+          {i > 0 && <div className="shrink-0" style={{ width: widthPx }} />}
           {i === arrowCol ? arrow : spacer}
         </React.Fragment>
       ))}
@@ -157,11 +157,48 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
   // in Configure Agents). Picking a different agent in a card's dropdown SWAPS the
   // two agents' positions (onSwapStepAgent), letting the user re-order the pipeline
   // without changing the agent set.
+
+  // Measure the live container width so the snake stays readable at any size: the
+  // number of cards per row AND the connector (arrow) width both shrink as the
+  // panel narrows, instead of fixed columns crushing the cards. A card needs about
+  // CARD_MIN px to stay usable, so we fit as many whole cards (+ gaps) as the width
+  // allows, then spend any leftover space widening the arrows (capped at 384px).
+  const wrapRef = React.useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = React.useState(0);
+  React.useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setWidth(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const CARD_MIN = 276; // comfortable card width (avatar + dropdown + chips)
+  // ≥3 cards need 3·CARD_MIN + 2 gaps; ≥2 need 2·CARD_MIN + 1 gap; else stack to 1.
+  const cols =
+    width === 0 ? Math.min(SEQUENTIAL_COLS, Math.max(1, steps.length))
+    : width >= CARD_MIN * 3 + 80 ? SEQUENTIAL_COLS
+    : width >= CARD_MIN * 2 + 40 ? 2
+    : 1;
+  // Connector spans the leftover width after every card gets CARD_MIN, capped at
+  // 384 (the wide-screen "long arrow" look). 0 when single-column (no side arrows).
+  // Before the first measurement (width === 0, i.e. SSR / first paint) use a modest
+  // gap so a narrow container can't overflow for the one frame before the
+  // ResizeObserver fires and swaps in the real value.
+  const connectorPx =
+    cols <= 1
+      ? 0
+      : width === 0
+        ? 144
+        : Math.round(Math.max(40, Math.min(CONNECTOR_PX, (width - cols * CARD_MIN) / (cols - 1))));
+
   const cellCount = steps.length;
   const rows: number[][] = [];
-  for (let i = 0; i < cellCount; i += SEQUENTIAL_COLS) {
+  for (let i = 0; i < cellCount; i += cols) {
     const row: number[] = [];
-    for (let j = i; j < Math.min(i + SEQUENTIAL_COLS, cellCount); j++) row.push(j);
+    for (let j = i; j < Math.min(i + cols, cellCount); j++) row.push(j);
     rows.push(row);
   }
 
@@ -171,7 +208,7 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
     Array.from({ length: n }, (_, i) => (
       <React.Fragment key={`empty-${i}`}>
         <div className="flex-1 min-w-0" />
-        <div className={`${CONNECTOR_W} shrink-0`} />
+        <div className="shrink-0" style={{ width: connectorPx }} />
       </React.Fragment>
     ));
 
@@ -186,11 +223,11 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
   }
 
   return (
-    <div className="space-y-0">
+    <div ref={wrapRef} className="space-y-0">
       {rows.map((row, rowIdx) => {
         const isEvenRow = rowIdx % 2 === 0;
         const orderedRow = isEvenRow ? row : [...row].reverse();
-        const missing = SEQUENTIAL_COLS - row.length;
+        const missing = cols - row.length;
 
         return (
           <div key={rowIdx}>
@@ -224,7 +261,10 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
                       />
                     </div>
                     {!isLastInRow && (
-                      <SConnector direction={isEvenRow ? "left-to-right" : "right-to-left"} />
+                      <SConnector
+                        direction={isEvenRow ? "left-to-right" : "right-to-left"}
+                        widthPx={connectorPx}
+                      />
                     )}
                   </React.Fragment>
                 );
@@ -240,7 +280,8 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
             {rowIdx < rows.length - 1 && (
               <SConnector
                 direction={isEvenRow ? "down-right" : "down-left"}
-                cols={SEQUENTIAL_COLS}
+                cols={cols}
+                widthPx={connectorPx}
               />
             )}
           </div>
@@ -371,7 +412,16 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
         (!!nextJudge && !!prev.judge && eq(nextJudge, prev.judge));
       return sameWorkers && sameJudge ? prev : { workers: nextWorkers, judge: nextJudge };
     });
-  }, [signature, resizeTick]);
+    // `boxSize` MUST be a dependency: this effect both reads it (cards are placed
+    // from it via workerPos) and sets it. On a window resize, resizeTick fires the
+    // effect once — it measures the cards at their OLD positions and schedules the
+    // new boxSize. That new boxSize repositions every card, so the effect has to run
+    // AGAIN to re-measure them at their new spots; without boxSize here it wouldn't,
+    // and the spokes/arrows would stay frozen at the pre-resize (small) geometry
+    // until something else (e.g. reconnecting a card) changed `signature`. The
+    // setBoxSize guard (|Δ| < 0.5 → no-op) and the rect-equality guard stop this
+    // from looping.
+  }, [signature, resizeTick, boxSize]);
 
   const setWorkerRef = (id: string) => (el: HTMLDivElement | null) => {
     if (el) workerRefs.current.set(id, el);
@@ -419,10 +469,34 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
   // triangle for 3, square for 4, pentagon for 5, and so on. Rather than a fixed
   // radius, each worker is pushed as far toward the canvas edge as its card
   // allows (independently per axis), so the ring fills the whole width/height and
-  // the Judge→worker spokes are as long as possible. Card widths are FIXED px.
-  const WORKER_W = 400;
-  const JUDGE_W = 410;
+  // the Judge→worker spokes are as long as possible.
   const N = workers.length;
+  // Canvas width = the measured container width (height is capped below).
+  const canvasW = boxSize;
+  // Card width ADAPTS to the ring so cards never pile on top of one another on a
+  // narrow panel — it's the largest width that keeps the layout collision-free for
+  // the current canvas width and node count, capped at the full 400/410px on a
+  // roomy panel and floored so cards stay readable. Two limits, whichever bites:
+  //   • worker ↔ Judge hub (Judge mode only): the ring radius is bounded by the
+  //     canvas, which stops a worker reaching the centre hub once its width passes
+  //     ~canvasW/3.
+  //   • neighbour ↔ neighbour: adjacent vertices of the N-gon are 2·R·sin(π/N)
+  //     apart, and that gap must stay wider than a card.
+  // ×0.92 leaves a small breathing gap instead of letting cards merely touch. One
+  // node (or none) has no ring to crowd, so it keeps the full width.
+  const ringSafeW = (() => {
+    if (N <= 1) return 400;
+    const hubLimit = hasHub ? canvasW / 3 : Infinity;
+    const s = Math.sin(Math.PI / N);
+    const neighbourLimit = (canvasW * s) / (1 + s);
+    return Math.min(hubLimit, neighbourLimit) * 0.92;
+  })();
+  // Floors match the card's intrinsic minimum — the w-36 (144px) avatar plus the
+  // card's padding + gap — so a card never shrinks past its avatar (which would
+  // overflow) and the collision math above stays accurate. Below the canvas width
+  // where even a floored ring fits, a multi-card ring simply can't avoid overlap.
+  const WORKER_W = Math.round(Math.min(400, Math.max(175, ringSafeW)));
+  const JUDGE_W = Math.round(Math.min(410, Math.max(180, ringSafeW)));
   // Spread the ring wider as workers multiply. With 7+ workers a 1700-wide canvas
   // crowds the cards into the middle (so the Judge→worker spokes shrink to almost
   // nothing) while empty space sits on the left/right of the page. Raising the
@@ -439,11 +513,6 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
     (_, i) => ((startDeg + (360 / Math.max(N, 1)) * i) * Math.PI) / 180,
   );
 
-  // Canvas = the positioning box. Width is the measured container width; height
-  // is capped so the diagram doesn't get absurdly tall on a wide panel. Two or
-  // fewer workers form a horizontal line (no vertical spread), so a short box
-  // avoids a big empty band above and below.
-  const canvasW = boxSize;
   // A lone worker stacks vertically above the Judge and needs real vertical room
   // for a visible spoke. Two workers flank the Judge horizontally (no vertical
   // spread), so a short box avoids empty bands above and below.
