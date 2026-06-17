@@ -470,7 +470,7 @@ export default function RunDetailClient({ id }: { id: string }) {
         // Old runType slugs whose tools were renamed — route to the new URL.
         const slugAlias: Record<string, string> = {
           "consensus-coder": "model-comparison",
-          "agent-panel": "mas-panel",
+          "agent-panel": "multi-agent-workflows",
         };
         const targetSlug = slugAlias[run.runType] ?? run.runType;
         router.push(`/${targetSlug}`);

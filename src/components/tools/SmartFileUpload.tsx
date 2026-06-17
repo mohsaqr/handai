@@ -43,29 +43,23 @@ export function SmartFileUpload({ file, status, errorMessage, previewRows, onDro
 
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+        className={`mx-auto max-w-3xl border-2 border-dashed rounded-lg px-4 py-3 text-center cursor-pointer transition-colors ${
           isDragActive
             ? "border-primary bg-primary/5"
             : "border-muted-foreground/30 hover:border-primary/50 hover:bg-muted/20"
         }`}
       >
         <input {...getInputProps()} />
-        <div className="flex flex-col items-center justify-center space-y-4">
-          <div className="p-3 rounded-full bg-muted">
-            <Upload className="h-6 w-6 text-muted-foreground" />
-          </div>
-          <div className="space-y-1">
-            <p className="text-sm font-medium">
-              {isDragActive ? "Drop the file here" : "Click or drag file to upload"}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
-            </p>
-            <p className="text-[11px] text-muted-foreground/60 italic">
-              Optional — leave empty to run a single prompt from worker instructions
-            </p>
-          </div>
+        <div className="flex items-center justify-center gap-2">
+          <Upload className="h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="text-sm font-medium">
+            {isDragActive ? "Drop the file here" : "Click or drag file to upload"}
+          </span>
         </div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
+          <span className="text-muted-foreground/60 italic"> · optional, leave empty to run a single prompt</span>
+        </p>
       </div>
 
       {file && (

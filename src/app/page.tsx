@@ -79,7 +79,7 @@ const CATEGORIES = [
         title: "Multi-Agent Workflows",
         description: "Orchestrate multi-agent workflows — sequential pipelines, parallel deliberation rounds, or reconciler-with-workers.",
         icon: LayoutDashboard,
-        href: "/mas-panel",
+        href: "/multi-agent-workflows",
         color: "text-purple-500",
         bg: "bg-purple-50 dark:bg-purple-950/30",
         border: "hover:border-purple-200 dark:hover:border-purple-800",

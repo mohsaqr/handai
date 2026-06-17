@@ -190,14 +190,14 @@ function AgentCard({
       )}
 
       <div
-        className={`shrink-0 w-32 h-32 rounded-lg overflow-hidden bg-muted/40 flex items-center justify-center ${
+        className={`shrink-0 w-24 h-24 rounded-lg overflow-hidden bg-muted/40 flex items-center justify-center ${
           typeof agent.avatar === "number" ? "border" : "border border-dashed border-muted-foreground/40"
         }`}
       >
         {typeof agent.avatar === "number" ? (
           <div className="w-full h-full" style={avatarStyle(agent.avatar)} aria-hidden />
         ) : (
-          <User className="h-14 w-14 text-muted-foreground/60" />
+          <User className="h-12 w-12 text-muted-foreground/60" />
         )}
       </div>
 
@@ -223,12 +223,16 @@ function AgentCard({
         </div>
 
         <div className="mt-auto pt-1">
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onConfigure}>
-              <Settings2 className="h-3.5 w-3.5" /> Configure
+          {/* flex-wrap so the two actions stack instead of overflowing when the
+              card is narrow (e.g. many columns on a wide screen, or a split panel).
+              flex-1 + a sane min-width lets them share a row when there's room and
+              each take a full row when there isn't. */}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" className="gap-1.5 text-xs flex-1 min-w-[6rem]" onClick={onConfigure}>
+              <Settings2 className="h-3.5 w-3.5 shrink-0" /> Configure
             </Button>
-            <Button variant="outline" size="sm" className="gap-1.5 text-xs" onClick={onDuplicate}>
-              <Copy className="h-3.5 w-3.5" /> Duplicate
+            <Button variant="outline" size="sm" className="gap-1.5 text-xs flex-1 min-w-[6rem]" onClick={onDuplicate}>
+              <Copy className="h-3.5 w-3.5 shrink-0" /> Duplicate
             </Button>
           </div>
         </div>
@@ -1164,7 +1168,7 @@ export default function AgentPanelPage() {
   };
 
   const batch = useBatchProcessor({
-    toolId: "/mas-panel",
+    toolId: "/multi-agent-workflows",
     runType: "agent-panel",
     activeModel: representativeModel,
     systemSettings,
@@ -1321,7 +1325,7 @@ export default function AgentPanelPage() {
 
       const errors = restored.results.filter((r) => r.status === "error").length;
       useProcessingStore.getState().completeJob(
-        "/mas-panel",
+        "/multi-agent-workflows",
         restored.results,
         { success: restored.results.length - errors, errors, avgLatency: 0 },
         restored.runId,
@@ -1526,23 +1530,32 @@ export default function AgentPanelPage() {
           </Link>
         ) : (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {agents.length === 0 ? (
-                // Empty pool — reserve one card's worth of height so the section
-                // doesn't collapse to just the buttons.
-                <div className="min-h-[8.5rem]" aria-hidden />
-              ) : (
-                agents.map((a) => (
-                  <AgentCard
-                    key={a.id}
-                    agent={a}
-                    onConfigure={() => setConfiguringId(a.id)}
-                    onDuplicate={() => duplicateAgent(a.id)}
-                    onRemove={() => removeAgent(a.id)}
-                    canRemove
-                  />
-                ))
-              )}
+            {/* Container-query grid: the column count keys off this wrapper's REAL
+                width (the panel), not the viewport, so it's correct regardless of the
+                sidebar / split state. Capped at 4 columns, and each column is 1fr so
+                the 4 cards GROW to fill the full width (adaptive size) instead of
+                being pinned to a fixed width with empty space beside them. It steps
+                down 4 → 3 → 2 → 1 as the panel narrows; the thresholds keep every
+                column ≥ ~16rem so the avatar + text + action buttons never overflow. */}
+            <div className="@container">
+              <div className="grid grid-cols-1 @min-[544px]:grid-cols-2 @min-[832px]:grid-cols-3 @min-[1088px]:grid-cols-4 gap-4">
+                {agents.length === 0 ? (
+                  // Empty pool — reserve one card's worth of height so the section
+                  // doesn't collapse to just the buttons.
+                  <div className="min-h-[8.5rem]" aria-hidden />
+                ) : (
+                  agents.map((a) => (
+                    <AgentCard
+                      key={a.id}
+                      agent={a}
+                      onConfigure={() => setConfiguringId(a.id)}
+                      onDuplicate={() => duplicateAgent(a.id)}
+                      onRemove={() => removeAgent(a.id)}
+                      canRemove
+                    />
+                  ))
+                )}
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {AGENT_ROLE_PRESETS.map((preset) => (

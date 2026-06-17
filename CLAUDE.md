@@ -50,7 +50,7 @@ Each `src/app/<route>/` is a self-contained tool page sharing the dispatch/model
 - `automator` — multi-step prompt chains over a dataset.
 - `consensus` lives under `model-comparison` — N-rater consensus + kappa (see Consensus pipeline).
 - `codebook-generator`, `generate`, `extract-data`, `process-documents` — codebook synthesis, free generation, structured extraction, and PDF/DOCX ingestion.
-- `mas-panel` — multi-agent system orchestration (see MAS panel below).
+- `multi-agent-workflows` — multi-agent system orchestration (see MAS panel below). Route dir formerly `mas-panel`; saved runs still use `runType: "agent-panel"`.
 - `history` — run browser; `settings` — provider config + prompt overrides.
 
 ### The dispatch layer (`src/lib/llm-dispatch.ts`)
@@ -113,7 +113,7 @@ DB log writes in API routes are wrapped in **isolated** `try/catch` — a Prisma
 
 `/api/consensus-row` and `consensusRowDirect` implement the same flow: N workers (2–5) run in parallel via `Promise.allSettled`, Cohen's kappa + N×N pairwise agreement matrix are computed (`src/lib/analytics.ts`), a judge model synthesises the workers' outputs, and optional quality scores / disagreement analysis are computed. **Throws only if fewer than 2 workers succeed** (kappa requires at least 2 raters). A single failing worker does not abort the analysis.
 
-### MAS panel (`src/app/mas-panel/`)
+### MAS panel (`src/app/multi-agent-workflows/`)
 
 Multi-agent orchestration UI. State is split across files that must stay in sync:
 
