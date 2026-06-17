@@ -64,13 +64,13 @@ function statusFor(stepId: string, statuses?: Record<string, StepStatus>): StepS
 // Width of the gap between cards. The same value is used by the horizontal
 // connectors, the vertical (down) connector's gap, and the empty padding
 // slots, so the snake's columns stay aligned. CONNECTOR_PX must equal the
-// pixel value of the CONNECTOR_W Tailwind class (w-72 = 18rem = 288px) so the
+// pixel value of the CONNECTOR_W Tailwind class (w-96 = 24rem = 384px) so the
 // arrows span the gap exactly and touch the cards on both ends. A wide gap keeps
 // the step cards compact and gives the connecting arrows room to read clearly.
 // (Deliberation reuses CONNECTOR_PX as its column gap, so both modes' cards stay
 // the same width.)
-const CONNECTOR_W = "w-72";
-const CONNECTOR_PX = 288;
+const CONNECTOR_W = "w-96";
+const CONNECTOR_PX = 384;
 
 // Scissors cursor for the "click to remove this connection" hit area. A white
 // halo (drawn first, thicker) keeps it visible on any background; the black
@@ -210,6 +210,7 @@ function SequentialSLayout({ steps, agents, stepStatuses, onUpdate, onRemove, on
                         status={statusFor(steps[globalIdx].id, stepStatuses)}
                         agents={agents}
                         compact
+                        hideAgentLabel
                         showInputData
                         inputCols={selectedCols}
                         allCols={allCols}
