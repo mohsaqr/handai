@@ -190,14 +190,14 @@ function AgentCard({
       )}
 
       <div
-        className={`shrink-0 w-24 h-24 rounded-lg overflow-hidden bg-muted/40 flex items-center justify-center ${
+        className={`shrink-0 w-32 h-32 rounded-lg overflow-hidden bg-muted/40 flex items-center justify-center ${
           typeof agent.avatar === "number" ? "border" : "border border-dashed border-muted-foreground/40"
         }`}
       >
         {typeof agent.avatar === "number" ? (
           <div className="w-full h-full" style={avatarStyle(agent.avatar)} aria-hidden />
         ) : (
-          <User className="h-12 w-12 text-muted-foreground/60" />
+          <User className="h-16 w-16 text-muted-foreground/60" />
         )}
       </div>
 
