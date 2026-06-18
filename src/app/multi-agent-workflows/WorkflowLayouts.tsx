@@ -514,14 +514,18 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
   );
 
   // A lone worker stacks vertically above the Judge and needs real vertical room
-  // for a visible spoke. Two workers flank the Judge horizontally (no vertical
-  // spread), so a short box avoids empty bands above and below.
-  // Only the Judge mode's lone worker stacks above the hub; with no hub a single
-  // agent just centers in the ring like any other node.
+  // for a visible spoke. Two workers fan across the TOP with the Judge centered
+  // below (an inverted "∨" that funnels both workers down into the Judge) rather
+  // than a flat worker–Judge–worker line, so they need the same taller two-row box.
+  // Only the Judge mode's lone worker / pair stack above the hub; with no hub the
+  // nodes just sit around the ring.
   const isVerticalStack = hasHub && N === 1;
+  const isTopFan = hasHub && N === 2;
   const canvasH = isVerticalStack
     ? Math.min(boxSize, 500)
-    : Math.min(boxSize, N >= 3 ? CANVAS_MAX_H : 320);
+    : isTopFan
+      ? Math.min(boxSize, 480)
+      : Math.min(boxSize, N >= 3 ? CANVAS_MAX_H : 320);
   // The worker with the largest |cos| (resp. |sin|) is the one closest to the
   // left/right (resp. top/bottom) edge. Size the horizontal/vertical radius so
   // THAT worker just clears the margin — every other worker then sits inside.
@@ -531,6 +535,14 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
   const maxSin = angles.reduce((m, a) => Math.max(m, Math.abs(Math.sin(a))), 0.001);
   const rx = Math.max(0, canvasW / 2 - WORKER_W / 2 - MARGIN) / maxCos;
   const ry = Math.max(0, canvasH / 2 - CARD_HALF_H - MARGIN) / maxSin;
+  // Top-fan half-spread: how far each of the two workers sits left/right of
+  // centre. Bounded so the pair never overflows the canvas, and capped at
+  // ¾·card-width so a roomy canvas keeps the triangle compact instead of
+  // flattening the funnel back toward a horizontal line.
+  const fanHalfX = Math.min(
+    Math.max(0, canvasW / 2 - WORKER_W / 2 - MARGIN),
+    WORKER_W * 0.75,
+  );
   const workerPos = (i: number) => {
     // Single worker: pin it near the top, centered over the Judge, so the spoke
     // runs straight down. The radial formula would place it only ~ry above the
@@ -539,15 +551,24 @@ function RadialWorkflowLayout({ mode, steps, agents, stepStatuses, onUpdate, onR
     if (isVerticalStack) {
       return { leftPx: canvasW / 2, topPx: MARGIN + CARD_HALF_H };
     }
+    // Two workers: side by side along the top band (i=0 left, i=1 right), both
+    // funneling down into the Judge centered below — an inverted triangle.
+    if (isTopFan) {
+      return {
+        leftPx: canvasW / 2 + (i === 0 ? -fanHalfX : fanHalfX),
+        topPx: MARGIN + CARD_HALF_H,
+      };
+    }
     return {
       leftPx: canvasW / 2 + rx * Math.cos(angles[i]),
       topPx: canvasH / 2 + ry * Math.sin(angles[i]),
     };
   };
   // Judge sits at the canvas center for the radial layouts; for the lone-worker
-  // vertical stack it drops to the bottom so the worker→Judge spoke spans the
-  // whole canvas instead of being squeezed into one half.
-  const judgeTopPx = isVerticalStack ? canvasH - MARGIN - CARD_HALF_H : canvasH / 2;
+  // vertical stack and the two-worker top fan it drops to the bottom so the
+  // worker→Judge spokes span the canvas instead of being squeezed into one half.
+  const judgeTopPx =
+    isVerticalStack || isTopFan ? canvasH - MARGIN - CARD_HALF_H : canvasH / 2;
 
   const rectCenter = (r: Rect) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
   // Point on a rect's boundary in the direction of (tx, ty) — anchors each

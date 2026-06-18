@@ -45,8 +45,8 @@ export function SmartFileUpload({ file, status, errorMessage, previewRows, onDro
         {...getRootProps()}
         className={`mx-auto max-w-3xl border-2 border-dashed rounded-lg px-4 py-3 text-center cursor-pointer transition-colors ${
           isDragActive
-            ? "border-primary bg-primary/5"
-            : "border-muted-foreground/30 hover:border-primary/50 hover:bg-muted/20"
+            ? "border-primary bg-primary/10"
+            : "border-primary/40 bg-primary/[0.03] hover:border-primary/70 hover:bg-primary/5"
         }`}
       >
         <input {...getInputProps()} />
@@ -108,13 +108,6 @@ export function SmartFileUpload({ file, status, errorMessage, previewRows, onDro
 
       {previewRows && previewRows.length > 0 && (
         <>
-          <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-green-50 dark:bg-green-950/20 border border-green-200 text-sm text-green-700 dark:text-green-300 flex-wrap">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>
-              <strong>{previewRows.length} rows</strong> loaded
-              {file ? <> from <strong>{file.name}</strong></> : null}
-            </span>
-          </div>
           <div className="border rounded-lg overflow-hidden">
             <div className="px-4 py-2.5 border-b bg-muted/20 text-sm font-medium flex items-center justify-between flex-wrap gap-2">
               <span>Data Preview — {previewRows.length} rows{file ? ` · ${file.name}` : ""}</span>
