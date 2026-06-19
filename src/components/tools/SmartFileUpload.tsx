@@ -26,40 +26,42 @@ export function SmartFileUpload({ file, status, errorMessage, previewRows, onDro
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Select value="" onValueChange={onLoadSample}>
-          <SelectTrigger className="w-[200px] h-9 text-xs">
-            <SelectValue placeholder="-- Load sample..." />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.keys(SAMPLE_DATASETS).map((key) => (
-              <SelectItem key={key} value={key} className="text-xs">
-                {SAMPLE_DATASETS[key].name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div
-        {...getRootProps()}
-        className={`mx-auto max-w-3xl border-2 border-dashed rounded-lg px-4 py-3 text-center cursor-pointer transition-colors ${
-          isDragActive
-            ? "border-primary bg-primary/10"
-            : "border-primary/40 bg-primary/[0.03] hover:border-primary/70 hover:bg-primary/5"
-        }`}
-      >
-        <input {...getInputProps()} />
-        <div className="flex items-center justify-center gap-2">
-          <Upload className="h-4 w-4 text-muted-foreground shrink-0" />
-          <span className="text-sm font-medium">
-            {isDragActive ? "Drop the file here" : "Click or drag file to upload"}
-          </span>
+      <div className="relative flex w-full items-center justify-center">
+        <div
+          {...getRootProps()}
+          className={`w-[42rem] max-w-full border-2 border-dashed rounded-xl px-6 py-10 text-center cursor-pointer transition-colors ${
+            isDragActive
+              ? "border-primary bg-primary/10"
+              : "border-primary/40 bg-primary/[0.03] hover:border-primary/70 hover:bg-primary/5"
+          }`}
+        >
+          <input {...getInputProps()} />
+          <div className="flex items-center justify-center gap-2.5">
+            <Upload className="h-6 w-6 text-muted-foreground shrink-0" />
+            <span className="text-base font-medium">
+              {isDragActive ? "Drop the file here" : "Click or drag file to upload"}
+            </span>
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
+            <span className="text-muted-foreground/60 italic"> · optional, leave empty to run a single prompt</span>
+          </p>
         </div>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          PDF, DOCX, Excel, TXT, MD, JSON, CSV, HTML
-          <span className="text-muted-foreground/60 italic"> · optional, leave empty to run a single prompt</span>
-        </p>
+
+        <div className="absolute right-0 top-1/2 -translate-y-1/2">
+          <Select value="" onValueChange={onLoadSample}>
+            <SelectTrigger className="w-[200px] h-9 text-xs shrink-0">
+              <SelectValue placeholder="-- Load sample..." />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.keys(SAMPLE_DATASETS).map((key) => (
+                <SelectItem key={key} value={key} className="text-xs">
+                  {SAMPLE_DATASETS[key].name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {file && (
