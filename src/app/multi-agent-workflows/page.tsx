@@ -8,7 +8,7 @@ import { SAMPLE_DATASETS, sampleAsFile } from "@/lib/sample-data";
 import { useAppStore } from "@/lib/store";
 import { useSystemSettings } from "@/lib/hooks";
 import { useRestoreSession } from "@/hooks/useRestoreSession";
-import { AlertCircle, Copy, HelpCircle, Plus, RotateCcw, Settings2, User, X } from "lucide-react";
+import { AlertCircle, ArrowRight, Copy, HelpCircle, Network, Play, Plus, RotateCcw, Settings2, Sparkles, Table2, Upload, User, Users, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -593,34 +593,50 @@ export default function AgentPanelPage() {
     lines.push("");
 
     if (workflowMode) {
-      lines.push(`WORKFLOW MODE: ${workflowMode}`);
+      const modeLabels: Record<string, string> = {
+        reconcilier: "Judge",
+        personalized: "Personalized",
+        sequential: "Sequential",
+        deliberation: "Deliberation",
+      };
+      lines.push(`Workflow: ${modeLabels[workflowMode] ?? workflowMode}`);
       lines.push("");
     }
 
     if (selectedCols.length > 0) {
-      lines.push("SELECTED COLUMNS:");
-      selectedCols.forEach((c) => lines.push(`- ${c}`));
+      lines.push("Input columns:");
+      selectedCols.forEach((c) => lines.push(`  • ${c}`));
       lines.push("");
     }
 
     if (workflowSteps.length > 0) {
-      lines.push("STEPS:");
+      lines.push("Agents:");
       workflowSteps.forEach((s, i) => {
         const a = s.agentId ? agentById[s.agentId] : null;
         const agentRef = a ? `${a.name || "(unnamed)"} — ${providerLabel(a.providerId)}/${a.model}` : "(no agent selected)";
-        lines.push(`- Step ${i + 1}: ${agentRef}${s.taskDescription ? ` — ${s.taskDescription.slice(0, 80)}` : ""}`);
+        lines.push(`  ${i + 1}. ${agentRef}${s.taskDescription ? ` — ${s.taskDescription.slice(0, 80)}` : ""}`);
       });
       lines.push("");
     }
 
-    lines.push("RULES:");
-    lines.push("- Process each row independently");
-    lines.push("- Return only the final result, no explanation");
-    lines.push("- Do not include markdown or code fences");
+    lines.push("Rules:");
+    lines.push("  • Process each row independently.");
+    lines.push("  • Return only the final result — no explanation.");
+    lines.push("  • Do not include markdown or code fences.");
     lines.push("");
 
-    // Single-line JSON: regex parsing on restore relies on `.+$` matching one line.
-    const workflowConfigOpen = JSON.stringify({
+    lines.push(AI_INSTRUCTIONS_MARKER);
+    return lines.join("\n");
+  }, [workflowMode, selectedCols, workflowSteps, agentById]);
+
+  const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
+
+  // Machine-readable workflow snapshot. Appended to the SAVED system prompt only
+  // (never shown in the editable AI Instructions textarea, and never sent to the
+  // agents) so that Session restore can parse the full configuration back out.
+  // Kept on a single line because the restore regex matches `^WORKFLOW CONFIG: (.+)$`.
+  const restoreConfigLine = useMemo(() => {
+    const open = JSON.stringify({
       mode: workflowMode,
       agents,
       steps: workflowSteps,
@@ -628,17 +644,18 @@ export default function AgentPanelPage() {
       selectedCols,
       delibSettings,
     });
-    const workflowConfig = previewRowsJson
-      ? workflowConfigOpen.slice(0, -1) + `,"previewRows":${previewRowsJson}}`
-      : workflowConfigOpen;
-    lines.push("WORKFLOW CONFIG: " + workflowConfig);
-    lines.push("");
+    const config = previewRowsJson
+      ? open.slice(0, -1) + `,"previewRows":${previewRowsJson}}`
+      : open;
+    return "WORKFLOW CONFIG: " + config;
+  }, [workflowMode, agents, workflowSteps, outputFormat, selectedCols, delibSettings, previewRowsJson]);
 
-    lines.push(AI_INSTRUCTIONS_MARKER);
-    return lines.join("\n");
-  }, [workflowMode, selectedCols, workflowSteps, agentById, outputFormat, delibSettings, agents, previewRowsJson]);
-
-  const [aiInstructions, setAiInstructions] = useAIInstructions(buildAutoInstructions);
+  // What gets persisted with the run: the clean, human-readable instructions
+  // plus the hidden machine config line that restore reads.
+  const persistedSystemPrompt = useMemo(
+    () => `${aiInstructions}\n\n${restoreConfigLine}`,
+    [aiInstructions, restoreConfigLine],
+  );
 
   // Representative model (first agent) — used by batch processor's activeModel contract
   const representativeModel = useMemo(() => {
@@ -1174,7 +1191,7 @@ export default function AgentPanelPage() {
     systemSettings,
     data,
     dataName,
-    systemPrompt: aiInstructions,
+    systemPrompt: persistedSystemPrompt,
     concurrency,
     validate,
     runParams: {
@@ -1465,6 +1482,14 @@ export default function AgentPanelPage() {
     </AIInstructionsSection>
   );
 
+  const guideSteps = [
+    { icon: Upload, title: "Upload Data", desc: "Add a CSV, Excel, or document — or skip it to run on a single prompt.", tag: "Optional" },
+    { icon: Users, title: "Configure Agents", desc: "Build your pool of AI agents and pick each one's role and model." },
+    { icon: Network, title: "Configure Workflow", desc: "Decide how they collaborate: Judge, Personalized, Sequential, or Deliberation." },
+    { icon: Table2, title: "Output Format", desc: "Choose how agents handle your data — row by row, or all rows at once." },
+    { icon: Play, title: "Execute", desc: "Run the workflow and review every agent's output side by side." },
+  ];
+
   return (
     <div className="space-y-0 pb-16">
       <div className="pb-6 flex items-start justify-between">
@@ -1475,6 +1500,45 @@ export default function AgentPanelPage() {
         <Button variant="destructive" className="gap-2 px-5" onClick={handleStartOver}>
           <RotateCcw className="h-3.5 w-3.5" /> Start Over
         </Button>
+      </div>
+
+      {/* ── How it works: guided overview of the steps until execution */}
+      <div className="mb-10 overflow-hidden rounded-2xl border bg-gradient-to-br from-primary/[0.06] via-background to-background">
+        <div className="border-b bg-muted/30 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <h2 className="text-base font-semibold">How it works</h2>
+          </div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Five steps from your data to multi-agent results — follow them top to bottom.
+          </p>
+        </div>
+        <div className="flex flex-col gap-3 p-5 lg:flex-row lg:items-stretch lg:gap-2">
+          {guideSteps.map((s, i) => (
+            <React.Fragment key={s.title}>
+              <div className="flex flex-1 flex-col gap-2 rounded-xl border bg-card/60 p-4 transition-colors hover:border-primary/50 hover:bg-card">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
+                    {i + 1}
+                  </span>
+                  <s.icon className="h-4 w-4 text-primary" />
+                  {s.tag && (
+                    <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      {s.tag}
+                    </span>
+                  )}
+                </div>
+                <h3 className="text-sm font-semibold leading-tight">{s.title}</h3>
+                <p className="text-xs leading-snug text-muted-foreground">{s.desc}</p>
+              </div>
+              {i < guideSteps.length - 1 && (
+                <div className="hidden shrink-0 items-center justify-center lg:flex">
+                  <ArrowRight className="h-5 w-5 text-muted-foreground/40" />
+                </div>
+              )}
+            </React.Fragment>
+          ))}
+        </div>
       </div>
 
       <div className={batch.isProcessing ? "pointer-events-none opacity-60" : ""}>
@@ -1530,6 +1594,20 @@ export default function AgentPanelPage() {
           </Link>
         ) : (
           <>
+            <div className="flex flex-wrap items-center gap-2">
+              {AGENT_ROLE_PRESETS.map((preset) => (
+                <Button
+                  key={preset.key}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  title={preset.task}
+                  onClick={() => addRoleAgent(preset.key)}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1.5" /> Add {preset.buttonLabel ?? preset.label}
+                </Button>
+              ))}
+            </div>
             {/* Container-query grid: the column count keys off this wrapper's REAL
                 width (the panel), not the viewport, so it's correct regardless of the
                 sidebar / split state. Capped at 4 columns, and each column is 1fr so
@@ -1557,30 +1635,16 @@ export default function AgentPanelPage() {
                 )}
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {AGENT_ROLE_PRESETS.map((preset) => (
-                <Button
-                  key={preset.key}
-                  variant="outline"
-                  size="sm"
-                  className="text-xs"
-                  title={preset.task}
-                  onClick={() => addRoleAgent(preset.key)}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1.5" /> Add {preset.buttonLabel ?? preset.label}
-                </Button>
-              ))}
-            </div>
           </>
         )}
       </div>
 
       <div className="border-t" />
 
-      {/* ── N. Configure Template */}
+      {/* ── N. Configure Workflow */}
       <div className="space-y-4 py-8">
         <div className="flex items-center gap-2">
-          <h2 className="text-2xl font-bold">{nMode}. Configure Template</h2>
+          <h2 className="text-2xl font-bold">{nMode}. Configure Workflow</h2>
           <HelpHint text="Choose how the agents collaborate. Personalized: build your own custom lines and connections. Sequential: a pipeline where each step's output feeds the next. Judge: workers run in parallel and a judge merges their answers. Deliberation: all agents discuss over several rounds. This sets the structure used in the Agent Workflow step." />
         </div>
         <WorkflowModeSelector value={workflowMode} onChange={handleModeChange} />

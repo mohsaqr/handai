@@ -624,7 +624,12 @@ export default function RunDetailClient({ id }: { id: string }) {
                             </CollapsibleTrigger>
                             <CollapsibleContent>
                                 <pre className="text-xs font-mono bg-muted/10 p-3 mt-2 rounded border whitespace-pre-wrap break-words">
-                                    {run.systemPrompt || "—"}
+                                    {/* Hide the machine-readable WORKFLOW CONFIG snapshot from view — it's
+                                        kept in the stored prompt only so session restore can parse it back. */}
+                                    {((run.systemPrompt ?? "")
+                                        .replace(/^WORKFLOW CONFIG: .*$/m, "")
+                                        .replace(/\n{3,}/g, "\n\n")
+                                        .trim()) || "—"}
                                 </pre>
                             </CollapsibleContent>
                         </Collapsible>
