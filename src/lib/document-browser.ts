@@ -193,15 +193,27 @@ function reconstructText(items: any[]): string {
 async function extractPdf(file: File): Promise<ExtractResult> {
   const pdfjsLib = await import("pdfjs-dist");
 
-  // Set worker src only once — use new URL() with fallback
+  // Set worker src only once. The worker is loaded as an ES module
+  // (`new Worker(url, { type: "module" })`), so the browser enforces strict
+  // MIME checking — a host that serves .mjs as application/octet-stream (some
+  // nginx/Apache configs) makes the module load fail with "Failed to fetch
+  // dynamically imported module". To stay host-independent we fetch the worker
+  // source ourselves (plain fetch ignores MIME) and re-serve it from a Blob URL
+  // with the correct text/javascript type.
   if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    let workerUrl: string;
     try {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-        "pdfjs-dist/build/pdf.worker.mjs",
-        import.meta.url
-      ).toString();
+      workerUrl = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
     } catch {
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
+      workerUrl = "/pdf.worker.mjs";
+    }
+    try {
+      const code = await (await fetch(workerUrl)).text();
+      const blob = new Blob([code], { type: "text/javascript" });
+      pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+    } catch {
+      // Fall back to the direct URL (works when the host serves .mjs correctly).
+      pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
     }
   }
 
