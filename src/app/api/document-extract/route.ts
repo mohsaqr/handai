@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { getModel } from "@/lib/ai/providers";
+import { resolveApiKey } from "@/lib/server-keys";
 import { withRetry } from "@/lib/retry";
 import { DocumentExtractSchema } from "@/lib/validation";
 import { formatExtractionSchemaJson } from "@/lib/prompts";
@@ -270,7 +271,7 @@ ABSOLUTE RULES:
       effectivePrompt = systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     }
 
-    const aiModel = getModel(provider, model, apiKey, baseUrl);
+    const aiModel = getModel(provider, model, resolveApiKey(provider, apiKey), baseUrl);
     const outputOpts: Record<string, unknown> = {};
     if (maxTokens) outputOpts.maxOutputTokens = maxTokens;
 
@@ -450,7 +451,7 @@ async function handleStructured(params: {
     });
   }
 
-  const aiModel = getModel(params.provider, params.model, params.apiKey, params.baseUrl);
+  const aiModel = getModel(params.provider, params.model, resolveApiKey(params.provider, params.apiKey), params.baseUrl);
   const outputOpts: Record<string, unknown> = {};
   if (params.maxTokens) outputOpts.maxOutputTokens = params.maxTokens;
   const systemPrompt = buildStructuredSystemPrompt(fields);

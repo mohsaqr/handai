@@ -2,14 +2,20 @@
 
 import { useAppStore } from "@/lib/store";
 import type { ProviderConfig, SystemSettings } from "@/types";
+import { hasSharedKey } from "@/lib/shared-keys";
 
 /**
  * Check whether a provider is fully configured and ready to use.
  * Local providers (Ollama, LM Studio) don't need an API key.
- * Cloud providers need a non-empty apiKey.
+ * Providers covered by this deployment's shared key don't either — the server
+ * attaches it, so users never type one.
+ * Every other cloud provider needs a non-empty apiKey.
  */
 function isProviderReady(p: ProviderConfig): boolean {
-  return p.isEnabled && (p.isLocal === true || Boolean(p.apiKey));
+  return (
+    p.isEnabled &&
+    (p.isLocal === true || hasSharedKey(p.providerId) || Boolean(p.apiKey))
+  );
 }
 
 /**

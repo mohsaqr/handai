@@ -10,6 +10,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAppStore, DEFAULT_SYSTEM_SETTINGS } from "@/lib/store";
 import { useSystemSettings, useConfiguredProviders } from "@/lib/hooks";
 import { PROMPTS, getPrompt, setPromptOverride, clearPromptOverride } from "@/lib/prompts";
+import { probeLocalModels } from "@/lib/local-provider";
+import { hasSharedKey } from "@/lib/shared-keys";
+import { dispatchProcessRow } from "@/lib/llm-dispatch";
 import { toast } from "sonner";
 import { Key, ShieldCheck, Loader2, Wifi, RotateCcw, ChevronDown, Bot, Sliders, RefreshCw, SlidersHorizontal, Minus, Plus, Trash2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -90,7 +93,6 @@ export default function SettingsPage() {
 
   const systemSettings = useSystemSettings();
   const setSystemSettings = useAppStore((s) => s.setSystemSettings);
-  const isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
 
   const configured = useConfiguredProviders();
   const activeProviderId = useAppStore((s) => s.activeProviderId);
@@ -99,26 +101,21 @@ export default function SettingsPage() {
   useEffect(() => {
     setPromptValues(Object.fromEntries(Object.keys(PROMPTS).map((id) => [id, getPrompt(id)])));
     detectLocalModels();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- detectLocalModels is stable but not wrapped in useCallback; runs once on mount
+    // detectLocalModels reads the store imperatively, so it needs no deps.
   }, []);
 
   const detectLocalModels = async () => {
     setIsDetecting(true);
     try {
-      if (isStatic) {
-        const [ollama, lm] = await Promise.all([
-          fetch("http://localhost:11434/api/tags").then((r) => r.json()).catch(() => null),
-          fetch("http://localhost:1234/v1/models").then((r) => r.json()).catch(() => null),
-        ]);
-        const result: Record<string, string[]> = {};
-        if (ollama?.models) result.ollama = (ollama.models as { name: string }[]).map((m) => m.name);
-        if (lm?.data) result.lmstudio = (lm.data as { id: string }[]).map((m) => m.id);
-        setLocalModels(result);
-      } else {
-        const res = await fetch("/api/local-models");
-        const data = await res.json();
-        setLocalModels(data);
-      }
+      // Always probe from the browser: a local server lives on *this* machine,
+      // so asking /api/local-models would report what the deployment host sees.
+      const { providers: current } = useAppStore.getState();
+      setLocalModels(
+        await probeLocalModels({
+          ollama: current.ollama?.baseUrl,
+          lmstudio: current.lmstudio?.baseUrl,
+        })
+      );
     } catch {}
     finally { setIsDetecting(false); }
   };
@@ -136,30 +133,22 @@ export default function SettingsPage() {
 
   const testConnection = async (id: string) => {
     const config = providers[id];
-    if (!config.isLocal && !config.apiKey) return toast.error("Enter an API key first");
+    if (!config.isLocal && !config.apiKey && !hasSharedKey(id))
+      return toast.error("Enter an API key first");
     setIsTesting(id);
     try {
       const params = {
         provider: id,
         model: config.defaultModel,
-        apiKey: config.apiKey || "local",
+        apiKey: config.apiKey || "",
         baseUrl: config.baseUrl,
         systemPrompt: "You are a helpful assistant.",
         userContent: "Reply with the single word: OK",
         temperature: 0,
       };
-      if (isStatic) {
-        const { processRowDirect } = await import("@/lib/llm-browser");
-        await processRowDirect(params);
-      } else {
-        const res = await fetch("/api/process-row", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(params),
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-      }
+      // Go through the dispatch layer so local providers are tested from the
+      // browser, exactly the way a real run will call them.
+      await dispatchProcessRow(params);
       toast.success(`${PROVIDER_LABELS[id] ?? id} — connected`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -183,6 +172,8 @@ export default function SettingsPage() {
     const c = providers[id];
     if (!c.isEnabled) return "disabled";
     if (c.isLocal) return "local";
+    // The deployment supplies the key — nothing for the user to enter.
+    if (!c.apiKey && hasSharedKey(id)) return "ready";
     if (!c.apiKey) return "no-key";
     return "ready";
   };
@@ -424,11 +415,23 @@ export default function SettingsPage() {
               </Label>
               <Input
                 type="password"
-                placeholder={id === "azure" ? "Azure API Key" : "sk-..."}
+                placeholder={
+                  hasSharedKey(id)
+                    ? "Provided by this site — leave blank"
+                    : id === "azure"
+                    ? "Azure API Key"
+                    : "sk-..."
+                }
                 value={config.apiKey}
                 onChange={(e) => setProviderConfig(id, { apiKey: e.target.value })}
                 className="h-8 text-xs font-mono"
               />
+              {hasSharedKey(id) && !config.apiKey && (
+                <p className="text-[10px] text-muted-foreground/60 pt-0.5">
+                  This site supplies the key — nothing to enter. Add your own to
+                  use it instead.
+                </p>
+              )}
             </div>
           )}
           <div className="space-y-1">

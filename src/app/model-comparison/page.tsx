@@ -398,11 +398,11 @@ export default function ConsensusCoderPage() {
       const pR = providers[judge.providerId];
 
       const workers = [
-        { provider: worker1.providerId, model: worker1.model, apiKey: p1?.apiKey || "local", baseUrl: p1?.baseUrl, persona: worker1.persona },
-        { provider: worker2.providerId, model: worker2.model, apiKey: p2?.apiKey || "local", baseUrl: p2?.baseUrl, persona: worker2.persona },
+        { provider: worker1.providerId, model: worker1.model, apiKey: p1?.apiKey || "", baseUrl: p1?.baseUrl, persona: worker1.persona },
+        { provider: worker2.providerId, model: worker2.model, apiKey: p2?.apiKey || "", baseUrl: p2?.baseUrl, persona: worker2.persona },
         ...extraWorkers.map((ew) => {
           const ep = providers[ew.providerId];
-          return { provider: ew.providerId, model: ew.model, apiKey: ep?.apiKey || "local", baseUrl: ep?.baseUrl, persona: ew.persona };
+          return { provider: ew.providerId, model: ew.model, apiKey: ep?.apiKey || "", baseUrl: ep?.baseUrl, persona: ew.persona };
         }),
       ];
 

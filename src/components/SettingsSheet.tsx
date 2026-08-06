@@ -4,6 +4,9 @@ import React, { useState, useEffect, useRef } from "react";
 import { useAppStore, DEFAULT_SYSTEM_SETTINGS } from "@/lib/store";
 import { useSystemSettings } from "@/lib/hooks";
 import { PROMPTS, getPrompt, setPromptOverride, clearPromptOverride } from "@/lib/prompts";
+import { probeLocalModels } from "@/lib/local-provider";
+import { hasSharedKey } from "@/lib/shared-keys";
+import { dispatchProcessRow } from "@/lib/llm-dispatch";
 import {
   Sheet,
   SheetContent,
@@ -57,8 +60,6 @@ const PROMPT_CATEGORY_LABELS: Record<string, string> = {
   ai_coder: "AI Coder",
 };
 
-const isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
-
 export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const { providers, setProviderConfig } = useAppStore();
   const systemSettings = useSystemSettings();
@@ -82,20 +83,15 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
   const detectLocalModels = async () => {
     setIsDetecting(true);
     try {
-      if (isStatic) {
-        const [ollama, lm] = await Promise.all([
-          fetch("http://localhost:11434/api/tags").then((r) => r.json()).catch(() => null),
-          fetch("http://localhost:1234/v1/models").then((r) => r.json()).catch(() => null),
-        ]);
-        const result: Record<string, string[]> = {};
-        if (ollama?.models) result.ollama = (ollama.models as { name: string }[]).map((m) => m.name);
-        if (lm?.data) result.lmstudio = (lm.data as { id: string }[]).map((m) => m.id);
-        setLocalModels(result);
-      } else {
-        const res = await fetch("/api/local-models");
-        const data = await res.json();
-        setLocalModels(data);
-      }
+      // Probe from the browser — the local server is on the user's machine,
+      // not on whatever host is serving the app.
+      const { providers: current } = useAppStore.getState();
+      setLocalModels(
+        await probeLocalModels({
+          ollama: current.ollama?.baseUrl,
+          lmstudio: current.lmstudio?.baseUrl,
+        })
+      );
     } catch {}
     finally { setIsDetecting(false); }
   };
@@ -113,28 +109,19 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
 
   const testConnection = async (id: string) => {
     const config = providers[id];
-    if (!config.isLocal && !config.apiKey) return toast.error("Enter an API key first");
+    if (!config.isLocal && !config.apiKey && !hasSharedKey(id))
+      return toast.error("Enter an API key first");
     setIsTesting(id);
     try {
       const params = {
         provider: id, model: config.defaultModel,
-        apiKey: config.apiKey || "local", baseUrl: config.baseUrl,
+        apiKey: config.apiKey || "", baseUrl: config.baseUrl,
         systemPrompt: "You are a helpful assistant.",
         userContent: "Reply with the single word: OK",
         temperature: 0,
       };
-      if (isStatic) {
-        const { processRowDirect } = await import("@/lib/llm-browser");
-        await processRowDirect(params);
-      } else {
-        const res = await fetch("/api/process-row", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(params),
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-      }
+      // Dispatch keeps local providers in the browser, matching a real run.
+      await dispatchProcessRow(params);
       toast.success(`${PROVIDER_LABELS[id] ?? id} — connected`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -148,6 +135,8 @@ export function SettingsSheet({ open, onOpenChange }: SettingsSheetProps) {
     const c = providers[id];
     if (!c.isEnabled) return "disabled";
     if (c.isLocal) return "local";
+    // The deployment supplies the key — nothing for the user to enter.
+    if (!c.apiKey && hasSharedKey(id)) return "ready";
     if (!c.apiKey) return "no-key";
     return "ready";
   };

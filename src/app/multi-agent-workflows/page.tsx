@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { SAMPLE_DATASETS, sampleAsFile } from "@/lib/sample-data";
 import { useAppStore } from "@/lib/store";
 import { useSystemSettings } from "@/lib/hooks";
+import { hasSharedKey } from "@/lib/shared-keys";
 import { useRestoreSession } from "@/hooks/useRestoreSession";
 import { AlertCircle, ArrowRight, Copy, HelpCircle, Network, Play, Plus, RotateCcw, Settings2, Sparkles, Table2, Upload, User, Users, X } from "lucide-react";
 import {
@@ -288,13 +289,13 @@ export default function AgentPanelPage() {
   const [concurrency, setConcurrency] = useState(systemSettings.maxConcurrency);
 
   const availableProviders = useMemo(
-    () => Object.values(providers).filter((p) => p.isLocal || !!p.apiKey),
+    () => Object.values(providers).filter((p) => p.isLocal || !!p.apiKey || hasSharedKey(p.providerId)),
     [providers]
   );
   // Providers that are toggled on in Settings AND ready to use (have a key or are local).
   // These are the only providers used to populate default agent cards.
   const enabledProviders = useMemo(
-    () => Object.values(providers).filter((p) => p.isEnabled && (p.isLocal || !!p.apiKey)),
+    () => Object.values(providers).filter((p) => p.isEnabled && (p.isLocal || !!p.apiKey || hasSharedKey(p.providerId))),
     [providers]
   );
   const firstId = enabledProviders[0]?.providerId ?? "openai";
@@ -687,7 +688,7 @@ export default function AgentPanelPage() {
       if (!agent) return `Step ${i + 1} references a missing agent`;
       const prov = providers[agent.providerId];
       if (!prov) return `Invalid provider for Step ${i + 1}`;
-      if (!prov.isLocal && !prov.apiKey) return `API key missing for ${providerLabel(agent.providerId)} (Step ${i + 1})`;
+      if (!prov.isLocal && !prov.apiKey && !hasSharedKey(agent.providerId)) return `API key missing for ${providerLabel(agent.providerId)} (Step ${i + 1})`;
       if (!agent.model.trim()) return `Model name required for Step ${i + 1}`;
     }
     return null;

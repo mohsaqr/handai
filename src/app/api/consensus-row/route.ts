@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { getModel } from "@/lib/ai/providers";
+import { resolveApiKey } from "@/lib/server-keys";
 import { withRetry } from "@/lib/retry";
 import { ConsensusRowSchema } from "@/lib/validation";
 import { pairwiseJaccard, pairwiseAgreement } from "@/lib/analytics";
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
     // Step 1: Run workers in parallel
     const enforcedWorkerPrompt = workerPrompt + strictSuffix;
     const workerPromises = workers.map(async (w, i) => {
-      const model = getModel(w.provider, w.model, w.apiKey || "local", w.baseUrl);
+      const model = getModel(w.provider, w.model, resolveApiKey(w.provider, w.apiKey) || "local", w.baseUrl);
       // Per-worker persona prepended to system prompt
       const workerSystem = w.persona ? `${w.persona}\n\n${enforcedWorkerPrompt}` : enforcedWorkerPrompt;
       const start = Date.now();
@@ -107,7 +108,7 @@ export async function POST(req: NextRequest) {
     const reconcilerModel = getModel(
       reconciler.provider,
       reconciler.model,
-      reconciler.apiKey || "local",
+      resolveApiKey(reconciler.provider, reconciler.apiKey) || "local",
       reconciler.baseUrl
     );
     const workersFormatted = workerResults

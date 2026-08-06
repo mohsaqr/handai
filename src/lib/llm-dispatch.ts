@@ -21,27 +21,27 @@ import type { ConsensusResult, AgentNetworkResult } from "./llm-browser";
 export type { AgentNetworkResult } from "./llm-browser";
 import { createRun as idbCreateRun, saveResults as idbSaveResults, updateRun as idbUpdateRun } from "./db-indexeddb";
 import type { FieldDef } from "@/types";
+import { resolveTransport, useBrowserStorage } from "./transport";
 
 // ── Runtime detection ────────────────────────────────────────────────────────
+// Both flags live in transport.ts alongside the rules that consume them; they
+// are re-exported here because pages already import them from this module.
 
-/** Static web build (GitHub Pages) — no server. Uses IndexedDB + browser-direct LLM. */
-export const isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
+export { isStatic } from "./transport";
+export { useBrowserStorage };
 
 /**
- * True when the app should operate entirely in the browser:
- * - LLM calls go directly from the browser to provider APIs (no server relay)
- * - Run history is stored in IndexedDB (no server SQLite)
- * - API keys never leave the browser
+ * True when this call should go through the browser-direct path.
  *
- * Defaults to true for security — API keys are not sent through the server.
- * Set NEXT_PUBLIC_BROWSER_STORAGE=0 explicitly to use server-side API routes
- * (only for private/self-hosted deployments where the server is trusted).
+ * Local providers are forced into the browser (a server route would dial its
+ * own loopback); providers relying on this deployment's shared key are forced
+ * onto the server (that key exists nowhere else). See `resolveTransport`.
  */
-export const useBrowserStorage =
-  process.env.NEXT_PUBLIC_BROWSER_STORAGE === "0" ? false : true;
-
-/** True when LLM calls should go through browser-direct path. */
-const useBrowserDirect = useBrowserStorage;
+function shouldUseBrowserDirect(
+  refs: Parameters<typeof resolveTransport>[0]
+): boolean {
+  return resolveTransport(refs) === "browser";
+}
 
 // ── Result entry type ────────────────────────────────────────────────────────
 
@@ -151,7 +151,7 @@ export async function dispatchProcessRow(params: {
   temperature?: number;
   maxTokens?: number;
 }): Promise<{ output: string; latency: number }> {
-  if (useBrowserDirect) {
+  if (shouldUseBrowserDirect(params)) {
     const result = await processRowDirect(params);
     // Browser-direct returns latency in seconds — normalize to ms
     return { output: result.output, latency: Math.round(result.latency * 1000) };
@@ -195,7 +195,9 @@ export async function dispatchConsensusRow(params: {
   maxTokens?: number;
   rowIdx?: number;
 }): Promise<ConsensusResult> {
-  if (useBrowserDirect) {
+  // Any local worker (or a local judge) forces the whole consensus round into
+  // the browser — the workers run together in one call.
+  if (shouldUseBrowserDirect([...params.workers, params.reconciler])) {
     return await consensusRowDirect(params);
   } else {
     const res = await fetch("/api/consensus-row", {
@@ -235,7 +237,8 @@ export async function dispatchAgentNetworkRow(params: {
   maxTokens?: number;
   rowIdx?: number;
 }): Promise<AgentNetworkResult> {
-  if (useBrowserDirect) {
+  // Same rule as consensus: one local agent pins the round to the browser.
+  if (shouldUseBrowserDirect(params.agents)) {
     return await agentNetworkRowDirect(params);
   } else {
     const res = await fetch("/api/agent-network-row", {
@@ -280,7 +283,7 @@ export async function dispatchAutomatorRow(params: {
   }>;
   success: boolean;
 }> {
-  if (useBrowserDirect) {
+  if (shouldUseBrowserDirect(params)) {
     return await automatorRowDirect(params);
   } else {
     const res = await fetch("/api/automator-row", {
@@ -318,7 +321,7 @@ export async function dispatchGenerateRow(params: {
   count: number;
   raw?: string;
 }> {
-  if (useBrowserDirect) {
+  if (shouldUseBrowserDirect(params)) {
     return await generateRowDirect(params);
   } else {
     const res = await fetch("/api/generate-row", {
@@ -352,7 +355,7 @@ export async function dispatchDocumentExtract(params: {
   chunks: number;
   failedChunks: number;
 }> {
-  if (useBrowserDirect) {
+  if (shouldUseBrowserDirect(params)) {
     return await documentExtractDirect(params);
   } else {
     // Structured files (CSV/XLSX/JSON/RIS): parse in the browser and send rows
@@ -407,7 +410,7 @@ export async function dispatchDocumentAnalyze(params: {
   baseUrl?: string;
   hint?: string;
 }): Promise<{ fields: FieldDef[] }> {
-  if (useBrowserDirect) {
+  if (shouldUseBrowserDirect(params)) {
     return await documentAnalyzeDirect(params);
   } else {
     // Extract text in browser (pdfjs-dist works in browser but fails server-side).
@@ -458,7 +461,7 @@ export async function dispatchDocumentProcess(params: {
   chunks: number;
   failedChunks: number;
 }> {
-  if (useBrowserDirect) {
+  if (shouldUseBrowserDirect(params)) {
     return await documentProcessDirect(params);
   } else {
     // Structured files (CSV/XLSX/JSON/RIS): parse in the browser and send rows

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { getModel } from "@/lib/ai/providers";
+import { resolveApiKey } from "@/lib/server-keys";
 import { withRetry } from "@/lib/retry";
 import { AgentNetworkRowSchema } from "@/lib/validation";
 import prisma from "@/lib/prisma";
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
       const previousOutputs = { ...latestOutputs };
 
       const promises = agents.map(async (agent) => {
-        const model = getModel(agent.provider, agent.model, agent.apiKey || "local", agent.baseUrl);
+        const model = getModel(agent.provider, agent.model, resolveApiKey(agent.provider, agent.apiKey) || "local", agent.baseUrl);
 
         // Per-agent input (its own column subset) when provided, else the shared content.
         let agentContent = agent.userContent ?? userContent;
@@ -102,7 +103,7 @@ export async function POST(req: NextRequest) {
       if (adaptive && round > 1) {
         try {
           const judgeAgent = agents[0];
-          const judgeModel = getModel(judgeAgent.provider, judgeAgent.model, judgeAgent.apiKey || "local", judgeAgent.baseUrl);
+          const judgeModel = getModel(judgeAgent.provider, judgeAgent.model, resolveApiKey(judgeAgent.provider, judgeAgent.apiKey) || "local", judgeAgent.baseUrl);
           const comparison = agents.map((a) => {
             const prev = previousOutputs[a.label] ?? "";
             const curr = latestOutputs[a.label] ?? "";

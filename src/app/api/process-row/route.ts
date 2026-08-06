@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateText } from "ai";
 import { getModel } from "@/lib/ai/providers";
+import { resolveApiKey } from "@/lib/server-keys";
 import { withRetry } from "@/lib/retry";
 import { ProcessRowSchema } from "@/lib/validation";
 import prisma from "@/lib/prisma";
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
       maxTokens,
     } = parsed.data;
 
-    const aiModel = getModel(provider, model, apiKey, baseUrl);
+    const aiModel = getModel(provider, model, resolveApiKey(provider, apiKey), baseUrl);
 
     const startTime = Date.now();
     const { text: outputText } = await withRetry(
