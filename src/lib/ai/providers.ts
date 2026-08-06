@@ -49,13 +49,18 @@ export function getModel(
       return client(modelId);
     }
 
-    // OpenAI-compatible endpoints
+    // OpenAI-compatible endpoints.
+    //
+    // These MUST use `.chat()`. The bare `client(modelId)` factory targets
+    // OpenAI's Responses API (POST /v1/responses), which is an OpenAI-only
+    // surface — compatible servers (Together, OpenRouter, Ollama, LM Studio,
+    // custom gateways) implement /v1/chat/completions and 404 on /v1/responses.
     case 'together': {
       const client = createOpenAI({
         apiKey,
         baseURL: baseUrl || 'https://api.together.xyz/v1',
       });
-      return client(modelId);
+      return client.chat(modelId);
     }
 
     case 'openrouter': {
@@ -67,7 +72,7 @@ export function getModel(
           'X-Title': 'Handai Data Suite',
         },
       });
-      return client(modelId);
+      return client.chat(modelId);
     }
 
     case 'ollama': {
@@ -75,7 +80,7 @@ export function getModel(
         apiKey: apiKey || 'ollama',
         baseURL: baseUrl || 'http://localhost:11434/v1',
       });
-      return client(modelId);
+      return client.chat(modelId);
     }
 
     case 'lmstudio': {
@@ -83,13 +88,13 @@ export function getModel(
         apiKey: apiKey || 'lm-studio',
         baseURL: baseUrl || 'http://localhost:1234/v1',
       });
-      return client(modelId);
+      return client.chat(modelId);
     }
 
     case 'custom': {
       if (!baseUrl) throw new Error('Custom provider requires a baseUrl');
       const client = createOpenAI({ apiKey, baseURL: baseUrl });
-      return client(modelId);
+      return client.chat(modelId);
     }
 
     case 'azure': {

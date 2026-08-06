@@ -44,6 +44,7 @@ import {
 import { useActiveModel, useConfiguredProviders } from "@/lib/hooks"
 import { useAppStore } from "@/lib/store"
 import { useProcessingStore } from "@/lib/processing-store"
+import { probeLocalModels } from "@/lib/local-provider"
 import Link from "next/link"
 import { toast } from "sonner"
 import { useRouter, usePathname } from "next/navigation"
@@ -238,25 +239,14 @@ function useLocalProviderDetection() {
     const { providers, setProviderConfig } = useAppStore();
 
     React.useEffect(() => {
-        const _isStatic = process.env.NEXT_PUBLIC_STATIC === "1";
-
-        // In static web builds there is no /api/local-models server endpoint.
-        // Probe localhost directly (CORS may block this in browsers, but we catch errors).
-        const fetchDetected = _isStatic
-            ? Promise.all([
-                  fetch("http://localhost:11434/api/tags").then((r) => r.json()).catch(() => null),
-                  fetch("http://localhost:1234/v1/models").then((r) => r.json()).catch(() => null),
-              ]).then(([ollama, lm]) => {
-                  const result: Record<string, string[]> = {};
-                  if (ollama?.models) {
-                      result.ollama = (ollama.models as { name: string }[]).map((m) => m.name);
-                  }
-                  if (lm?.data) {
-                      result.lmstudio = (lm.data as { id: string }[]).map((m) => m.id);
-                  }
-                  return result;
-              })
-            : fetch("/api/local-models").then((r) => r.json());
+        // Probe from the browser in every build. /api/local-models would only
+        // report what the *deployment host* can see — for a hosted install that
+        // is a datacenter machine, never the user's Ollama / LM Studio.
+        // Failures (refused, CORS, browser local-network gate) resolve to {}.
+        const fetchDetected = probeLocalModels({
+            ollama: providers.ollama?.baseUrl,
+            lmstudio: providers.lmstudio?.baseUrl,
+        });
 
         fetchDetected
             .then((detected: Record<string, string[]>) => {
