@@ -166,6 +166,57 @@ actionable index over them.
   paste goes through a real CSV parser, and output is validated JSON.
 - **Status**: OPEN
 
+### C-20 · extract-data's editable "AI instructions" panel is decorative when fields exist
+- **Where**: `src/app/extract-data/page.tsx` builds/edits `aiInstructions` and
+  passes it as `systemPrompt`, but `documentExtractDirect`
+  (`src/lib/llm-browser.ts:~876`) and the `/api/document-extract` route twin
+  replace the system prompt with the hard-coded JSON contract whenever
+  `fields.length > 0` — which is the normal case. User edits to the visible,
+  editable instructions are silently ignored; only the regex-based session
+  restore ever reads them back.
+- **Notebook fix to mirror** (CarmExtract): the instructions textarea IS the
+  run's system prompt — auto-generated from the cell, editable, and always
+  honored; "reset to automatic" restores the generated contract.
+- **Status**: OPEN
+
+### C-21 · automator's "AI Instructions" (incl. "Extra Instructions") are never sent to any model
+- **Where**: `src/app/automator/page.tsx:205-235` builds the pipeline preamble
+  + user extras and passes it to `useBatchProcessor({ systemPrompt })`, which
+  forwards it only to `dispatchCreateRun` as run-history metadata
+  (`useBatchProcessor.ts:111-119`). The per-step system prompt is hardcoded in
+  `automatorRowDirect` / the API route from `step.task` + the field schema —
+  the visible, editable Section 3 has zero effect on the model. (Same defect
+  class as C-20; also, `prompts.ts` registers `automator.rules` as an editable
+  Settings prompt that nothing ever calls.)
+- **Notebook fix to mirror** (CarmAutomator): there is no decorative
+  instructions box — the step tasks ARE the prompts, and a payload preview
+  shows exactly what a step sends.
+- **Status**: OPEN
+
+### C-22 · automator: a failed step neither aborts nor surfaces; per-step results are discarded
+- **Where**: `src/app/api/automator-row/route.ts:112-114` (and the
+  `llm-browser.ts` twin): unparseable step output is skipped, `cumulativeData`
+  is left untouched, the chain continues (later steps read `undefined`), and
+  the response still reports `success: true`. The `stepResults` array that
+  records which steps failed is returned and then entirely discarded by
+  `page.tsx:244-255` — the user cannot see that a mid-chain step produced
+  nothing. On a terminal row error, even the steps that succeeded are dropped.
+- **Notebook fix to mirror** (CarmAutomator): a failed step writes an empty
+  column plus a `note` naming the step and reason, the chain continues, the
+  unit is `partial`, and Resume re-runs it.
+- **Status**: OPEN
+
+### C-23 · automator's silent-failure detector counts only keys absent from the input row
+- **Where**: `src/app/automator/page.tsx:256-262` decides "the pipeline
+  produced nothing" by `Object.keys(output) − Object.keys(row)`. An output
+  field named like an existing input column (e.g. `summary` over a CSV that
+  already has `summary`) makes `newKeys` empty on a perfect run → 3 wasted
+  full-pipeline retries and a spurious `warning`; conversely one failed step
+  among successes reads as clean success.
+- **Fix**: track per-step success from `stepResults` (see C-22) instead of
+  key-set arithmetic.
+- **Status**: OPEN
+
 ## B. Notebook designs worth considering in Handai (proposed: ADOPT or ACKNOWLEDGE)
 
 ### C-9 · Boot-time local LLM adoption
@@ -174,7 +225,17 @@ actionable index over them.
   **only** into a virgin configuration (untouched default provider, no key),
   guard re-checked after the async probe. Shared pick logic:
   `handainotes/carm-transform/src/transform-core.ts` → `autoLocalChoice`.
-- **Status**: OPEN
+- **2026-08-06 — premise changed.** Detection no longer goes through
+  `/api/local-models`; all three probe sites now call browser-side
+  `probeLocalModels()` (`src/lib/local-provider.ts`), and local providers are
+  forced onto the browser-direct path in `shouldUseBrowserDirect()`. On the
+  hosted deployment the old server probe reported the *host's* loopback, so
+  detection returned `{}` and adoption could never have fired there. The
+  sidebar's existing adoption (`useLocalProviderDetection` → auto-enable +
+  placeholder model replacement) now actually runs — but it still lacks the
+  notebooks' virgin-configuration guard, which is the substance of this item.
+- **Status**: OPEN — the adopt-or-acknowledge call on the virgin-config guard is
+  still outstanding; only the detection mechanism it rests on has changed.
 
 ### C-10 · Run diagnostics: provider-reported token usage, wall-clock throughput
 - Notebook `callLLM` returns best-effort token usage (missing = unknown, never
@@ -202,6 +263,20 @@ actionable index over them.
   all rows; documents show the exact extracted text a run sends). Handai tools
   show column pickers/preview rows; whether a full viewer is needed per tool is
   a product decision.
+- **Status**: OPEN
+
+### C-24 · Encrypted configurations (instructor-to-class credential sharing)
+- 2026-08-12: all eight notebooks can export/import one encrypted `.carmconfig`
+  file (AES-256-GCM + PBKDF2 via WebCrypto) carrying provider, model, key,
+  model allowlist, pacing and an advisory expiry; import passphrase-unlocks it
+  and soft-locks the settings surface (`handainotes/NOTEBOOK-SPEC.md` §9.9,
+  shared module `carm-transform/src/shared-config.ts`). Built for classroom
+  use: one file + one passphrase instead of distributing N raw keys. Handai
+  has no equivalent — its provider config is per-browser localStorage
+  (`handai-storage`) with keys entered by hand. Adopting would fit naturally
+  as import/export on Handai's Settings page (the crypto module is
+  dependency-free and browser-safe; the honest-threat-model rule applies:
+  client-side locks are advisory, real limits belong provider-side).
 - **Status**: OPEN
 
 ## C. Deliberate notebook divergences (pre-resolved: do not "restore parity")
