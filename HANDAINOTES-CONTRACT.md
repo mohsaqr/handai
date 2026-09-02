@@ -162,8 +162,17 @@ actionable index over them.
   paste-CSV import (`extractFromPastedCsv`, ~360-396) splits lines on bare
   commas, so quoted descriptions corrupt. The model contract is a bare
   comma-separated label string stored unvalidated in `ai_code`.
+  Two further consequences of the same round-trip, found 2026-09-02:
+  (a) the restore regex `/CODING INSTRUCTIONS:\n([\s\S]*?)(?:\n\n|$)/` is lazy
+  up to the first blank line, and `DEFAULT_PROMPT` is multi-paragraph — so
+  restoring any run made with the default prompt silently drops everything
+  after its first paragraph; (b) the import recognises only `code label`/`code`,
+  `description` and `examples`/`example`, so any other heading imports as blank
+  fields and a differently named label column reports "No valid codes found".
 - **Notebook fix to mirror**: the codebook is state (saved/restored as data),
-  paste goes through a real CSV parser, and output is validated JSON.
+  paste goes through a real CSV parser, output is validated JSON, and the
+  import maps headers by alias with a positional fallback
+  (`coding-core.codebookFromRows`, CarmCoder v1.10.0).
 - **Status**: OPEN
 
 ### C-20 · extract-data's editable "AI instructions" panel is decorative when fields exist
