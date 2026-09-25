@@ -353,6 +353,28 @@ actionable index over them.
   `reasoning` field per result) behind a per-tool setting.
 - **Status**: OPEN
 
+### C-29 · Process: persona, labelled inputs, checked outputs, editable templates
+- 2026-09-25: CarmTransofrm 2.0.0 becomes **CarmNote Process** (artifact
+  `CarmProcess.html`, byte-identical to `CarmTransofrm.html`). One cell now
+  carries a **persona** (name, expertise, audience, tone, reply language,
+  experience, traits; compiled into a `PERSONA:` block), **labelled inputs**
+  (each column gets a label and meaning; the row is sent as `Label: value`),
+  and **typed outputs with constraints** that are stated in the prompt AND
+  checked on every reply (`validateFields`): number ranges, category options
+  (single or several), boolean labels such as pass/fail, required. A value
+  outside its constraint keeps the model's text, and the row becomes
+  `status: invalid` with the reason in `note`; Resume re-runs it. Seventeen
+  general **templates** ship (analyze reviews, categorize tickets, grade
+  against criteria, moderate, draft a reply…). Every template, built-ins
+  included, is editable: Save (a built-in keeps its shipped original and can be
+  reset), Save as new, Details, Duplicate, Delete/hide + restore, and `.json`
+  import/export (the "prompt packs" of `PLUGIN-ARCHITECTURE.md` Phase 1).
+  Handai's `transform` has one free-text instruction and one output column; its
+  tools are fixed prompts per route. Adopting would put a template picker and
+  persona over `transform` + `extract-data`, reuse `validateFields` after the
+  JSON parse, and add `invalid` to the status set everywhere results render.
+- **Status**: OPEN
+
 ## C. Deliberate notebook divergences (pre-resolved: do not "restore parity")
 
 These are **ACKNOWLEDGED** on the notebook side — recorded so nobody undoes
