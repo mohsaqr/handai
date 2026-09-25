@@ -226,6 +226,22 @@ actionable index over them.
   key-set arithmetic.
 - **Status**: OPEN
 
+### C-28 · AI Coder: renaming a code splits it in two across the export
+- 2026-09-25: `updateCode` (`src/app/ai-coder/page.tsx:843`) edits only the
+  codebook entry's label; `codingData` and `aiData` keep the old label. A row
+  coded "Pos" before the label becomes "Positive" still holds "Pos", rows
+  coded afterwards hold "Positive", and the standard export lists both names
+  for one code (the one-hot export drops the old name silently, because its
+  columns come from the current codebook). Reported by a user of CarmAiCoder,
+  which had the same defect.
+- **Fix**: on commit of a label edit (blur, not every keystroke, so an empty or
+  colliding intermediate never merges codes), replace the old label with the
+  new one in every row of `codingData` and in `aiData` codes/confidence, in
+  place so click order survives; renaming onto an existing code merges.
+  CarmAiCoder's version: `renameCodeInCoding` in
+  `handainotes/carm-aicoder/src/aicoder-core.ts`, called from `flushRenames`.
+- **Status**: OPEN
+
 ## B. Notebook designs worth considering in Handai (proposed: ADOPT or ACKNOWLEDGE)
 
 ### C-9 · Boot-time local LLM adoption
@@ -286,6 +302,55 @@ actionable index over them.
   as import/export on Handai's Settings page (the crypto module is
   dependency-free and browser-safe; the honest-threat-model rule applies:
   client-side locks are advisory, real limits belong provider-side).
+- **Status**: OPEN
+
+### C-25 · Transform: output formats (named columns, Markdown, GIFT) and the Extract-shaped cell
+- 2026-09-03/04: CarmTransofrm 1.11–1.12 gives a transform cell four output
+  formats — Free text, **Columns** (name/type/description, the extract-data
+  `FieldDef`, proposed by the model from the instruction plus sample rows or
+  typed; two or more make the call return ONE JSON object keyed by the field
+  names, parsed schema-first with key-drift tolerance), Markdown and Moodle
+  GIFT (the `document` format rules, one value per row, joined `.md`/`.gift`
+  download) — and lays the cell out in extract-data's order (columns → data →
+  filters → instruction → output → AI instructions → run → results) with
+  extract-shaped result rows (`row`, source behind a toggle, outputs,
+  `status`/`latency_ms`/`note`) and a Run information block. Handai's
+  `transform` writes exactly one plain-text column per call and copies every
+  source column, so "first, second and last author from one author list" is
+  three runs there. Adopting would reuse `extract-data`'s schema editor,
+  `parseExtractionOutput` and the `document` format rules inside the transform
+  page; the reserved-column rule (an output field never shadows `status`) must
+  come with it.
+- **Status**: OPEN
+
+### C-26 · Results streamed to a file during a run
+- 2026-09-04: every HandaiNotes notebook offers "Write results to a file as
+  they finish" (File System Access API, which works from `file://`): long
+  model runs append a header once and one CSV line per settled unit
+  (Transform, Extract, Automator, Documents, Coder, Generate, Multiagents);
+  edit-in-place tools (AiCoder, Screener) rewrite the current table after every
+  change. The file is the crash-window answer: a closed tab or a crashed
+  browser costs nothing already written. Handai keeps results in
+  IndexedDB/SQLite until the run ends and the user exports; a run that dies
+  mid-way is lost. Adopting fits the `useBatchProcessor` hook (one appender per
+  run, `dispatchSaveResults` alongside) behind a per-tool checkbox.
+- **Status**: OPEN
+
+### C-27 · Model thinking: captured, and kept out of the answer
+- 2026-09-04: every HandaiNotes notebook separates a reasoning model's thinking
+  from its answer in the shared transport (`reasoning_content`/`reasoning`
+  fields, Anthropic `thinking` blocks, Gemini `thought` parts, and inline
+  `<think>…</think>` tags — the last one otherwise reaches the JSON parser and
+  turns a good Qwen3/DeepSeek reply into "unparsed") and, behind a Tuning
+  switch, keeps it in a `thinking` column beside the results. A second switch
+  asks the provider to think where its API has one (Anthropic, Gemini,
+  OpenRouter, Groq) and is dropped when a model refuses. Handai routes through
+  the Vercel AI SDK, whose providers expose reasoning as `reasoning` parts for
+  some routes; whether `<think>` tags from an OpenAI-compatible local server
+  (Ollama, LM Studio) reach `text` in Handai's `generateText` path has not
+  been verified here — check `llm-browser.ts` / `providers.ts` with a Qwen3
+  model before adopting. Adopting fits `useBatchProcessor` (one optional
+  `reasoning` field per result) behind a per-tool setting.
 - **Status**: OPEN
 
 ## C. Deliberate notebook divergences (pre-resolved: do not "restore parity")

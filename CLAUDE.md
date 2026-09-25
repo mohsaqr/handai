@@ -153,6 +153,19 @@ For unstructured files, two paths turn PDF/DOCX → text:
 - **Never call `fetch('/api/...')` directly from a page** — go through `llm-dispatch.ts`, otherwise the static build silently breaks.
 - **App version** is a hardcoded literal in the footer of `src/app/layout.tsx` (currently `Handai v2.6` — rendered as `<span>Handai</span> v2.6`, so a bare `Handai v` grep misses it). Release commits are messaged `vX.Y — Last updated <Month Year>`; bump the literal in `layout.tsx` in the same commit so the UI matches the tag.
 
+## HandaiNotes contract — read before touching document/extraction/LLM code
+
+**[`HANDAINOTES-CONTRACT.md`](./HANDAINOTES-CONTRACT.md)** is a standing
+contract listing every defect and deliberate divergence the HandaiNotes
+notebooks (`handainotes/`) found relative to this codebase — eight known
+defects in the document/extraction path (C-1…C-8, e.g. the multi-section CSV
+merge and the hand-rolled CSV splitter) and five design decisions awaiting an
+adopt-or-acknowledge call (C-9…C-13). Before working on `process-documents`,
+`extract-data`, `llm-browser.ts`, `chunk-text.ts`, or provider detection:
+read the items covering that area, and leave any item whose code you touched
+in a resolved state (`FIXED @commit` / `ADOPTED @commit` / `ACKNOWLEDGED —
+reason`) — never OPEN.
+
 ## Notes on docs in the repo
 
 - `ARCHITECTURE.md` is detailed but partially stale — it describes a Tauri desktop wrapper (Phase B) that is **not currently present in this tree** (no `desktop/tauri/`, no Tauri scripts in `package.json`, no `@tauri-apps/*` deps). The dual-path design it describes is real, but in the current code the two paths are **standalone web** vs **static export to GitHub Pages**, not Tauri. Read `ARCHITECTURE.md` for the LLM call path, consensus protocol, and prompt registry details; ignore the Tauri sections unless they get reintroduced.
